@@ -44,9 +44,13 @@ Agents with a military streak also deal with each other:
 2. **Find a neighbour** in the ranking (`/highscore`): not too strong (`max_target_ratio`), not too far
    (`target_range`), not spied on recently.
 3. **Spy** with probes, then **read the report** (`/messages`): resources, ships, defense.
-4. **Decide**: attack only if the loot is worth it (`min_loot`), the defenders are few enough for the fighters
-   it has (`risk_ratio`), and its mood allows (`aggression`). A target whose defenses are unknown is only a
-   `gamble`. It sends a share of its fighters (`strike_fraction`) plus enough cargo ships for the loot. If the
+4. **Decide**: attack only if the loot is worth it (`min_loot`) and its mood allows (`aggression`). When the spy
+   report shows what defends the target, the agent **simulates the fight** (`swarm/combat.py`: rounds, shields,
+   rapid fire, technology bonuses; checked against the first real battle on the owner's server) with the fleet it
+   would really send, and goes only if the chance of winning is high enough for its personality (`risk_ratio`:
+   bold raiders accept about 50%, careful ones want over 80%; after costly defeats everybody wants more) and the
+   expected result is profitable. If the report does not show the defenders, the old rule applies: a rough
+   count against `risk_ratio`, or a `gamble`. It sends a share of its fighters (`strike_fraction`) plus enough cargo ships for the loot. If the
    fleet could not carry at least an eighth of the loot, it skips the target (`attack_skipped`) and builds cargo
    ships first.
 5. **Read the result** (`/messages?category=combat`): each fight is logged (`battle`: what each side lost, loot,
@@ -64,8 +68,7 @@ alone. To allow it anyway, start with `--attack-humans`.
 
 ## Not built yet
 
-Colonising, expeditions, trading, alliances, recycling debris, a defence loop, a strength estimate that weighs
-unit types (today defenders are counted, not weighed; a lost fight corrects this a little), and LLM-driven
+Colonising, expeditions, trading, alliances, recycling debris, a defence loop, and LLM-driven
 decisions. The brain is rule-based; the personas are the knobs; the only learning so far is the risk lesson above.
 
 ## Tests

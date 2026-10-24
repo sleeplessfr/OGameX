@@ -9,6 +9,7 @@ import random
 from dataclasses import dataclass, field
 
 from .brain import RESOURCES
+from .combat import Estimate, Tech, estimate_battle, tech_from_research
 from .personas import Persona
 
 FIGHTERS = ("light_fighter", "heavy_fighter", "cruiser", "battle_ship", "battlecruiser", "bomber", "destroyer")
@@ -39,6 +40,21 @@ class Intel:
     loot: int                 # what an attack could take
     defenders: int | None     # ships + defense units seen; None = the report did not show them
     owner_id: int | None
+    ships: dict | None = None      # what the report showed, by unit name (None = not shown)
+    defense: dict | None = None
+    research: dict | None = None   # the defender's technology levels, when the report showed them
+
+    @property
+    def composition_known(self) -> bool:
+        return self.ships is not None or self.defense is not None
+
+    def all_defenders(self) -> dict[str, int]:
+        merged: dict[str, int] = {}
+        for part in (self.ships, self.defense):
+            for name, n in (part or {}).items():
+                if int(n or 0) > 0:
+                    merged[name] = merged.get(name, 0) + int(n)
+        return merged
 
 
 def coord_of(galaxy: int, system: int, position: int) -> Coord:
@@ -88,7 +104,8 @@ def summarize_report(report: dict) -> Intel:
     defenders = None
     if ships is not None or defense is not None:
         defenders = sum(int(v or 0) for v in (ships or {}).values()) + sum(int(v or 0) for v in (defense or {}).values())
-    return Intel(loot=int(total * LOOT_SHARE), defenders=defenders, owner_id=(report.get("target") or {}).get("owner_id"))
+    return Intel(loot=int(total * LOOT_SHARE), defenders=defenders, owner_id=(report.get("target") or {}).get("owner_id"),
+                 ships=ships, defense=defense, research=report.get("research") or None)
 
 
 def assess_attack(persona: Persona, rng: random.Random, intel: Intel, my_fighters: int,
@@ -102,7 +119,7 @@ def assess_attack(persona: Persona, rng: random.Random, intel: Intel, my_fighter
         if rng.random() < persona.gamble:
             return True, "defenses unknown, gambling"
         return False, "defenses unknown"
-    if intel.defenders > my_fighters * persona.risk_ratio * risk_scale:
+    if not intel.composition_known and intel.defenders > my_fighters * persona.risk_ratio * risk_scale:
         return False, f"{intel.defenders} defenders vs {my_fighters} fighters is too risky"
     if rng.random() >= persona.aggression:
         return False, "not in the mood"
@@ -176,6 +193,29 @@ def judge_trade(b: dict) -> str:
     return "neutral"
 
 
+def required_win_chance(persona: Persona, risk_scale: float = 1.0) -> float:
+    """How sure of winning an agent wants to be. Bold personalities (high risk_ratio) accept coin flips, careful ones
+    want near certainty; after costly defeats (risk_scale below 1) everybody wants more certainty."""
+    return min(0.95, max(0.4, 0.95 - 0.45 * persona.risk_ratio * risk_scale))
+
+
+def judge_fight(persona: Persona, rng: random.Random, strike: dict[str, int], intel: Intel, my_tech: Tech | None,
+                haul: int, risk_scale: float = 1.0) -> tuple[bool, str, Estimate | None]:
+    """Simulate the fight with the fleet we would really send. Returns (go, reason, estimate). When the report did not
+    show the defenders' composition there is nothing to simulate: (True, '', None) and the old rules decide."""
+    if not intel.composition_known:
+        return True, "", None
+    est = estimate_battle(strike, intel.all_defenders(), rng, my_tech or (0, 0, 0), tech_from_research(intel.research))
+    gain = est.win_chance * haul + 0.5 * est.their_loss_value - est.my_loss_value
+    facts = f"win chance {est.win_chance:.0%}, expected loss {est.my_loss_value:,.0f} for loot {haul:,}"
+    need = required_win_chance(persona, risk_scale)
+    if est.win_chance < need:
+        return False, f"simulated fight: {facts}; wants at least {need:.0%}", est
+    if gain <= 0:
+        return False, f"simulated fight: {facts}; not worth it", est
+    return True, f"simulated fight: {facts}", est
+
+
 def carrying_capacity(fleet: dict[str, int], ship_stats: dict[str, dict]) -> int:
     return sum(int(n) * int(ship_stats.get(name, {}).get("cargo_capacity", 0)) for name, n in fleet.items())
 
@@ -199,7 +239,8 @@ def pick_attack(persona: Persona, rng: random.Random, memory: Memory, now: float
             continue
         if info.get("skip_until", 0) > now:  # skipped a moment ago (cannot carry the loot): do not retry every round
             continue
-        intel = Intel(info["loot"], info["defenders"], info.get("owner_id"))
+        intel = Intel(info["loot"], info["defenders"], info.get("owner_id"), info.get("ships"), info.get("defense"),
+                      info.get("research"))
         go, reason = assess_attack(persona, rng, intel, fighters, memory.risk_scale)
         if go and (best is None or intel.loot > best[1].loot):
             best = (c, intel, reason)

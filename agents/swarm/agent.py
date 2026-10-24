@@ -9,7 +9,8 @@ import time
 from pathlib import Path
 
 from .brain import choose_building, choose_research, pay
-from .military import (Memory, build_strike, can_carry_enough, judge_trade, summarize_battle, choose_units, coord_of, pick_attack, pick_target, summarize_report)
+from .combat import tech_from_research
+from .military import (Memory, build_strike, can_carry_enough, carrying_capacity, judge_fight, judge_trade, summarize_battle, choose_units, coord_of, pick_attack, pick_target, summarize_report)
 from .client import ApiClient, ApiError
 from .personas import Persona
 
@@ -66,6 +67,7 @@ class Agent:
         self._players: tuple[float, list[dict], int] | None = None  # (fetched at, highscore rows, own score)
         self._economy_saving = False
         self._last_battle_check = -1e12
+        self.my_tech = None  # (weapons, shields, armour) levels, from /status
         self.stats = {"ticks": 0, "builds": 0, "researches": 0, "refused": 0, "errors": 0,
                       "spies": 0, "reports": 0, "attacks": 0, "units": 0, "battles": 0, "lessons": 0}
 
@@ -189,6 +191,7 @@ class Agent:
         if max(p.aggression, p.scout_interest, p.army_share, p.probes_wanted) <= 0:
             return []
         now = float(status["server_time"])
+        self.my_tech = tech_from_research(status["research"].get("levels"))
         units = self.client.get(f"/planets/{home['id']}/units")["units"]
         ships_here = {u["machine_name"]: u["amount"] for u in units if u["amount"] > 0 and u["category"] != "defense"}
         hints: list[float] = []
@@ -270,7 +273,8 @@ class Agent:
             t = report["target"]
             c = coord_of(t["galaxy"], t["system"], t["position"])
             intel = summarize_report(report)
-            self.memory.intel[c] = {"at": now, "loot": intel.loot, "defenders": intel.defenders, "owner_id": intel.owner_id}
+            self.memory.intel[c] = {"at": now, "loot": intel.loot, "defenders": intel.defenders, "owner_id": intel.owner_id,
+                                    "ships": intel.ships, "defense": intel.defense, "research": intel.research}
             self.memory.pending.pop(c, None)
             if intel.loot < self.persona.min_loot:  # not worth a visit: do not spy on it again for a while
                 self.memory.avoid_until[c] = now + 4 * self.persona.spy_cooldown_s
@@ -330,6 +334,14 @@ class Agent:
                      why="fleet cannot carry enough of the loot, wants cargo ships")
             return False
         self.memory.need_cargo = False
+        haul = min(intel.loot, carrying_capacity(strike, self.ship_stats))
+        go, sim_reason, _ = judge_fight(self.persona, self.rng, strike, intel, self.my_tech, haul, self.memory.risk_scale)
+        if not go:
+            self.memory.intel[coord]["skip_until"] = now + 1800
+            self.log("attack_skipped", at=f"{coord[0]}:{coord[1]}:{coord[2]}", loot=intel.loot, why=sim_reason)
+            return False
+        if sim_reason:
+            reason = f"{reason}; {sim_reason}"
         try:
             result = self.client.post(f"/planets/{home['id']}/fleet", {
                 "mission": "attack", "galaxy": coord[0], "system": coord[1], "position": coord[2], "ships": strike})
