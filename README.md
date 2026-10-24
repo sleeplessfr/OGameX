@@ -47,8 +47,8 @@ It has three parts:
 
 | Part | What it is | Status |
 |---|---|---|
-| **JSON API** (`/api/v1`) | A token-authenticated REST API on top of the game's own services, so programs can play without the web UI. Reference: [`docs/API.md`](docs/API.md) | Working: accounts, status, planets, buildings, research, ships and defense, galaxy view. Covered by feature tests. Fleets, messages and battle simulation are next |
-| **Agent swarm** (`agents/`) | Python agents (standard library only), any number of them, each with a personality. They register, then build and research on their own. See [`agents/README.md`](agents/README.md) | Working but simple: decisions are rule-based, with no learning yet |
+| **JSON API** (`/api/v1`) | A token-authenticated REST API on top of the game's own services, so programs can play without the web UI. Reference: [`docs/API.md`](docs/API.md) | Working: accounts, status, planets, buildings, research, ships and defense, galaxy view, fleets (send, recall, dry run), messages with structured spy and battle reports, highscore. Covered by feature tests. A battle simulator is not built yet |
+| **Agent swarm** (`agents/`) | Python agents (standard library only), any number of them, each with a personality. They register, then build and research on their own. See [`agents/README.md`](agents/README.md) | Working but simple: agents build, research, spy on each other and attack, according to their personality. Decisions are rule-based, with no learning yet. Agents only ever target other agents |
 | **Learning layer** | Agents that remember, adapt and make big decisions (whom to attack, when to expand) with a language model | Planned |
 
 **Try it** (on a local server, see [Installation](#installation)):

@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 from .brain import choose_building, choose_research, pay
+from .military import (Memory, build_strike, choose_units, coord_of, pick_attack, pick_target, summarize_report)
 from .client import ApiClient, ApiError
 from .personas import Persona
 
@@ -29,6 +30,11 @@ class TokenStore:
         with self._lock:
             return dict(self._data[name]) if name in self._data else None
 
+    def agent_user_ids(self) -> set[int]:
+        """Game user ids of every agent we know of (so agents can be told apart from human players)."""
+        with self._lock:
+            return {int(e["user_id"]) for e in self._data.values() if e.get("user_id") is not None}
+
     def put(self, name: str, entry: dict) -> None:
         with self._lock:
             self._data[name] = entry
@@ -41,6 +47,7 @@ class Agent:
     def __init__(
         self, name: str, persona: Persona, base_url: str, store: TokenStore, rng: random.Random,
         *, log_dir: str | None = None, email_domain: str = "example.com", client: ApiClient | None = None,
+        attack_humans: bool = False,
     ):
         self.name = name
         self.persona = persona
@@ -52,7 +59,14 @@ class Agent:
         if self.log_path:
             self.log_path.parent.mkdir(parents=True, exist_ok=True)
         self.lab_level: int | None = None
-        self.stats = {"ticks": 0, "builds": 0, "researches": 0, "refused": 0, "errors": 0}
+        self.attack_humans = attack_humans   # False = only ever spy on / attack other agents
+        self.user_id: int | None = None
+        self.memory = Memory()
+        self.ship_stats: dict[str, dict] = {}
+        self._players: tuple[float, list[dict], int] | None = None  # (fetched at, highscore rows, own score)
+        self._economy_saving = False
+        self.stats = {"ticks": 0, "builds": 0, "researches": 0, "refused": 0, "errors": 0,
+                      "spies": 0, "reports": 0, "attacks": 0, "units": 0}
 
     # ---- logging -------------------------------------------------------------------------------------
     def log(self, event: str, **fields) -> None:
@@ -71,14 +85,18 @@ class Agent:
             password = secrets.token_urlsafe(18)
             data = self.client.post("/auth/register", {"email": email, "password": password, "token_name": self.name})
             self.client.token = data["token"]
+            self.user_id = int(data["user"]["id"])
             self.store.put(self.name, {"email": email, "password": password, "token": data["token"],
-                                       "persona": self.persona.name})
+                                       "persona": self.persona.name, "user_id": self.user_id})
             self.log("registered", player=data["user"]["username"], persona=self.persona.name)
             return
 
         self.client.token = entry["token"]
         try:
-            self.client.get("/me")
+            me = self.client.get("/me")
+            self.user_id = int(me["id"])
+            if entry.get("user_id") != self.user_id:  # accounts made before user ids were stored
+                self.store.put(self.name, {**entry, "user_id": self.user_id})
         except ApiError as e:
             if e.status != 401:
                 raise
@@ -86,6 +104,7 @@ class Agent:
                                                     "token_name": self.name})
             self.client.token = data["token"]
             self.store.put(self.name, {**entry, "token": data["token"]})
+            self.user_id = entry.get("user_id")
             self.log("relogged")
 
     # ---- one round of play ---------------------------------------------------------------------------
@@ -105,9 +124,11 @@ class Agent:
 
         for planet in planets:
             have = dict(planet["resources"])
+            self._economy_saving = False
             hints += self._plan_buildings(planet, have, research_busy)
             if planet is home:
                 hints += self._plan_research(planet, have, research_queue)
+                hints += self._plan_military(status, planet, have, self._economy_saving)
 
         return self._sleep_time(hints)
 
@@ -122,6 +143,7 @@ class Agent:
         choice = choose_building(self.persona, self.rng, planet, data["buildings"],
                                  research_busy=research_busy, units_busy=bool(planet["unit_queue"]), have=have)
         if choice.machine_name is None:
+            self._economy_saving = True  # do not spend the savings on ships
             self.log("wait", planet=planet["id"], why=choice.reason, hint=_r(choice.wait_seconds))
             return [choice.wait_seconds if choice.wait_seconds else IDLE_RECHECK]
         return self._act("build", planet, choice, data["buildings"], have, f"/planets/{planet['id']}/buildings")
@@ -158,6 +180,144 @@ class Agent:
                  why=choice.reason, seconds=started["duration_seconds"] if started else None)
         if started and started.get("active"):
             return [started["duration_seconds"]]
+        return []
+
+    # ---- military ------------------------------------------------------------------------------------
+    def _plan_military(self, status: dict, home: dict, have: dict, saving: bool) -> list[float]:
+        p = self.persona
+        if max(p.aggression, p.scout_interest, p.army_share, p.probes_wanted) <= 0:
+            return []
+        now = float(status["server_time"])
+        units = self.client.get(f"/planets/{home['id']}/units")["units"]
+        ships_here = {u["machine_name"]: u["amount"] for u in units if u["amount"] > 0 and u["category"] != "defense"}
+        hints: list[float] = []
+
+        hints += self._read_intel(now)
+        slots = status["fleet_slots"]
+        if slots["used"] < slots["max"]:
+            acted = False
+            if p.aggression > 0 and self.memory.intel:
+                acted = self._try_attack(home, now, ships_here)
+            wants_to_spy = (p.aggression > 0 or p.scout_interest > 0) and len(self.memory.pending) < 2
+            if not acted and wants_to_spy and ships_here.get("espionage_probe", 0) >= 1 \
+                    and self.rng.random() < max(p.scout_interest, 0.5 * p.aggression):
+                self._try_spy(home, now, ships_here)
+        if self.memory.pending:
+            hints.append(60.0)  # come back soon to read the report
+
+        # Ships are bought from what is spare. While the economy is saving up for something, a militarily minded
+        # agent still spends on its army some of the time (army_share), otherwise it would never get to it.
+        may_buy = (not saving) or self.rng.random() < p.army_share
+        if may_buy and not home["unit_queue"]:
+            hints += self._build_units(home, units, have, ships_here)
+        return hints
+
+    def _allowed_target_ids(self) -> set[int] | None:
+        if self.attack_humans:
+            return None
+        return self.store.agent_user_ids()
+
+    def _get_players(self, now: float) -> tuple[list[dict], int]:
+        """The ranking (cached for 5 minutes) and our own score."""
+        if self._players is None or now - self._players[0] > 300:
+            rows: list[dict] = []
+            data = self.client.get("/highscore?type=general&per_page=100&page=1")
+            rows += data["players"]
+            self._players = (now, rows, int(data["me"]["general"]["score"]))
+        return self._players[1], self._players[2]
+
+    def _try_spy(self, home: dict, now: float, ships_here: dict) -> None:
+        players, my_score = self._get_players(now)
+        c = home["coordinates"]
+        target = pick_target(self.persona, self.rng, coord_of(c["galaxy"], c["system"], c["position"]), my_score, players,
+                             self.memory, now, allowed_ids=self._allowed_target_ids(), cooldown=self.persona.spy_cooldown_s,
+                             exclude_user_id=self.user_id)
+        if target is None:
+            return
+        galaxy, system, position = target["coord"]
+        probes = min(ships_here.get("espionage_probe", 0), self.persona.probes_per_spy)
+        try:
+            self.client.post(f"/planets/{home['id']}/fleet", {
+                "mission": "espionage", "galaxy": galaxy, "system": system, "position": position,
+                "ships": {"espionage_probe": probes}})
+        except ApiError as e:
+            self.stats["refused"] += 1
+            self.memory.avoid_until[target["coord"]] = now + 3600
+            self.log("spy_refused", target=target["username"], code=e.code, msg=e.message[:120])
+            return
+        self.memory.spied[target["coord"]] = now
+        self.memory.pending[target["coord"]] = now
+        self.stats["spies"] += 1
+        self.log("spy", target=target["username"], at=f"{galaxy}:{system}:{position}", probes=probes)
+
+    def _read_intel(self, now: float) -> list[float]:
+        """Read unread spy reports and keep the useful facts."""
+        for c, since in list(self.memory.pending.items()):
+            if now - since > 6 * 3600:  # probes were probably shot down: no report will come
+                del self.memory.pending[c]
+        if not self.memory.pending:
+            return []
+        data = self.client.get("/messages?category=espionage&unread_only=1&per_page=20")
+        for row in data["messages"]:
+            if not row.get("has_espionage_report"):
+                continue
+            report = self.client.get(f"/messages/{row['id']}")["message"].get("espionage_report")
+            self.client.post(f"/messages/{row['id']}/read")
+            if not report:
+                continue
+            t = report["target"]
+            c = coord_of(t["galaxy"], t["system"], t["position"])
+            intel = summarize_report(report)
+            self.memory.intel[c] = {"at": now, "loot": intel.loot, "defenders": intel.defenders, "owner_id": intel.owner_id}
+            self.memory.pending.pop(c, None)
+            if intel.loot < self.persona.min_loot:  # not worth a visit: do not spy on it again for a while
+                self.memory.avoid_until[c] = now + 4 * self.persona.spy_cooldown_s
+            self.stats["reports"] += 1
+            self.log("report", at=f"{c[0]}:{c[1]}:{c[2]}", loot=intel.loot, defenders=intel.defenders)
+        return []
+
+    def _try_attack(self, home: dict, now: float, ships_here: dict) -> bool:
+        pick = pick_attack(self.persona, self.rng, self.memory, now, ships_here)
+        if pick is None:
+            return False
+        coord, intel, reason = pick
+        if not self.ship_stats:
+            self.ship_stats = {s["machine_name"]: s for s in self.client.get("/ships")["ships"]}
+        strike = build_strike(self.persona, ships_here, self.ship_stats, intel.loot)
+        if strike is None:
+            return False
+        try:
+            result = self.client.post(f"/planets/{home['id']}/fleet", {
+                "mission": "attack", "galaxy": coord[0], "system": coord[1], "position": coord[2], "ships": strike})
+        except ApiError as e:
+            self.stats["refused"] += 1
+            self.memory.avoid_until[coord] = now + 3600
+            self.memory.intel.pop(coord, None)
+            self.log("attack_refused", at=f"{coord[0]}:{coord[1]}:{coord[2]}", code=e.code, msg=e.message[:120])
+            return False
+        self.memory.attacked[coord] = now
+        self.memory.intel.pop(coord, None)
+        self.stats["attacks"] += 1
+        self.log("attack", at=f"{coord[0]}:{coord[1]}:{coord[2]}", why=reason, ships=strike,
+                 seconds=result["mission"]["seconds_remaining"])
+        return True
+
+    def _build_units(self, home: dict, units: list[dict], have: dict, ships_here: dict) -> list[float]:
+        pick = choose_units(self.persona, self.rng, units, have, ships_here)
+        if pick is None:
+            return []
+        name, amount = pick
+        try:
+            self.client.post(f"/planets/{home['id']}/units", {"machine_name": name, "amount": amount})
+        except ApiError as e:
+            self.stats["refused"] += 1
+            self.log("units_refused", what=name, code=e.code, msg=e.message[:100])
+            return [60.0]
+        cost = next(u["cost_per_unit"] for u in units if u["machine_name"] == name)
+        for r in ("metal", "crystal", "deuterium"):
+            have[r] = have.get(r, 0) - cost.get(r, 0) * amount
+        self.stats["units"] += amount
+        self.log("units", what=name, amount=amount)
         return []
 
     def _remember_lab(self, planet: dict, buildings: list[dict]) -> None:

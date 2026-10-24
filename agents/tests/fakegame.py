@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+from urllib.parse import parse_qs, urlparse
 
 from swarm.client import ApiError
 
@@ -15,6 +16,16 @@ TECH = {"energy_technology": (0, 800, 400, 2.0), "computer_technology": (0, 400,
         "combustion_drive": (400, 0, 600, 2.0), "laser_technology": (200, 100, 0, 2.0)}
 
 
+# Units: (category, metal, crystal, deuterium, cargo capacity). Costs are made cheap so tests stay short.
+UNITS = {
+    "espionage_probe": ("ship", 0, 300, 0, 5),
+    "small_cargo": ("ship", 500, 500, 0, 5000),
+    "large_cargo": ("ship", 1500, 1500, 0, 25000),
+    "light_fighter": ("ship", 600, 200, 0, 50),
+    "rocket_launcher": ("defense", 500, 0, 0, 0),
+}
+
+
 class FakeGame:
     def __init__(self):
         self.now = 0.0
@@ -25,6 +36,17 @@ class FakeGame:
         self.rq: dict | None = None
         self.post_log: list[tuple[str, dict]] = []
         self.token = None
+        # --- fleets, messages, other players ---
+        self.ships = {k: 0 for k, v in UNITS.items() if v[0] == "ship"}
+        self.defense = {"rocket_launcher": 0}
+        self.slots_max = 1
+        self.missions: list[dict] = []
+        self.messages: list[dict] = []
+        self.next_message_id = 1
+        self.others = [{"user_id": 2, "username": "Victim", "coord": (1, 1, 5), "score": 0,
+                        "resources": {"metal": 40000, "crystal": 20000, "deuterium": 10000},
+                        "ships": {"small_cargo": 1}, "defense": {"rocket_launcher": 0}}]
+        self.attacks_resolved = 0
 
     # -- economy --
     def energy_prod(self):
@@ -60,6 +82,7 @@ class FakeGame:
                 if q and self.now >= q["end"]:
                     store[q["name"]] = q["level"]
                     setattr(self, attr, None)
+            self._process_missions()
 
     # -- helpers --
     def cost(self, name, level_now, table):
@@ -77,8 +100,115 @@ class FakeGame:
                  "seconds_remaining": int(q["end"] - self.now), "duration_seconds": q["dur"],
                  "target_level": q["level"]}]
 
+    # -- fleets and messages --
+    def _process_missions(self):
+        for m in list(self.missions):
+            if not m["arrived"] and self.now >= m["arrive"]:
+                m["arrived"] = True
+                target = next(o for o in self.others if o["coord"] == m["to"])
+                if m["mission"] == "espionage":
+                    self._add_message("espionage_report", {
+                        "target": {"galaxy": m["to"][0], "system": m["to"][1], "position": m["to"][2], "type": 1,
+                                   "owner_id": target["user_id"]},
+                        "resources": dict(target["resources"]), "ships": dict(target["ships"]),
+                        "defense": dict(target["defense"]), "buildings": {}, "research": {}})
+                else:
+                    self.attacks_resolved += 1
+                    loot = {r: target["resources"][r] // 2 for r in target["resources"]}
+                    for r, v in loot.items():
+                        target["resources"][r] -= v
+                        self.res[r] += v
+                    self._add_message("combat_report", None)
+            if self.now >= m["back"]:
+                self.missions.remove(m)
+                for name, n in m["ships"].items():
+                    self.ships[name] += n
+
+    def _add_message(self, key, report):
+        self.messages.append({"id": self.next_message_id, "key": key, "viewed": False, "report": report})
+        self.next_message_id += 1
+
+    def _units_list(self):
+        items = []
+        for name, (cat, mc, cc, dc, cap) in UNITS.items():
+            cost = {"metal": mc, "crystal": cc, "deuterium": dc}
+            fits = [int(self.res[r] // v) for r, v in cost.items() if v > 0]
+            amount = self.ships.get(name, 0) if cat == "ship" else self.defense.get(name, 0)
+            met = self.levels["shipyard"] > 0
+            items.append({"id": 1, "machine_name": name, "title": name, "category": cat, "amount": amount,
+                          "cost_per_unit": {**cost, "energy": 0}, "seconds_per_unit": 10, "requirements_met": met,
+                          "character_class_met": True, "max_buildable": min(fits) if (met and fits) else 0})
+        return items
+
+    def _handle_new_get(self, path):
+        url = urlparse(path)
+        q = {k: v[0] for k, v in parse_qs(url.query).items()}
+        route = url.path
+        if route == "/planets/10/units":
+            return {"planet_id": 10, "units": self._units_list(), "queue": []}
+        if route == "/ships":
+            return {"ships": [{"machine_name": n, "cargo_capacity": v[4]} for n, v in UNITS.items() if v[0] == "ship"]}
+        if route == "/highscore":
+            rows = [{"rank": 1, "user_id": o["user_id"], "username": o["username"], "score": o["score"], "is_me": False,
+                     "main_planet": {"galaxy": o["coord"][0], "system": o["coord"][1], "position": o["coord"][2]},
+                     "alliance_tag": None, "total_ships": None} for o in self.others]
+            rows.append({"rank": 2, "user_id": 1, "username": "Fake", "score": 0, "is_me": True,
+                         "main_planet": {"galaxy": 1, "system": 3, "position": 8}, "alliance_tag": None, "total_ships": None})
+            return {"type": "general", "players": rows, "total_players": len(rows),
+                    "me": {"general": {"rank": 2, "score": 0}}}
+        if route == "/messages":
+            rows = [m for m in self.messages if not (q.get("unread_only") == "1" and m["viewed"])
+                    and (q.get("category") != "espionage" or m["key"] == "espionage_report")]
+            return {"messages": [{"id": m["id"], "key": m["key"], "viewed": m["viewed"],
+                                  "has_espionage_report": m["key"] == "espionage_report"} for m in rows]}
+        if route.startswith("/messages/"):
+            m = next((m for m in self.messages if m["id"] == int(route.rsplit("/", 1)[1])), None)
+            if m is None:
+                raise ApiError(404, "message_not_found", route)
+            return {"message": {"id": m["id"], "key": m["key"], "espionage_report": m["report"]}}
+        return None
+
+    def _handle_new_post(self, path, body):
+        if path == "/planets/10/units":
+            name, amount = body["machine_name"], int(body["amount"])
+            item = next(u for u in self._units_list() if u["machine_name"] == name)
+            if not item["requirements_met"] or amount > item["max_buildable"] or amount < 1:
+                raise ApiError(422, "not_enough_resources", name)
+            for r in ("metal", "crystal", "deuterium"):
+                self.res[r] -= item["cost_per_unit"][r] * amount
+            if item["category"] == "ship":
+                self.ships[name] += amount
+            else:
+                self.defense[name] += amount
+            return {"requested": amount, "ordered": amount, "queue": []}
+        if path == "/planets/10/fleet":
+            if len(self.missions) >= self.slots_max:
+                raise ApiError(422, "mission_rejected", "Maximum number of fleets reached.")
+            to = (body["galaxy"], body["system"], body["position"])
+            if not any(o["coord"] == to for o in self.others):
+                raise ApiError(422, "mission_rejected", "No planet there.")
+            for n, v in body["ships"].items():
+                if self.ships.get(n, 0) < v:
+                    raise ApiError(422, "mission_rejected", "Not enough units on the planet to send the fleet.")
+            for n, v in body["ships"].items():
+                self.ships[n] -= v
+            m = {"mission": body["mission"], "to": to, "ships": dict(body["ships"]), "arrived": False,
+                 "arrive": self.now + 60, "back": self.now + 120}
+            self.missions.append(m)
+            return {"mission": {"id": len(self.post_log), "mission": body["mission"], "seconds_remaining": 60}}
+        if path.startswith("/messages/") and path.endswith("/read"):
+            mid = int(path.split("/")[2])
+            for m in self.messages:
+                if m["id"] == mid:
+                    m["viewed"] = True
+            return {"message": {"id": mid, "viewed": True}}
+        return None
+
     # -- API --
     def get(self, path):
+        extra = self._handle_new_get(path)
+        if extra is not None:
+            return extra
         if path == "/universe":
             return {"name": "fake"}
         if path == "/me":
@@ -89,13 +219,13 @@ class FakeGame:
                 "server_time": int(self.now),
                 "player": {"id": 1, "username": "Fake", "current_planet_id": 10},
                 "planets": [{
-                    "id": 10, "name": "Home", "type": "planet",
+                    "id": 10, "name": "Home", "type": "planet", "coordinates": {"galaxy": 1, "system": 3, "position": 8},
                     "resources": {r: int(v) for r, v in self.res.items()}, "storage": self.storage(),
                     "production_per_hour": {r: int(v) for r, v in rate.items()},
                     "energy": int(self.energy_prod() - self.energy_need()),
                     "building_queue": self.qdict(self.bq, "b"), "unit_queue": []}],
                 "research": {"levels": {k: v for k, v in self.tech.items()}, "queue": self.qdict(self.rq, "r")},
-                "fleet_slots": {}, "unread_messages": 0}
+                "fleet_slots": {"used": len(self.missions), "max": self.slots_max}, "unread_messages": 0}
         if path == "/planets/10/buildings":
             items = []
             for name in BASE:
@@ -120,6 +250,9 @@ class FakeGame:
     def post(self, path, body=None):
         body = body or {}
         self.post_log.append((path, body))
+        extra = self._handle_new_post(path, body)
+        if extra is not None:
+            return extra
         name = body.get("machine_name")
         if path == "/planets/10/buildings":
             if name not in BASE:

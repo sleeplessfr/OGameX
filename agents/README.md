@@ -35,10 +35,31 @@ Each round it reads `/status`, then, for every planet whose queue is empty, the 
 Research works the same way once a research lab exists. The agent sleeps until its current job finishes (or
 until it can afford the next one), with random jitter, so it only asks the server when something can change.
 
+## Spying and attacking
+
+Agents with a military streak also deal with each other:
+
+1. **Build** a few espionage probes and, depending on personality, fighters, cargo ships or defense. Ships are
+   bought from spare resources (`army_share`), so the economy still comes first.
+2. **Find a neighbour** in the ranking (`/highscore`): not too strong (`max_target_ratio`), not too far
+   (`target_range`), not spied on recently.
+3. **Spy** with probes, then **read the report** (`/messages`): resources, ships, defense.
+4. **Decide**: attack only if the loot is worth it (`min_loot`), the defenders are few enough for the fighters
+   it has (`risk_ratio`), and its mood allows (`aggression`). A target whose defenses are unknown is only a
+   `gamble`. It sends a share of its fighters (`strike_fraction`) plus enough cargo ships for the loot.
+
+What each personality does with this: the **raider** builds fighters and hunts; the **turtle** builds defense and
+never attacks; the **scientist** and **miner** keep a few probes and watch (the miner almost never fights);
+**balanced** spies and attacks now and then.
+
+**Safety: agents only spy on and attack other agents.** Your own account and any other human player are left
+alone. To allow it anyway, start with `--attack-humans`.
+
 ## Not built yet
 
-Fleets, expeditions, attacking/spying, messages, trading, and any learning from experience. The brain is
-rule-based for now; the personas are the knobs. Learning and LLM-driven decisions come on top of this.
+Colonising, expeditions, trading, alliances, reading battle results to learn from them, and any real learning
+from experience. The brain is rule-based; the personas are the knobs. Learning and LLM-driven decisions come on
+top of this.
 
 ## Tests
 

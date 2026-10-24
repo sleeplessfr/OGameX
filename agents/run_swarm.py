@@ -29,6 +29,8 @@ def main() -> int:
     ap.add_argument("--speedup", type=float, default=1.0, help="divide every pause by this (for quick tests)")
     ap.add_argument("--stop-file", default="STOP", help="create this file to stop all agents")
     ap.add_argument("--email-domain", default="example.com")
+    ap.add_argument("--attack-humans", action="store_true",
+                    help="allow agents to spy on / attack players that are not agents (default: agents only)")
     args = ap.parse_args()
 
     names = [n.strip() for n in args.personas.split(",") if n.strip()] or None
@@ -50,7 +52,8 @@ def main() -> int:
         rng = random.Random(args.seed * 100003 + number)
         persona = make_persona(number - 1, rng, names)
         agents.append(Agent(f"{args.prefix}{number:04d}", persona, args.base_url, store, rng,
-                            log_dir=args.log_dir, email_domain=args.email_domain))
+                            log_dir=args.log_dir, email_domain=args.email_domain,
+                            attack_humans=args.attack_humans))
 
     threads = []
     print(f"Starting {len(agents)} agents on {args.base_url}. Ctrl+C or create a file named {args.stop_file} to stop.")
