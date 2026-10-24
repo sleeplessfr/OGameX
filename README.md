@@ -42,7 +42,7 @@ You need [Docker](https://www.docker.com/) and Python 3.9 or newer.
 
 1. **Get the code and start the game** (the first start can take around 10 minutes):
    ```
-   git clone -b api-v1-agent-layer https://github.com/sleeplessfr/OGameX.git
+   git clone https://github.com/sleeplessfr/OGameX.git
    cd OGameX
    docker compose up -d
    ```
