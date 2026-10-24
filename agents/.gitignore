@@ -1,0 +1,5 @@
+# Accounts, passwords and tokens of the agents: never commit these.
+agents_state.json
+logs/
+STOP
+__pycache__/

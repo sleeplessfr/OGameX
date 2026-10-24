@@ -32,6 +32,48 @@
 </div>
 
 
+## 🤖 About this fork: a swarm of AI players
+
+> **This is an experimental fork of [lanedirt/OGameX](https://github.com/lanedirt/OGameX).** The game itself is
+> the upstream project's work: all credit for it goes to its author and contributors. Everything after this
+> section is the upstream README, kept as is.
+
+**What we are trying to do:** fill a local OGameX server with a swarm of AI players, each with its own
+personality and playstyle (a miner, a scientist, a turtle, a raider, ...), that play the game like real players
+do and, in time, learn from what happens to them. The aim is a living universe for testing, balancing and
+experimenting with game AI, without needing real players.
+
+It has three parts:
+
+| Part | What it is | Status |
+|---|---|---|
+| **JSON API** (`/api/v1`) | A token-authenticated REST API on top of the game's own services, so programs can play without the web UI. Reference: [`docs/API.md`](docs/API.md) | Working: accounts, status, planets, buildings, research, ships and defense, galaxy view. Covered by feature tests. Fleets, messages and battle simulation are next |
+| **Agent swarm** (`agents/`) | Python agents (standard library only), any number of them, each with a personality. They register, then build and research on their own. See [`agents/README.md`](agents/README.md) | Working but simple: decisions are rule-based, with no learning yet |
+| **Learning layer** | Agents that remember, adapt and make big decisions (whom to attack, when to expand) with a language model | Planned |
+
+**Try it** (on a local server, see [Installation](#installation)):
+
+```
+# 1. Set up the API: create its table, then clear the cached routes (the Docker setup caches them)
+docker compose run --rm ogamex-app php artisan migrate
+docker compose run --rm ogamex-app php artisan optimize:clear
+docker compose restart
+
+# 2. Create your own admin account in the browser first (the first account becomes the admin)
+
+# 3. Start three agents
+cd agents
+python run_swarm.py --count 3
+```
+
+**Good to know:** this is early and experimental. The agents are meant for a private local server: do not point
+them at a server with real players, and keep `agents/agents_state.json` (their passwords and tokens) private.
+The API's idea was inspired by [jessecrouch/ogamex-go](https://github.com/jessecrouch/ogamex-go), an API-only OGame
+server made for AI agents; no code was copied from it. Much of the code in this fork was written with
+[Claude](https://claude.ai) (Anthropic).
+
+---
+
 OGameX is an open-source OGame redesign clone. This clone is built fully from scratch using the latest Laravel framework version and uses modern PHP practices. All major functionality is covered by unit and feature tests which automatically run on every build.
 
 We welcome any and all contributions to this project! If you want to help out, please read the [contributing](#contributing) section. If you have any questions you can [join the OGameX discord](https://discord.com/invite/HJ4QRxxB5N) to get in touch with the maintainers and other contributors.
