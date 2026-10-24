@@ -119,7 +119,9 @@ class FleetController extends ApiController
                 continue; // ACS and missiles are not available through the API
             }
             $status = $mission->isMissionPossible($planetService, $order['target'], $order['type'], $order['units']);
-            $possible[$name] = ['possible' => $status->possible, 'reason' => $status->possible ? null : $status->error];
+            // The game sometimes refuses without saying why, so always give a reason when it is not possible.
+            $reason = $status->error !== '' ? $status->error : 'This mission is not possible with this fleet and target.';
+            $possible[$name] = ['possible' => $status->possible, 'reason' => $status->possible ? null : $reason];
         }
 
         $duration = $fleets->calculateFleetMissionDuration($planetService, $order['target'], $order['units'], null, $order['speed']);
