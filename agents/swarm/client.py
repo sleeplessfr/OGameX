@@ -62,7 +62,12 @@ class ApiClient:
             if status == 429:
                 error = ApiError(429, "rate_limited", "Too many requests", {"retry_after": 30})
             else:
-                error = ApiError(status, err.get("code", "http_error"), err.get("message", f"HTTP {status}"), err.get("details"))
+                # A crash inside the game (HTTP 500) comes back as Laravel's own JSON, not our envelope: keep its message.
+                body = payload if isinstance(payload, dict) else {}
+                message = err.get("message") or body.get("message") or f"HTTP {status}"
+                if body.get("exception"):
+                    message = f"{body['exception']}: {message} ({body.get('file', '?')}:{body.get('line', '?')})"
+                error = ApiError(status, err.get("code", "http_error"), message[:400], err.get("details"))
             error.request_line = f"{method} {path}"
             raise error
         return payload["data"]
