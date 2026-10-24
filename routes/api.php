@@ -3,6 +3,7 @@
 use Illuminate\Support\Facades\Route;
 use OGame\Http\Controllers\Api\V1\AuthController;
 use OGame\Http\Controllers\Api\V1\BuildingController;
+use OGame\Http\Controllers\Api\V1\FleetController;
 use OGame\Http\Controllers\Api\V1\GalaxyController;
 use OGame\Http\Controllers\Api\V1\PlanetController;
 use OGame\Http\Controllers\Api\V1\ResearchController;
@@ -55,4 +56,10 @@ Route::middleware(['api.token', 'throttle:ogamex-api', 'globalgame'])->group(fun
     Route::get('/planets/{planet}/units/queue', [UnitController::class, 'queue'])->whereNumber('planet');
 
     Route::get('/galaxy/{galaxy}/{system}', [GalaxyController::class, 'show'])->whereNumber(['galaxy', 'system']);
+
+    Route::get('/ships', [FleetController::class, 'ships']);
+    Route::get('/fleet', [FleetController::class, 'index']);
+    Route::post('/planets/{planet}/fleet/check', [FleetController::class, 'check'])->whereNumber('planet');
+    Route::post('/planets/{planet}/fleet', [FleetController::class, 'send'])->whereNumber('planet');
+    Route::post('/fleet/{mission}/recall', [FleetController::class, 'recall'])->whereNumber('mission');
 });

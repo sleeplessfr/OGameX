@@ -29,7 +29,9 @@ Base URL: `http://<your-server>/api/v1`
 
 Common error codes for 422: `validation_failed`, `unknown_object`, `wrong_object_type`, `requirements_not_met`,
 `not_enough_resources`, `vacation_mode`, `shipyard_busy`, `research_in_progress`, `research_lab_upgrading`,
-`character_class_required`, `build_rejected`, `research_rejected`, `invalid_coordinates`.
+`character_class_required`, `build_rejected`, `research_rejected`, `invalid_coordinates`, and for fleets `unknown_ship`,
+`invalid_speed`, `invalid_holding_time`, `attack_block`, `mission_rejected`, `not_recallable`. A `mission_rejected` message is
+the game's own reason (no free fleet slot, not enough ships or fuel, cargo too small, mission not possible there, ...).
 
 ## Settings (`.env`)
 
@@ -98,6 +100,45 @@ Research belongs to the player but is paid with the resources of one planet, so 
 |---|---|---|
 | GET | `/galaxy/{galaxy}/{system}` | The 15 planet positions of a system: `null` if empty, otherwise the planet, its owner (`is_me`) and whether it has a moon |
 
+### Fleets
+
+Fleets are sent through the same game code as the web UI, so fuel, cargo, fleet slots, mission rules and the attack
+block are exactly the game's own. Alliance combat (ACS), missiles and fleet unions are not available yet.
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/ships` | Every ship with its speed, cargo capacity, fuel capacity, fuel use, attack, shield and hull, with your research applied |
+| GET | `/fleet` | Your flying fleets (going out and coming back) and fleets of other players heading for your planets. Includes `fleet_slots`. Other players' fleets show where they come from and when they arrive, not what is on board |
+| POST | `/planets/{planet}/fleet/check` | Dry run, nothing is sent. Same body as sending, `mission` optional. Returns, per mission, whether it is possible (and why not), plus `duration_seconds`, `deuterium_consumption`, `cargo_capacity`, `fuel_capacity`, `distance` |
+| POST | `/planets/{planet}/fleet` | Send a fleet from this planet or moon |
+| POST | `/fleet/{mission}/recall` | Call a flying fleet back (only your own, only before it arrives, not a return trip) |
+
+Body of `check` and sending:
+
+| Field | |
+|---|---|
+| `mission` | `attack`, `transport`, `deployment`, `espionage`, `colonisation`, `recycle`, `moon_destruction` or `expedition` |
+| `galaxy`, `system`, `position` | Target. Position 16 is for expeditions |
+| `type` | `planet` (default), `moon`, `debris_field` |
+| `ships` | Object `{"small_cargo": 2, "espionage_probe": 1}` (machine names, see `/ships`) |
+| `resources` | Optional `{"metal": 0, "crystal": 0, "deuterium": 0}` to carry along |
+| `speed_percent` | Optional, 10 to 100 in steps of 5, default 100 |
+| `holding_hours` | Expeditions only: 1 up to your astrophysics level |
+
+A fleet entry has `id`, `mission`, `is_mine`, `is_return`, `from` and `to` (planet id, type, coordinates), `departure_at`,
+`arrival_at`, `seconds_remaining` and, for your own fleets, `ships`, `resources` and `can_recall`.
+
+```bash
+# Can I do something at 1:2:5 with two small cargos? How long and how much fuel?
+curl -s -X POST http://localhost/api/v1/planets/12/fleet/check -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"galaxy":1,"system":2,"position":5,"ships":{"small_cargo":2}}'
+
+# Send them with 100 metal
+curl -s -X POST http://localhost/api/v1/planets/12/fleet -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"mission":"transport","galaxy":1,"system":2,"position":5,"ships":{"small_cargo":2},"resources":{"metal":100}}'
+```
+
 ## Queue items
 
 Queue lists show the item being worked on first (`active: true`), then the waiting items. `seconds_remaining`
@@ -123,5 +164,5 @@ curl -s -X POST http://localhost/api/v1/planets/12/buildings \
 
 ## Not available yet
 
-Fleets (send, recall, list), messages, highscore, battle simulation, custom player names, and the other
+Messages (spy and battle reports), highscore, battle simulation, ACS/missiles/fleet unions, custom player names, and the other
 parts of the game (alliances, merchant, moon buildings' special actions, planet management).
