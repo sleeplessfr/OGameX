@@ -17,6 +17,7 @@ class ApiError(Exception):
         self.code = code
         self.message = message
         self.details = details or {}
+        self.request_line = ""  # "GET /path", filled in by the client so logs say which call failed
 
 
 class ApiClient:
@@ -52,13 +53,18 @@ class ApiClient:
         try:
             payload = json.loads(raw.decode() or "null")
         except ValueError:
-            raise ApiError(status, "bad_response", f"Not JSON: {raw[:120]!r}")
+            error = ApiError(status, "bad_response", f"Not JSON: {raw[:120]!r}")
+            error.request_line = f"{method} {path}"
+            raise error
 
         if status >= 400 or not (isinstance(payload, dict) and payload.get("success")):
             err = (payload or {}).get("error", {}) if isinstance(payload, dict) else {}
             if status == 429:
-                raise ApiError(429, "rate_limited", "Too many requests", {"retry_after": 30})
-            raise ApiError(status, err.get("code", "http_error"), err.get("message", f"HTTP {status}"), err.get("details"))
+                error = ApiError(429, "rate_limited", "Too many requests", {"retry_after": 30})
+            else:
+                error = ApiError(status, err.get("code", "http_error"), err.get("message", f"HTTP {status}"), err.get("details"))
+            error.request_line = f"{method} {path}"
+            raise error
         return payload["data"]
 
     def get(self, path: str) -> Any:

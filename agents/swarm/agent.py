@@ -390,7 +390,7 @@ class Agent:
             except ApiError as e:
                 failures += 1
                 self.stats["errors"] += 1
-                self.log("api_error", code=e.code, status=e.status, msg=e.message)
+                self.log("api_error", code=e.code, status=e.status, msg=e.message, request=e.request_line)
                 if e.status == 401:
                     self.client.token = None  # log in again next round
                 delay = float(e.details.get("retry_after", 30)) if e.status == 429 else min(300.0, 10.0 * 2 ** failures)
