@@ -47,6 +47,7 @@ class FakeGame:
                         "resources": {"metal": 40000, "crystal": 20000, "deuterium": 10000},
                         "ships": {"small_cargo": 1}, "defense": {"rocket_launcher": 0}}]
         self.attacks_resolved = 0
+        self.battle_losses = 0
 
     # -- economy --
     def energy_prod(self):
@@ -114,11 +115,28 @@ class FakeGame:
                         "defense": dict(target["defense"]), "buildings": {}, "research": {}})
                 else:
                     self.attacks_resolved += 1
-                    loot = {r: target["resources"][r] // 2 for r in target["resources"]}
+                    sent = dict(m["ships"])
+                    fighters = sum(n for k, n in sent.items() if k in ("light_fighter", "cruiser", "heavy_fighter"))
+                    defenders = sum(target["ships"].values()) + sum(target["defense"].values())
+                    lost = defenders > 0.8 * fighters  # the defence wins
+                    if lost:
+                        loot = {r: 0 for r in target["resources"]}
+                        my_loss = sum(n * (UNITS[k][1] + UNITS[k][2]) for k, n in sent.items())
+                        their_loss = (defenders // 2) * 1000
+                        m["ships"] = {k: 0 for k in sent}  # nothing comes home
+                    else:
+                        loot = {r: target["resources"][r] // 2 for r in target["resources"]}
+                        my_loss, their_loss = 0, 0
                     for r, v in loot.items():
                         target["resources"][r] -= v
                         self.res[r] += v
-                    self._add_message("combat_report", None)
+                    self.battle_losses += my_loss
+                    self._add_message("combat_report", {
+                        "target": {"galaxy": m["to"][0], "system": m["to"][1], "position": m["to"][2], "type": 1,
+                                   "owner_id": target["user_id"]},
+                        "attacker": {"player_id": 1, "resource_loss": my_loss, "units": sent},
+                        "defender": {"player_id": target["user_id"], "resource_loss": their_loss},
+                        "loot": loot, "debris": {"metal": my_loss // 2, "crystal": 0, "deuterium": 0}, "rounds": 5})
             if self.now >= m["back"]:
                 self.missions.remove(m)
                 for name, n in m["ships"].items():
@@ -158,14 +176,18 @@ class FakeGame:
                     "me": {"general": {"rank": 2, "score": 0}}}
         if route == "/messages":
             rows = [m for m in self.messages if not (q.get("unread_only") == "1" and m["viewed"])
-                    and (q.get("category") != "espionage" or m["key"] == "espionage_report")]
+                    and (q.get("category") != "espionage" or m["key"] == "espionage_report")
+                    and (q.get("category") != "combat" or m["key"] == "combat_report")]
             return {"messages": [{"id": m["id"], "key": m["key"], "viewed": m["viewed"],
-                                  "has_espionage_report": m["key"] == "espionage_report"} for m in rows]}
+                                  "has_espionage_report": m["key"] == "espionage_report",
+                                  "has_battle_report": m["key"] == "combat_report"} for m in rows]}
         if route.startswith("/messages/"):
             m = next((m for m in self.messages if m["id"] == int(route.rsplit("/", 1)[1])), None)
             if m is None:
                 raise ApiError(404, "message_not_found", route)
-            return {"message": {"id": m["id"], "key": m["key"], "espionage_report": m["report"]}}
+            return {"message": {"id": m["id"], "key": m["key"],
+                                "espionage_report": m["report"] if m["key"] == "espionage_report" else None,
+                                "battle_report": m["report"] if m["key"] == "combat_report" else None}}
         return None
 
     def _handle_new_post(self, path, body):

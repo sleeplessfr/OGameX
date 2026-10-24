@@ -30,6 +30,8 @@ class Memory:
     intel: dict[Coord, dict] = field(default_factory=dict)       # read reports: {'at', 'loot', 'defenders', 'owner_id'}
     avoid_until: dict[Coord, float] = field(default_factory=dict)  # targets the game refused (protection, vacation, ...)
     need_cargo: bool = False   # a worthwhile target had to be skipped because the fleet cannot carry enough loot
+    risk_scale: float = 1.0    # learned caution: shrinks after costly defeats, recovers slowly after profitable raids
+    battles: list[dict] = field(default_factory=list)  # recent results of own attacks (newest last, capped)
 
 
 @dataclass
@@ -89,7 +91,8 @@ def summarize_report(report: dict) -> Intel:
     return Intel(loot=int(total * LOOT_SHARE), defenders=defenders, owner_id=(report.get("target") or {}).get("owner_id"))
 
 
-def assess_attack(persona: Persona, rng: random.Random, intel: Intel, my_fighters: int) -> tuple[bool, str]:
+def assess_attack(persona: Persona, rng: random.Random, intel: Intel, my_fighters: int,
+                  risk_scale: float = 1.0) -> tuple[bool, str]:
     """Decide whether this target is worth attacking with `my_fighters` fighters. Returns (go, reason)."""
     if my_fighters < 1:
         return False, "no fighters"
@@ -99,7 +102,7 @@ def assess_attack(persona: Persona, rng: random.Random, intel: Intel, my_fighter
         if rng.random() < persona.gamble:
             return True, "defenses unknown, gambling"
         return False, "defenses unknown"
-    if intel.defenders > my_fighters * persona.risk_ratio:
+    if intel.defenders > my_fighters * persona.risk_ratio * risk_scale:
         return False, f"{intel.defenders} defenders vs {my_fighters} fighters is too risky"
     if rng.random() >= persona.aggression:
         return False, "not in the mood"
@@ -132,6 +135,47 @@ def build_strike(persona: Persona, ships_here: dict[str, int], ship_stats: dict[
     return fleet
 
 
+def _sum_values(d) -> int:
+    return sum(int(v or 0) for v in d.values()) if isinstance(d, dict) else 0
+
+
+def summarize_battle(report: dict, my_user_id: int | None) -> dict | None:
+    """Boil a battle_report (see docs/API.md) down to: who I was, what each side lost, what I took.
+    Returns None if the report is not about me. Resource losses are the game's own value of the destroyed units."""
+    att, dfn = report.get("attacker") or {}, report.get("defender") or {}
+    if my_user_id is not None and att.get("player_id") == my_user_id:
+        role = "attacker"
+    elif my_user_id is not None and dfn.get("player_id") == my_user_id:
+        role = "defender"
+    else:
+        return None
+    units = att.get("units") or {}
+    probes_only = bool(units) and all(name == "espionage_probe" for name in units)
+    t = report.get("target") or {}
+    loot = report.get("loot") or {}
+    debris = report.get("debris") or {}
+    mine, theirs = (att, dfn) if role == "attacker" else (dfn, att)
+    return {
+        "role": role, "probes_only": probes_only,
+        "at": f"{t.get('galaxy')}:{t.get('system')}:{t.get('position')}" if t else None,
+        "coord": (t.get("galaxy"), t.get("system"), t.get("position")) if t else None,
+        "my_loss": int(mine.get("resource_loss") or 0), "their_loss": int(theirs.get("resource_loss") or 0),
+        "loot": sum(int(loot.get(r) or 0) for r in RESOURCES),
+        "debris": sum(int(debris.get(r) or 0) for r in RESOURCES),
+        "sent_units": _sum_values(units), "rounds": report.get("rounds"),
+    }
+
+
+def judge_trade(b: dict) -> str:
+    """'bad' if an attack cost far more than it gained (loot + what it destroyed), 'good' if clearly profitable."""
+    gained = b["loot"] + b["their_loss"]
+    if b["my_loss"] > 0 and b["my_loss"] >= 2 * gained:
+        return "bad"
+    if gained > 0 and b["loot"] > 0 and b["my_loss"] * 2 <= gained:
+        return "good"
+    return "neutral"
+
+
 def carrying_capacity(fleet: dict[str, int], ship_stats: dict[str, dict]) -> int:
     return sum(int(n) * int(ship_stats.get(name, {}).get("cargo_capacity", 0)) for name, n in fleet.items())
 
@@ -156,7 +200,7 @@ def pick_attack(persona: Persona, rng: random.Random, memory: Memory, now: float
         if info.get("skip_until", 0) > now:  # skipped a moment ago (cannot carry the loot): do not retry every round
             continue
         intel = Intel(info["loot"], info["defenders"], info.get("owner_id"))
-        go, reason = assess_attack(persona, rng, intel, fighters)
+        go, reason = assess_attack(persona, rng, intel, fighters, memory.risk_scale)
         if go and (best is None or intel.loot > best[1].loot):
             best = (c, intel, reason)
     return best

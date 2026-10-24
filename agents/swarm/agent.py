@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 from .brain import choose_building, choose_research, pay
-from .military import (Memory, build_strike, can_carry_enough, choose_units, coord_of, pick_attack, pick_target, summarize_report)
+from .military import (Memory, build_strike, can_carry_enough, judge_trade, summarize_battle, choose_units, coord_of, pick_attack, pick_target, summarize_report)
 from .client import ApiClient, ApiError
 from .personas import Persona
 
@@ -65,8 +65,9 @@ class Agent:
         self.ship_stats: dict[str, dict] = {}
         self._players: tuple[float, list[dict], int] | None = None  # (fetched at, highscore rows, own score)
         self._economy_saving = False
+        self._last_battle_check = -1e12
         self.stats = {"ticks": 0, "builds": 0, "researches": 0, "refused": 0, "errors": 0,
-                      "spies": 0, "reports": 0, "attacks": 0, "units": 0}
+                      "spies": 0, "reports": 0, "attacks": 0, "units": 0, "battles": 0, "lessons": 0}
 
     # ---- logging -------------------------------------------------------------------------------------
     def log(self, event: str, **fields) -> None:
@@ -193,6 +194,7 @@ class Agent:
         hints: list[float] = []
 
         hints += self._read_intel(now)
+        self._read_battles(now)
         slots = status["fleet_slots"]
         if slots["used"] < slots["max"]:
             acted = False
@@ -275,6 +277,40 @@ class Agent:
             self.stats["reports"] += 1
             self.log("report", at=f"{c[0]}:{c[1]}:{c[2]}", loot=intel.loot, defenders=intel.defenders)
         return []
+
+    def _read_battles(self, now: float) -> None:
+        """Read new combat reports: log what happened and learn from the results of our own attacks."""
+        if now - self._last_battle_check < 60:
+            return
+        self._last_battle_check = now
+        data = self.client.get("/messages?category=combat&unread_only=1&per_page=20")
+        for row in data["messages"]:
+            if not row.get("has_battle_report"):
+                continue
+            report = self.client.get(f"/messages/{row['id']}")["message"].get("battle_report")
+            self.client.post(f"/messages/{row['id']}/read")
+            b = summarize_battle(report or {}, self.user_id)
+            if b is None:
+                continue
+            if b["role"] == "attacker" and b["probes_only"]:
+                self.log("probes_lost", at=b["at"], lost=b["my_loss"])  # shot down while spying
+                continue
+            self.stats["battles"] += 1
+            verdict = judge_trade(b) if b["role"] == "attacker" else None
+            self.log("battle", at=b["at"], role=b["role"], my_loss=b["my_loss"], their_loss=b["their_loss"],
+                     loot=b["loot"], debris=b["debris"], rounds=b["rounds"], verdict=verdict)
+            if b["role"] != "attacker":
+                continue
+            self.memory.battles = (self.memory.battles + [{"at": now, **{k: b[k] for k in ("at", "my_loss", "their_loss", "loot")}, "verdict": verdict}])[-30:]
+            if verdict == "bad":
+                self.stats["lessons"] += 1
+                self.memory.risk_scale = max(0.2, self.memory.risk_scale * 0.6)
+                if b["coord"] and None not in b["coord"]:
+                    self.memory.avoid_until[tuple(b["coord"])] = now + 6 * 3600
+                self.log("lesson", why=f"lost {b['my_loss']} for {b['loot'] + b['their_loss']} gained: "
+                                       f"more careful now (risk x{self.memory.risk_scale:.2f}), avoiding {b['at']} for 6 h")
+            elif verdict == "good":
+                self.memory.risk_scale = min(1.5, self.memory.risk_scale * 1.1)
 
     def _try_attack(self, home: dict, now: float, ships_here: dict) -> bool:
         pick = pick_attack(self.persona, self.rng, self.memory, now, ships_here)

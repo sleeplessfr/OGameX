@@ -5,7 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from swarm.agent import Agent, TokenStore
-from swarm.military import (Intel, Memory, assess_attack, build_strike, can_carry_enough, choose_units, count_fighters, distance,
+from swarm.military import (Intel, Memory, assess_attack, build_strike, can_carry_enough, choose_units, judge_trade, summarize_battle, count_fighters, distance,
                             pick_attack, pick_target, summarize_report)
 from swarm.personas import PRESETS
 from tests.fakegame import FakeGame
@@ -104,6 +104,42 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(coord, (1, 2, 6))
 
 
+class BattleLearningTests(unittest.TestCase):
+    # shaped like the real report of the raider's attack on the turtle (numbers from the owner's server)
+    REAL = {"target": {"galaxy": 1, "system": 3, "position": 4, "type": 1, "owner_id": 3},
+            "attacker": {"player_id": 4, "resource_loss": 52000, "units": {"light_fighter": 13}},
+            "defender": {"player_id": 3, "resource_loss": 14000, "units": {"rocket_launcher": 14}},
+            "loot": {"metal": 0, "crystal": 0, "deuterium": 0, "percentage": 50},
+            "debris": {"metal": 11700, "crystal": 3900, "deuterium": 0}, "rounds": 5}
+
+    def test_summary_of_the_real_defeat(self):
+        b = summarize_battle(self.REAL, my_user_id=4)
+        self.assertEqual((b["role"], b["my_loss"], b["their_loss"], b["loot"], b["debris"]), ("attacker", 52000, 14000, 0, 15600))
+        self.assertEqual(b["at"], "1:3:4")
+        self.assertEqual(judge_trade(b), "bad")
+
+    def test_defender_view_and_strangers(self):
+        self.assertEqual(summarize_battle(self.REAL, my_user_id=3)["role"], "defender")
+        self.assertIsNone(summarize_battle(self.REAL, my_user_id=99))
+
+    def test_shot_down_probes_are_recognised(self):
+        report = {**self.REAL, "attacker": {"player_id": 4, "resource_loss": 1000, "units": {"espionage_probe": 1}}}
+        self.assertTrue(summarize_battle(report, 4)["probes_only"])
+
+    def test_trades(self):
+        win = {"loot": 30000, "their_loss": 0, "my_loss": 0}
+        self.assertEqual(judge_trade(win), "good")
+        self.assertEqual(judge_trade({"loot": 0, "their_loss": 0, "my_loss": 0}), "neutral")
+        self.assertEqual(judge_trade({"loot": 1000, "their_loss": 5000, "my_loss": 7000}), "neutral")
+        self.assertEqual(judge_trade({"loot": 100, "their_loss": 100, "my_loss": 9000}), "bad")
+
+    def test_caution_shrinks_the_risk_a_raider_accepts(self):
+        intel = Intel(loot=9000, defenders=10, owner_id=2)
+        persona = replace(RAIDER, aggression=1.0, risk_ratio=1.0)
+        self.assertTrue(assess_attack(persona, random.Random(1), intel, 12, risk_scale=1.0)[0])
+        self.assertFalse(assess_attack(persona, random.Random(1), intel, 12, risk_scale=0.5)[0])
+
+
 class FleetAndShopTests(unittest.TestCase):
     STATS = {"small_cargo": {"cargo_capacity": 5000}, "large_cargo": {"cargo_capacity": 25000},
              "light_fighter": {"cargo_capacity": 50}}
@@ -182,6 +218,7 @@ class SwarmBehaviourTests(unittest.TestCase):
             store.put("victim", {"user_id": 2})
         agent = Agent("sim", PRESETS[persona_name], "x", store, random.Random(seed), client=game)
         agent.log = lambda *a, **k: None
+        agent.user_id = 1  # the fake game's player (the real agent learns its id when it logs in)
         elapsed = 0.0
         while elapsed < hours * 3600:
             delay = agent.tick()
@@ -197,6 +234,17 @@ class SwarmBehaviourTests(unittest.TestCase):
             self.assertGreater(agent.stats["attacks"], 0, f"seed {seed}")
             self.assertEqual(agent.stats["refused"], 0)
             self.assertGreater(game.attacks_resolved, 0)
+
+    def test_raider_reads_battle_results_and_gets_more_careful_after_a_defeat(self):
+        lessons = 0
+        for seed in (1, 2, 3, 4):
+            game, agent = self.play("raider", seed, hours=80)
+            if game.battle_losses > 0 and agent.stats["battles"] > 0:
+                self.assertTrue(any(b["verdict"] == "bad" for b in agent.memory.battles), f"seed {seed}")
+                self.assertGreater(agent.stats["lessons"], 0, f"seed {seed}")  # it became more careful (and relaxes again after wins)
+                lessons += 1
+            self.assertEqual(agent.stats["errors"], 0, f"seed {seed}")
+        self.assertGreater(lessons, 0, "the simulation never produced a defeat that the agent read")
 
     def test_peaceful_personas_never_attack(self):
         for name in ("scientist", "turtle", "miner"):

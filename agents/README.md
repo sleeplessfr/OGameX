@@ -46,7 +46,14 @@ Agents with a military streak also deal with each other:
 3. **Spy** with probes, then **read the report** (`/messages`): resources, ships, defense.
 4. **Decide**: attack only if the loot is worth it (`min_loot`), the defenders are few enough for the fighters
    it has (`risk_ratio`), and its mood allows (`aggression`). A target whose defenses are unknown is only a
-   `gamble`. It sends a share of its fighters (`strike_fraction`) plus enough cargo ships for the loot.
+   `gamble`. It sends a share of its fighters (`strike_fraction`) plus enough cargo ships for the loot. If the
+   fleet could not carry at least an eighth of the loot, it skips the target (`attack_skipped`) and builds cargo
+   ships first.
+5. **Read the result** (`/messages?category=combat`): each fight is logged (`battle`: what each side lost, loot,
+   debris). After a costly defeat (it lost at least twice what it gained plus destroyed) the agent logs a `lesson`,
+   becomes more careful for a while (`risk_scale`, shrinks x0.6, grows again after profitable raids) and avoids
+   that target for 6 hours. Probes shot down while spying are logged as `probes_lost`. This memory is not saved
+   between restarts.
 
 What each personality does with this: the **raider** builds fighters and hunts; the **turtle** builds defense and
 never attacks; the **scientist** and **miner** keep a few probes and watch (the miner almost never fights);
@@ -57,9 +64,9 @@ alone. To allow it anyway, start with `--attack-humans`.
 
 ## Not built yet
 
-Colonising, expeditions, trading, alliances, reading battle results to learn from them, and any real learning
-from experience. The brain is rule-based; the personas are the knobs. Learning and LLM-driven decisions come on
-top of this.
+Colonising, expeditions, trading, alliances, recycling debris, a defence loop, a strength estimate that weighs
+unit types (today defenders are counted, not weighed; a lost fight corrects this a little), and LLM-driven
+decisions. The brain is rule-based; the personas are the knobs; the only learning so far is the risk lesson above.
 
 ## Tests
 
