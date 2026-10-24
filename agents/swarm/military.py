@@ -29,6 +29,7 @@ class Memory:
     pending: dict[Coord, float] = field(default_factory=dict)    # probes sent, report not read yet
     intel: dict[Coord, dict] = field(default_factory=dict)       # read reports: {'at', 'loot', 'defenders', 'owner_id'}
     avoid_until: dict[Coord, float] = field(default_factory=dict)  # targets the game refused (protection, vacation, ...)
+    need_cargo: bool = False   # a worthwhile target had to be skipped because the fleet cannot carry enough loot
 
 
 @dataclass
@@ -131,6 +132,16 @@ def build_strike(persona: Persona, ships_here: dict[str, int], ship_stats: dict[
     return fleet
 
 
+def carrying_capacity(fleet: dict[str, int], ship_stats: dict[str, dict]) -> int:
+    return sum(int(n) * int(ship_stats.get(name, {}).get("cargo_capacity", 0)) for name, n in fleet.items())
+
+
+def can_carry_enough(persona: Persona, fleet: dict[str, int], ship_stats: dict[str, dict], loot: int) -> bool:
+    """An attack only pays if the fleet can carry back a decent part of the loot (at least an eighth of it)."""
+    haul = min(loot, carrying_capacity(fleet, ship_stats))
+    return haul >= max(persona.min_loot, loot // 8)
+
+
 def count_fighters(ships_here: dict[str, int]) -> int:
     return sum(int(ships_here.get(n, 0)) for n in FIGHTERS)
 
@@ -142,6 +153,8 @@ def pick_attack(persona: Persona, rng: random.Random, memory: Memory, now: float
     for c, info in memory.intel.items():
         if now - info["at"] > 2 * 3600 or now - memory.attacked.get(c, -1e12) < persona.attack_cooldown_s:
             continue
+        if info.get("skip_until", 0) > now:  # skipped a moment ago (cannot carry the loot): do not retry every round
+            continue
         intel = Intel(info["loot"], info["defenders"], info.get("owner_id"))
         go, reason = assess_attack(persona, rng, intel, fighters)
         if go and (best is None or intel.loot > best[1].loot):
@@ -152,6 +165,7 @@ def pick_attack(persona: Persona, rng: random.Random, memory: Memory, now: float
 # ---- what to build --------------------------------------------------------------------------------------------
 def choose_units(
     persona: Persona, rng: random.Random, units: list[dict], have: dict, ships_here: dict[str, int],
+    want_cargo: bool = False,
 ) -> tuple[str, int] | None:
     """Pick one ship or defense type to order and how many, spending at most `army_share` of what is spare."""
     if persona.army_share <= 0 and persona.probes_wanted <= 0:
@@ -167,6 +181,10 @@ def choose_units(
         return None
     weighted = [(persona.unit_weights.get(n, 0) * (1 + persona.randomness * (rng.random() * 2 - 1)), n) for n in usable]
     weighted = [(w, n) for w, n in weighted if w > 0 and n != "espionage_probe"]
+    if want_cargo:  # worthwhile loot is lying around but the fleet cannot carry it: cargo ships first
+        cargos = [(w, n) for w, n in weighted if n in CARGOS] or [(1.0, n) for n in CARGOS if n in usable]
+        if cargos:
+            weighted = [max(cargos)]
     if not weighted:
         return None
     weighted.sort(reverse=True)

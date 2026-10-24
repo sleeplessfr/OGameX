@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 from .brain import choose_building, choose_research, pay
-from .military import (Memory, build_strike, choose_units, coord_of, pick_attack, pick_target, summarize_report)
+from .military import (Memory, build_strike, can_carry_enough, choose_units, coord_of, pick_attack, pick_target, summarize_report)
 from .client import ApiClient, ApiError
 from .personas import Persona
 
@@ -286,6 +286,14 @@ class Agent:
         strike = build_strike(self.persona, ships_here, self.ship_stats, intel.loot)
         if strike is None:
             return False
+        if not can_carry_enough(self.persona, strike, self.ship_stats, intel.loot):
+            # Winning is pointless if the loot stays behind: ask for cargo ships and look again later.
+            self.memory.need_cargo = True
+            self.memory.intel[coord]["skip_until"] = now + 600
+            self.log("attack_skipped", at=f"{coord[0]}:{coord[1]}:{coord[2]}", loot=intel.loot,
+                     why="fleet cannot carry enough of the loot, wants cargo ships")
+            return False
+        self.memory.need_cargo = False
         try:
             result = self.client.post(f"/planets/{home['id']}/fleet", {
                 "mission": "attack", "galaxy": coord[0], "system": coord[1], "position": coord[2], "ships": strike})
@@ -303,7 +311,7 @@ class Agent:
         return True
 
     def _build_units(self, home: dict, units: list[dict], have: dict, ships_here: dict) -> list[float]:
-        pick = choose_units(self.persona, self.rng, units, have, ships_here)
+        pick = choose_units(self.persona, self.rng, units, have, ships_here, want_cargo=self.memory.need_cargo)
         if pick is None:
             return []
         name, amount = pick

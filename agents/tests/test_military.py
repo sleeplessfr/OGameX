@@ -5,7 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from swarm.agent import Agent, TokenStore
-from swarm.military import (Intel, Memory, assess_attack, build_strike, choose_units, count_fighters, distance,
+from swarm.military import (Intel, Memory, assess_attack, build_strike, can_carry_enough, choose_units, count_fighters, distance,
                             pick_attack, pick_target, summarize_report)
 from swarm.personas import PRESETS
 from tests.fakegame import FakeGame
@@ -114,6 +114,24 @@ class FleetAndShopTests(unittest.TestCase):
         self.assertEqual(fleet["light_fighter"], 5)
         self.assertEqual(fleet["small_cargo"], 3)          # 12000 - 5*50 = 11750 -> 3 cargos of 5000
         self.assertNotIn("espionage_probe", fleet)
+
+    def test_fleet_must_be_able_to_carry_a_decent_part_of_the_loot(self):
+        # real server case: 1 light fighter (cargo 50) sent after 28,447 loot
+        self.assertFalse(can_carry_enough(RAIDER, {"light_fighter": 1}, self.STATS, 28_447))
+        self.assertFalse(can_carry_enough(RAIDER, {"light_fighter": 13}, self.STATS, 80_307))
+        self.assertTrue(can_carry_enough(RAIDER, {"light_fighter": 10, "small_cargo": 2}, self.STATS, 10_000))
+        self.assertTrue(can_carry_enough(replace(RAIDER, min_loot=10), {"light_fighter": 1}, self.STATS, 150))  # tiny loot, tiny haul is fine
+
+    def test_cargo_ships_come_first_when_loot_could_not_be_carried(self):
+        units = [self.unit("light_fighter", (3000, 1000, 0)), self.unit("small_cargo", (2000, 2000, 0))]
+        have = {"metal": 1_000_000, "crystal": 1_000_000, "deuterium": 0}
+        name, _ = choose_units(RAIDER, random.Random(1), units, have, {"espionage_probe": 9}, want_cargo=True)
+        self.assertEqual(name, "small_cargo")
+
+    def test_pick_attack_skips_targets_skipped_a_moment_ago(self):
+        memory = Memory(intel={(1, 1, 1): {"at": 0, "loot": 9000, "defenders": 0, "owner_id": 2, "skip_until": 500}})
+        self.assertIsNone(pick_attack(replace(RAIDER, aggression=1.0), random.Random(1), memory, 100, {"light_fighter": 5}))
+        self.assertIsNotNone(pick_attack(replace(RAIDER, aggression=1.0), random.Random(1), memory, 600, {"light_fighter": 5}))
 
     def test_strike_needs_fighters(self):
         self.assertIsNone(build_strike(RAIDER, {"small_cargo": 5}, self.STATS, 1000))
