@@ -30,7 +30,7 @@ Base URL: `http://<your-server>/api/v1`
 Common error codes for 422: `validation_failed`, `unknown_object`, `wrong_object_type`, `requirements_not_met`,
 `not_enough_resources`, `vacation_mode`, `shipyard_busy`, `research_in_progress`, `research_lab_upgrading`,
 `character_class_required`, `build_rejected`, `research_rejected`, `invalid_coordinates`, and for fleets `unknown_ship`,
-`invalid_speed`, `invalid_holding_time`, `attack_block`, `mission_rejected`, `not_recallable`. A `mission_rejected` message is
+`invalid_speed`, `invalid_holding_time`, `attack_block`, `mission_rejected`, `not_recallable`; for messages `message_not_found`. A `mission_rejected` message is
 the game's own reason (no free fleet slot, not enough ships or fuel, cargo too small, mission not possible there, ...).
 
 ## Settings (`.env`)
@@ -139,6 +139,29 @@ curl -s -X POST http://localhost/api/v1/planets/12/fleet -H "Authorization: Bear
   -d '{"mission":"transport","galaxy":1,"system":2,"position":5,"ships":{"small_cargo":2},"resources":{"metal":100}}'
 ```
 
+### Messages
+
+Spy reports and battle reports come back as structured data, so a program can act on them.
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/messages` | Newest first. Query: `category` (`espionage`, `combat`, `expeditions`, `transport`, `fleet_other`, `messages`, `information`, `economy`, `universe`, `system`), `unread_only=1`, `page`, `per_page` (1-50, default 20), `mark_read=1`. Listing does not mark messages as read unless `mark_read=1` is given |
+| GET | `/messages/{id}` | One message with its full plain-text body and, when it has one, `espionage_report` or `battle_report` |
+| POST | `/messages/{id}/read` | Mark as read |
+
+A message has `id`, `key`, `subject`, `body` (plain text), `viewed`, `created_at`, `has_espionage_report`, `has_battle_report`.
+
+`espionage_report`: `target` (galaxy, system, position, type, owner_id), `player_info`, `resources`, `debris`,
+`buildings`, `research`, `ships`, `defense`, `counter_espionage_chance`. How much is filled in depends on how many
+probes you sent and your espionage level, as in the game. `battle_report`: `target`, `general`, `attacker`,
+`defender`, `rounds` (the number of rounds, not the log), `loot`, `debris`, `repaired_defenses`, `wreckage`.
+
+### Highscore
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/highscore` | Query: `type` (`general`, `economy`, `research`, `military`; default `general`), `page`, `per_page` (1-100, default 25). Returns `players` (rank, user_id, username, score, `is_me`, `main_planet` coordinates, alliance_tag, total_ships for military), `total_players`, `total_pages`, and `me` with your rank and score in all four rankings. The game caches the ranking for a few minutes |
+
 ## Queue items
 
 Queue lists show the item being worked on first (`active: true`), then the waiting items. `seconds_remaining`
@@ -164,5 +187,5 @@ curl -s -X POST http://localhost/api/v1/planets/12/buildings \
 
 ## Not available yet
 
-Messages (spy and battle reports), highscore, battle simulation, ACS/missiles/fleet unions, custom player names, and the other
+Battle simulation, ACS/missiles/fleet unions, custom player names, and the other
 parts of the game (alliances, merchant, moon buildings' special actions, planet management).

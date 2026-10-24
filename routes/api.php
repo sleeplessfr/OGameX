@@ -5,6 +5,8 @@ use OGame\Http\Controllers\Api\V1\AuthController;
 use OGame\Http\Controllers\Api\V1\BuildingController;
 use OGame\Http\Controllers\Api\V1\FleetController;
 use OGame\Http\Controllers\Api\V1\GalaxyController;
+use OGame\Http\Controllers\Api\V1\HighscoreController;
+use OGame\Http\Controllers\Api\V1\MessageController;
 use OGame\Http\Controllers\Api\V1\PlanetController;
 use OGame\Http\Controllers\Api\V1\ResearchController;
 use OGame\Http\Controllers\Api\V1\StatusController;
@@ -62,4 +64,10 @@ Route::middleware(['api.token', 'throttle:ogamex-api', 'globalgame'])->group(fun
     Route::post('/planets/{planet}/fleet/check', [FleetController::class, 'check'])->whereNumber('planet');
     Route::post('/planets/{planet}/fleet', [FleetController::class, 'send'])->whereNumber('planet');
     Route::post('/fleet/{mission}/recall', [FleetController::class, 'recall'])->whereNumber('mission');
+
+    Route::get('/messages', [MessageController::class, 'index']);
+    Route::get('/messages/{message}', [MessageController::class, 'show'])->whereNumber('message');
+    Route::post('/messages/{message}/read', [MessageController::class, 'markRead'])->whereNumber('message');
+
+    Route::get('/highscore', [HighscoreController::class, 'index']);
 });
