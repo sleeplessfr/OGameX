@@ -752,7 +752,7 @@ class PlayerService
             } else {
                 throw new Exception('Could not acquire update fleet mission planet lock.');
             }
-        });
+        }, 3); // Up to 3 attempts: with many players active at once, MySQL occasionally aborts one transaction as a deadlock.
     }
 
     /**
