@@ -5,6 +5,7 @@ namespace OGame\Http\Controllers\Api\V1;
 use Illuminate\Http\JsonResponse;
 use OGame\Services\BuildingQueueService;
 use OGame\Services\MessageService;
+use OGame\Services\ObjectService;
 use OGame\Services\PlayerService;
 use OGame\Services\ResearchQueueService;
 use OGame\Services\UnitQueueService;
@@ -65,7 +66,7 @@ class StatusController extends ApiController
             ],
             'planets' => $planets,
             'research' => [
-                'levels' => $player->getResearchArray(),
+                'levels' => $this->researchLevels($player),
                 'queue' => $this->queueArray($researchQueue->retrieveQueue($player->planets->current())),
             ],
             'fleet_slots' => [
@@ -76,5 +77,20 @@ class StatusController extends ApiController
             ],
             'unread_messages' => $messages->getUnreadMessagesCount(),
         ]);
+    }
+
+    /**
+     * Level of every technology, 0 for the ones not researched yet, so clients always get the same shape.
+     *
+     * @return object
+     */
+    private function researchLevels(PlayerService $player): object
+    {
+        $levels = [];
+        foreach (ObjectService::getResearchObjects() as $object) {
+            $levels[$object->machine_name] = $player->getResearchLevel($object->machine_name);
+        }
+
+        return (object)$levels;
     }
 }
