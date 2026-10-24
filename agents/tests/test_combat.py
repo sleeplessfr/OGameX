@@ -16,7 +16,8 @@ class CombatEstimateTests(unittest.TestCase):
         e = estimate_battle({"light_fighter": 13}, {"rocket_launcher": 14}, random.Random(1), (0, 0, 3), (0, 0, 5), runs=40)
         self.assertEqual(e.win_chance, 0)
         self.assertAlmostEqual(e.my_loss_value, 52000, delta=6000)
-        self.assertAlmostEqual(e.their_loss_value, 14000, delta=4000)
+        # the real report listed 14,000 destroyed; about 70% of destroyed defenses are rebuilt, so about 4,200 stays lost
+        self.assertAlmostEqual(e.their_loss_value, 4200, delta=2500)
         self.assertLess(e.my_survival, 0.1)
 
     def test_a_big_fleet_beats_the_same_defence_cheaply(self):

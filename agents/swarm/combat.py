@@ -45,7 +45,10 @@ STATS = {
     "anti_ballistic_missile": (8000, 2000, 0, 8000, 1, 1, {}),
     "interplanetary_missile": (12500, 2500, 10000, 15000, 1, 12000, {}),
 }
-HULL_DIVISOR = 10   # the battle engine uses a tenth of the listed structural integrity
+DEFENSE = {"rocket_launcher", "light_laser", "heavy_laser", "gauss_cannon", "ion_cannon", "plasma_turret",
+           "small_shield_dome", "large_shield_dome"}
+DEFENSE_REPAIR = 0.7  # the game's default share of destroyed defenses that come back
+HULL_DIVISOR = 10  # the battle engine uses a tenth of the listed structural integrity
 MAX_UNITS = 2500    # bigger fleets are scaled down (both sides equally) to keep the estimate quick
 ROUNDS = 6
 
@@ -109,12 +112,13 @@ def _fight(att: list[list], dfn: list[list], rng: random.Random) -> None:
                 while True:
                     target = pool[rng.randrange(len(pool))]
                     dmg = shooter[1]
-                    if dmg >= 0.01 * target[2]:  # weaker shots bounce off the shield
-                        absorbed = min(target[5], dmg)
-                        target[5] -= absorbed
-                        target[4] -= dmg - absorbed
-                        if 0 < target[4] < 0.7 * target[3] and rng.random() < 1 - target[4] / target[3]:
-                            target[4] = 0  # badly damaged units can blow up (the game's explosion rule)
+                    if dmg < 0.01 * target[2]:
+                        break  # the game: a shot under 1% of the shield bounces and ends the shooter's turn (no rapid-fire re-roll)
+                    absorbed = min(target[5], dmg)
+                    target[5] -= absorbed
+                    target[4] -= dmg - absorbed
+                    if 0 < target[4] < 0.7 * target[3] and rng.random() < 1 - target[4] / target[3]:
+                        target[4] = 0  # badly damaged units can blow up (the game's explosion rule)
                     rf = STATS[shooter[0]][6].get(target[0], 0)
                     if rf <= 1 or rng.random() >= 1 - 1 / rf:
                         break
@@ -136,6 +140,8 @@ def estimate_battle(attackers: dict[str, int], defenders: dict[str, int], rng: r
         if att and not dfn:
             wins += 1
         my_lost += sum(unit_value(u[0]) for u in att_start if u[4] <= 0) / scale
-        their_lost += sum(unit_value(u[0]) for u in dfn_start if u[4] <= 0) / scale
+        # about 70% of destroyed defenses are rebuilt after the battle (the game's repair rule), so they cost the defender little
+        their_lost += sum(unit_value(u[0]) * (1 - DEFENSE_REPAIR if u[0] in DEFENSE else 1)
+                          for u in dfn_start if u[4] <= 0) / scale
         survive += len(att) / max(1, len(att_start))
     return Estimate(wins / runs, my_lost / runs, their_lost / runs, survive / runs)
