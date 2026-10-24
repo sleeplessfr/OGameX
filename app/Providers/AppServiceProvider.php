@@ -2,7 +2,10 @@
 
 namespace OGame\Providers;
 
+use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Contracts\Debug\ExceptionHandler;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Facades\Vite;
 use Illuminate\Support\ServiceProvider;
@@ -35,6 +38,19 @@ class AppServiceProvider extends ServiceProvider
 
         // Register model observers
         User::observe(UserObserver::class);
+
+        // Rate limits of the JSON API (/api/v1), configurable in config/ogamex_api.php.
+        // Authenticated calls are limited per account, register/login per IP address.
+        RateLimiter::for('ogamex-api', function (Request $request) {
+            $user = $request->user();
+
+            return Limit::perMinute((int)config('ogamex_api.rate_limit_per_minute'))
+                ->by($user !== null ? 'user:' . $user->id : 'ip:' . $request->ip());
+        });
+        RateLimiter::for('ogamex-api-auth', function (Request $request) {
+            return Limit::perMinute((int)config('ogamex_api.auth_rate_limit_per_minute'))
+                ->by('ip:' . $request->ip());
+        });
     }
 
     /**

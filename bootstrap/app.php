@@ -3,9 +3,12 @@
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
+use OGame\Exceptions\ApiException;
 use OGame\Http\Middleware\Admin;
+use OGame\Http\Middleware\AuthenticateApiToken;
 use OGame\Http\Middleware\CheckBanned;
 use OGame\Http\Middleware\CheckFirstLogin;
+use OGame\Http\Middleware\ForceJsonResponse;
 use OGame\Http\Middleware\GlobalGame;
 use OGame\Http\Middleware\Locale;
 use OGame\Http\Middleware\ServerTiming;
@@ -13,6 +16,8 @@ use OGame\Http\Middleware\ServerTiming;
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
         web: __DIR__.'/../routes/web.php',
+        api: __DIR__.'/../routes/api.php',
+        apiPrefix: 'api/v1',
         commands: __DIR__.'/../routes/console.php',
         health: '/up',
     )
@@ -28,7 +33,10 @@ return Application::configure(basePath: dirname(__DIR__))
         // Appending still guarantees the locale is set before any route-specific middleware
         // (auth, globalgame, firstlogin) runs.
         $middleware->web(append: [Locale::class]);
+        // JSON API (/api/v1): always answer with JSON, never with HTML or redirects.
+        $middleware->api(prepend: [ForceJsonResponse::class]);
         $middleware->alias([
+            'api.token' => AuthenticateApiToken::class,
             'globalgame' => GlobalGame::class,
             'locale' => Locale::class,
             'admin' => Admin::class,
@@ -37,5 +45,8 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
+        // API errors (wrong input, not enough resources, ...) are expected, not bugs: do not log them
+        // and do not send them to Discord.
+        $exceptions->dontReport(ApiException::class);
     })
     ->create();
