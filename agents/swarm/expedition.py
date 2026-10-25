@@ -157,7 +157,7 @@ def can_consider(persona: Persona, *, now: float, state: dict, astro: int, fleet
         return "no free fleet slot"
     if persona.aggression >= 0.3 and fleet_slots["max"] > 1 and fleet_slots["used"] >= fleet_slots["max"] - 1:
         return "keeps the last slot for raids"
-    if on_guard or alert:
+    if alert or (on_guard and persona.aggression >= 0.3):   # a peaceful agent leaves on guard (it only stays for a raid it can see coming)
         return "needs the fleet at home (raiders about)"
     if now < state.get("next_at", 0.0):
         return "cooling down"

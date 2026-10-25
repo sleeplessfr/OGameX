@@ -57,7 +57,8 @@ class PureTests(unittest.TestCase):
         self.assertIn("expedition slot", self.consider(fleet_slots={"used": 0, "max": 3, "expedition_used": 1, "expedition_max": 1}))
         self.assertIn("fleet slot", self.consider(fleet_slots={"used": 3, "max": 3, "expedition_used": 0, "expedition_max": 1}))
         self.assertIn("no expedition slots", self.consider(fleet_slots={"used": 0, "max": 3}))
-        self.assertIn("raiders", self.consider(on_guard=True))
+        self.assertIsNone(self.consider(on_guard=True))      # a peaceful agent does not stay home because of a warning
+        self.assertIn("raiders", self.consider(PRESETS["raider"], astro=3, on_guard=True))
         self.assertIn("raiders", self.consider(alert=True))
         self.assertIn("cooling", self.consider(state={**ex.new_state(), "next_at": 2000.0}))
         self.assertIn("last slot", self.consider(PRESETS["raider"], astro=3, fleet_slots={"used": 2, "max": 3, "expedition_used": 0, "expedition_max": 1}))
@@ -200,11 +201,16 @@ class AgentTests(unittest.TestCase):
         self.assertNotIn("expedition_sent", self.names(agent))
         self.assertEqual([b for p, b in game.post_log if p.endswith("/fleet")], [])
 
-    def test_a_raided_agent_keeps_its_fleet_home(self):
+    def test_a_raided_peaceful_agent_still_goes_but_an_aggressive_one_stays(self):
         game, agent = self.make()
         agent.memory.aggressors[(1, 1, 5)] = 0.0     # robbed a moment ago
         agent.tick()
-        self.assertNotIn("expedition_sent", self.names(agent))
+        self.assertIn("expedition_sent", self.names(agent))     # a scientist does not hide for 3 hours
+        game2, agent2 = self.make()
+        agent2.persona = replace(agent2.persona, aggression=0.5)
+        agent2.memory.aggressors[(1, 1, 5)] = 0.0
+        agent2.tick()
+        self.assertNotIn("expedition_sent", self.names(agent2))
 
     def test_incoming_hostile_fleet_keeps_it_home(self):
         game, agent = self.make()
