@@ -39,8 +39,8 @@ python tune_economy.py --persona miner --check
 ```
 
 Plays thousands of planets in minutes without a server (the game's own formulas plus the agent's real building decisions)
-and searches for better weights for mines, solar plant, robot factory and stores. It only prints suggestions; nothing is
-changed. It optimises income only, so use it as a hint for the economy part of a personality, not as a new character.
+and searches for better weights for the mines, solar plant and robot factory. It only prints suggestions; nothing is
+changed. Stores, balance, patience and store alarm (a personality's character) are left alone unless you add `--with-stores` or `--with-traits`.
 
 ## How an agent decides
 
