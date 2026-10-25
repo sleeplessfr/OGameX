@@ -279,3 +279,38 @@ class SwarmBehaviourTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MemorySaveTests(unittest.TestCase):
+    def test_memory_survives_a_round_trip_through_json(self):
+        import json
+        m = Memory()
+        m.spied[(1, 2, 3)] = 100.0
+        m.intel[(1, 2, 3)] = {"at": 100.0, "loot": 5000, "defenders": 4, "owner_id": 7, "skip_until": 900.0}
+        m.avoid_until[(1, 4, 9)] = 777.0
+        m.risk_scale = 0.36
+        m.need_cargo = True
+        m.battles.append({"profit": -5})
+        back = Memory.from_dict(json.loads(json.dumps(m.to_dict())))
+        self.assertEqual(back, m)
+
+    def test_damaged_or_odd_data_never_breaks_loading(self):
+        m = Memory.from_dict({"spied": {"nonsense": 1, "1:2:3": 5.0}, "risk_scale": "abc", "battles": "x", "intel": None})
+        self.assertEqual(m.spied, {(1, 2, 3): 5.0})
+        self.assertEqual(m.risk_scale, 1.0)
+        self.assertEqual(m.battles, [])
+        self.assertEqual(Memory.from_dict({"risk_scale": 99}).risk_scale, 1.5)
+
+    def test_agent_remembers_across_a_restart_and_survives_a_broken_file(self):
+        tmp = tempfile.mkdtemp()
+        store = TokenStore(str(Path(tmp) / "t.json"))
+        a = Agent("sim", PRESETS["raider"], "x", store, random.Random(1), client=FakeGame(), memory_dir=tmp)
+        a.memory.risk_scale = 0.4
+        a.memory.avoid_until[(1, 2, 3)] = 5.0
+        a.save_memory()
+        b = Agent("sim", PRESETS["raider"], "x", store, random.Random(1), client=FakeGame(), memory_dir=tmp)
+        self.assertEqual(b.memory.risk_scale, 0.4)
+        self.assertEqual(b.memory.avoid_until, {(1, 2, 3): 5.0})
+        (Path(tmp) / "sim.json").write_text("{broken")
+        c = Agent("sim", PRESETS["raider"], "x", store, random.Random(1), client=FakeGame(), memory_dir=tmp)
+        self.assertEqual(c.memory, Memory())

@@ -48,7 +48,7 @@ class Agent:
     def __init__(
         self, name: str, persona: Persona, base_url: str, store: TokenStore, rng: random.Random,
         *, log_dir: str | None = None, email_domain: str = "example.com", client: ApiClient | None = None,
-        attack_humans: bool = False,
+        attack_humans: bool = False, memory_dir: str | None = None,
     ):
         self.name = name
         self.persona = persona
@@ -62,7 +62,8 @@ class Agent:
         self.lab_level: int | None = None
         self.attack_humans = attack_humans   # False = only ever spy on / attack other agents
         self.user_id: int | None = None
-        self.memory = Memory()
+        self.memory_path = Path(memory_dir) / f"{name}.json" if memory_dir else None
+        self.memory = self._load_memory()
         self.ship_stats: dict[str, dict] = {}
         self._players: tuple[float, list[dict], int] | None = None  # (fetched at, highscore rows, own score)
         self._economy_saving = False
@@ -70,6 +71,26 @@ class Agent:
         self.my_tech = None  # (weapons, shields, armour) levels, from /status
         self.stats = {"ticks": 0, "builds": 0, "researches": 0, "refused": 0, "errors": 0,
                       "spies": 0, "reports": 0, "attacks": 0, "units": 0, "battles": 0, "lessons": 0}
+
+    # ---- memory on disk ------------------------------------------------------------------------------
+    def _load_memory(self) -> Memory:
+        if self.memory_path and self.memory_path.exists():
+            try:
+                return Memory.from_dict(json.loads(self.memory_path.read_text(encoding="utf-8")))
+            except (OSError, ValueError):
+                pass  # a damaged file must never stop an agent: start with a blank memory
+        return Memory()
+
+    def save_memory(self) -> None:
+        if not self.memory_path:
+            return
+        try:
+            self.memory_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.memory_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self.memory.to_dict()), encoding="utf-8")
+            tmp.replace(self.memory_path)
+        except OSError:
+            pass
 
     # ---- logging -------------------------------------------------------------------------------------
     def log(self, event: str, **fields) -> None:
@@ -398,6 +419,7 @@ class Agent:
                 if not self.client.token:
                     self.ensure_session()
                 delay = self.tick()
+                self.save_memory()
                 failures = 0
             except ApiError as e:
                 failures += 1

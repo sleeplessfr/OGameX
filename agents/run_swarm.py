@@ -24,6 +24,7 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=1, help="same seed = same personalities")
     ap.add_argument("--state", default="agents_state.json", help="where accounts/tokens are remembered")
     ap.add_argument("--log-dir", default="logs")
+    ap.add_argument("--memory-dir", default="memory", help="where each agent saves what it has learned (survives restarts)")
     ap.add_argument("--stagger", type=float, default=2.0, help="seconds between agent starts (registration is rate limited)")
     ap.add_argument("--ticks", type=int, default=0, help="stop each agent after N rounds (0 = run until Ctrl+C)")
     ap.add_argument("--speedup", type=float, default=1.0, help="divide every pause by this (for quick tests)")
@@ -53,7 +54,7 @@ def main() -> int:
         persona = make_persona(number - 1, rng, names)
         agents.append(Agent(f"{args.prefix}{number:04d}", persona, args.base_url, store, rng,
                             log_dir=args.log_dir, email_domain=args.email_domain,
-                            attack_humans=args.attack_humans))
+                            attack_humans=args.attack_humans, memory_dir=args.memory_dir))
 
     threads = []
     print(f"Starting {len(agents)} agents on {args.base_url}. Ctrl+C or create a file named {args.stop_file} to stop.")

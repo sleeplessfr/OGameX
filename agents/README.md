@@ -56,8 +56,9 @@ Agents with a military streak also deal with each other:
 5. **Read the result** (`/messages?category=combat`): each fight is logged (`battle`: what each side lost, loot,
    debris). After a costly defeat (it lost at least twice what it gained plus destroyed) the agent logs a `lesson`,
    becomes more careful for a while (`risk_scale`, shrinks x0.6, grows again after profitable raids) and avoids
-   that target for 6 hours. Probes shot down while spying are logged as `probes_lost`. This memory is not saved
-   between restarts.
+   that target for 6 hours. Probes shot down while spying are logged as `probes_lost`. Each agent saves this memory after every round to
+   `memory/<name>.json` (change with `--memory-dir`), so a restart no longer makes it forget. Keep that folder when you
+   update; delete a file to wipe one agent's memory.
 
 What each personality does with this: the **raider** builds fighters and hunts; the **turtle** builds defense and
 never attacks; the **scientist** and **miner** keep a few probes and watch (the miner almost never fights);
