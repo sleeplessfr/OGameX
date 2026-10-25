@@ -149,6 +149,38 @@ class BoardAndTradeReportTests(unittest.TestCase):
         self.assertIn("a1: 1 posts, sent 5,000, received 4,500, cheated 1x", text)
         self.assertIn("a1 was cheated by a9: owed 4,800", text)
 
+    def test_bounties_and_revenge_section(self):
+        t = 1_700_000_000
+        events = [
+            ev(t, "a3", "bounty_post", bounty=1, target="1:1:5", target_id=2, reward={"metal": 4000}, value=4000, expires=t + 21600),
+            ev(t + 1, "a1", "revenge_join", post=9, victim="a3", raider_at="1:1:5", raider_id=2, until=t + 7200, replied=True),
+            ev(t + 50, "a1", "bounty_claim", bounty=1, claim=2, poster="a3", at="1:1:5", loot=9000, report=77, reward={"metal": 4000}),
+            ev(t + 60, "a1", "bounty_verdict", bounty=1, claim=2, ok=True, why="confirmed", role="claimant", poster="a3"),
+            ev(t + 61, "a3", "bounty_verdict", bounty=1, claim=2, ok=True, why="confirmed", role="poster", claimant="a1"),
+            ev(t + 70, "a3", "bounty_paid", side="poster", bounty="1", to="a1", resources={"metal": 4000}, value=4000),
+            ev(t + 90, "a1", "bounty_paid", side="claimant", bounty="1", poster="a3", resources={"metal": 4000}, value=4000),
+            ev(t + 100, "a1", "revenge_done", raider_at="1:1:5", loot=9000),
+            ev(t + 110, "a5", "bounty_post", bounty=7, target="1:2:2", target_id=4, reward={"crystal": 3000}, value=4500, expires=t + 21600),
+            ev(t + 120, "a6", "bounty_claim", bounty=7, claim=8, poster="a5", at="1:2:2", loot=100, report=3, reward={"crystal": 3000}),
+            ev(t + 130, "a6", "bounty_verdict", bounty=7, claim=8, ok=True, why="confirmed", role="claimant", poster="a5"),
+            ev(t + 9000, "a6", "bounty_unpaid", side="claimant", bounty="7", poster="a5", promised={"crystal": 3000}, why="x"),
+            ev(t + 140, "a7", "bounty_verdict", bounty=11, claim=12, ok=False, why="no loot", role="claimant", poster="a5"),
+        ]
+        text = sl.summarize(events)
+        self.assertIn("BOUNTIES AND REVENGE", text)
+        self.assertIn("revenge: 1 joins (a1 1), 1 ended by a raid on the named raider", text)
+        self.assertIn("a1 joined a3's call against 1:1:5 (player 2)", text)
+        self.assertIn("bounties: 2 posted (rewards worth 8,500), 2 claims, 2 confirmed, 1 rejected, 1 paid by the poster (worth 4,000), "
+                      "1 received, 1 never paid, 0 the poster gave up on", text)
+        self.assertIn("a3 wants 1:1:5 (player 2) for 4,000 metal: paid", text)
+        self.assertIn("a5 wants 1:2:2 (player 4) for 3,000 crystal: NOT PAID", text)
+        self.assertIn("a7's claim on bounty 11 was rejected: no loot", text)
+        self.assertIn("a6 was never paid by a5 (bounty 7); shunned", text)
+
+    def test_bounty_section_says_none_without_bounties(self):
+        text = sl.summarize([ev(1000.0, "a1", "build", what="metal_mine")])
+        self.assertRegex(text, r"BOUNTIES AND REVENGE[^\n]*\n  none")
+
     def test_report_without_a_board_says_none(self):
         text = sl.summarize([ev(1000.0, "a1", "build", what="metal_mine")])
         self.assertIn("BOARD AND TRADE", text)

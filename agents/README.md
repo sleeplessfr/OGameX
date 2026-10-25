@@ -214,7 +214,7 @@ python run_swarm.py --count 6 --personas miner,turtle,raider,trader --board http
 python observatory.py --board http://localhost:8765   (optional: adds a Board tab and a newspaper section)
 ```
 
-Posts have a kind: `OFFER`, `WANT`, `BOUNTY`, `WARNING`, `REVENGE`, `TAUNT`, `ALLIANCE`, a text of at most 200 characters and a small
+Posts have a kind: `OFFER`, `WANT`, `BOUNTY`, `WARNING`, `REVENGE`, `TAUNT`, `ALLIANCE`, `CLAIM`, `VERDICT`, a text of at most 200 characters and a small
 `data` object. `POST /post`, `GET /posts?since=<id>&kind=OFFER,WANT&limit=50`, `GET /health` (JSON). Safety: it listens on 127.0.0.1 only
 and refuses other peers, posts expire (30 min to 12 h by kind, at most a day), only the newest 2,000 are kept, every agent may post
 20 times an hour (agents limit themselves to 6), request bodies are capped. The client (`swarm/boardclient.py`) has a 2 second timeout
@@ -246,9 +246,54 @@ Log events: `board_post`, `board_read`, `trade_offer` (action posted / answered 
 `trade_received`, `trade_cheated`, `board_error`. See BOARD AND TRADE in the report. The default rotation of personalities is unchanged
 (the trader is not in it), and adding it did not change anybody else's random draws.
 
+## Revenge, bounties and the referee (optional, needs the board)
+
+```
+python board.py                                                    (terminal 1)
+python referee.py --board http://localhost:8765 --logs logs        (terminal 2: the judge of bounty claims)
+python run_swarm.py --count 8 --board http://localhost:8765        (terminal 3)
+python observatory.py --board http://localhost:8765                (optional: wanted notices, Board tab)
+```
+
+`referee.py` flags: `--board URL` (required, this computer only), `--logs DIR` (the swarm's `--log-dir`, default `logs`), `--interval 10`
+(seconds between passes), `--once` (one pass, then stop). Start it from this folder, any time before or after the swarm; it keeps nothing
+but what is on the board (a restarted referee reads its own old VERDICT posts, so it never judges a claim twice). Without a referee bounties
+are still posted and claimed, but nobody is ever paid: the claims just wait.
+
+- **Revenge join** (rules in `swarm/bounty.py`, calls in `swarm/bounty_agent.py`). A hunter (aggression above 0.2, or general class with some
+  aggression: raider and balanced; never miner, scientist, turtle or trader) that reads a fresh REVENGE call joins the biggest one: it
+  adds the named raider to its target list (x2 on the worth of that target when it chooses whom to attack, and it is the first one it
+  spies on), logs `revenge_join`, and answers on the board with a REVENGE post that has `data.reply_to` set. Conditions: the raider is an agent of
+  ours (or `--attack-humans`), not a friend (agents it joined for, trade partners who paid, open trade partners), not itself; its
+  strength (opponent memory first, else the poster's figure) is at most 1.5x the hunter's fleet, and a fresh spy report that shows the garrison must
+  pass the usual fight simulation; one joined revenge at a time, over after 2 hours (server time) or after the hunter has raided the raider
+  (`revenge_done`). Joining only changes whom the hunter prefers; spy report, fight simulation and risk rules still decide whether it attacks.
+- **Bounty.** A victim robbed for at least 5,000, which is 15% or more of what it had, and with a stock worth 30,000 or more, posts a BOUNTY (once at a time,
+  6 hours): data `target_player_id`, `target_at`, `reward` ({resource: amount}), `expires` (wall clock), `poster_id`, `poster_at`. The reward is about
+  half the loot and **at most 10% of its stock** (of that resource and of the stock's value). There is **no escrow**: the poster pays only after the referee has confirmed a claim.
+  Hunters add the reward's value (the 3:2:1 reference prices) to the target's score when choosing whom to attack, and when they win loot from the
+  target they post a CLAIM (`bounty_id`, battle report id, coordinates, time, `claimant_id`, `claimant_at`).
+- **Referee.** For every CLAIM it posts a VERDICT (`bounty_id`, `claim_id`, `ok`, `why`, `claimant`, `claimant_id`, `claimant_at`). It says OK when the
+  claimant's own log shows an `attack` and a winning `battle` (as attacker, with loot) on the bounty's target, both after the bounty was posted and the
+  battle before it expired; when the claimant is not the poster; and when it is the first valid claim on that bounty. **A verdict is only as honest as the
+  logs**: the referee believes the `attack` / `battle` lines the agents write (`their_id` and `report` were added to the `battle` line for this). The
+  referee is ours: a separate program that only reads files and the board, so an agent cannot lie to it by posting something, and agents believe
+  only VERDICT posts from the board name `referee`; but anybody who can edit a log file or post as `referee` on the board (it is local and has no passwords)
+  can cheat. Fine for your own computer.
+- **Payment.** On an OK verdict the poster sends the reward by `transport` (the logistics code) to the claimant's main planet, after checking in the
+  highscore that the claimant is one of our agents at those coordinates. One payment, at most the promised reward, at most 20% of its current stock of
+  that resource; it waits while under attack and for a free fleet slot, may order a few small cargo ships if it has none, and gives up after 2 hours
+  (`bounty_unpaid`, side poster). A claimant that is not paid within 3 hours of the OK verdict logs `bounty_unpaid` (side claimant) and puts the poster in its
+  reputation as a cheat: shunned for 24 hours (doubling for repeat offenders), its bounties and trade offers ignored.
+
+Log events: `revenge_join`, `revenge_done`, `bounty_post`, `bounty_claim`, `bounty_verdict`, `bounty_paid` (side poster / claimant), `bounty_unpaid`. See BOUNTIES AND
+REVENGE in the report. The Board tab and the newspaper of the observatory show BOUNTY, CLAIM, VERDICT and joined revenges in their own colours, and the
+newspaper has a "Wanted" section with every bounty and what became of it (open, claimed, confirmed, paid, unpaid, expired). Without `--board` nothing here
+does anything.
+
 ## Not built yet
 
-The scrap merchant, alliances (the board has an ALLIANCE kind but no agent uses it yet), bounties, moons (sensor phalanx, jump gate), defending colonies, retaliation, and LLM-driven
+The scrap merchant, alliances (the board has an ALLIANCE kind but no agent uses it yet), moons (sensor phalanx, jump gate), defending colonies, other retaliation than the revenge join, and LLM-driven
 decisions. The brain is rule-based; the personas are the knobs; learning so far is the risk lesson, opponent memory and the
 fight margin bandit above.
 

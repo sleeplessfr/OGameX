@@ -337,6 +337,48 @@ def summarize(events: list[dict], personas: dict[str, str] | None = None) -> str
         out.append("  none (no board in use: start board.py and run_swarm.py --board URL)")
     out.append("")
 
+    out.append("BOUNTIES AND REVENGE (revenge joins; bounties posted, claimed, confirmed by the referee, paid or not)")
+    joins = [e for e in events if e["event"] == "revenge_join"]
+    dones = [e for e in events if e["event"] == "revenge_done"]
+    bposts = [e for e in events if e["event"] == "bounty_post"]
+    bclaims = [e for e in events if e["event"] == "bounty_claim"]
+    bverdicts = [e for e in events if e["event"] == "bounty_verdict"]
+    bpaid = [e for e in events if e["event"] == "bounty_paid"]
+    bunpaid = [e for e in events if e["event"] == "bounty_unpaid"]
+    if joins or dones or bposts or bclaims or bverdicts or bpaid or bunpaid:
+        by_join = Counter(e["agent"] for e in joins)
+        out.append(f"  revenge: {len(joins)} joins ({', '.join(f'{a} {n}' for a, n in by_join.most_common()) or 'none'}), "
+                   f"{len(dones)} ended by a raid on the named raider")
+        for e in joins[-5:]:
+            out.append(f"    {clock(e['t'])} {e['agent']} joined {e.get('victim')}'s call against {e.get('raider_at')} (player {e.get('raider_id')})")
+        reward_total = sum(int(e.get("value") or 0) for e in bposts)
+        mine_ok = [e for e in bverdicts if e.get("role") == "claimant" and e.get("ok")]
+        mine_no = [e for e in bverdicts if e.get("role") == "claimant" and not e.get("ok")]
+        pay_out = [e for e in bpaid if e.get("side") == "poster"]
+        pay_in = [e for e in bpaid if e.get("side") == "claimant"]
+        late_claimant = [e for e in bunpaid if e.get("side") == "claimant"]
+        late_poster = [e for e in bunpaid if e.get("side") == "poster"]
+        out.append(f"  bounties: {len(bposts)} posted (rewards worth {reward_total:,}), {len(bclaims)} claims, {len(mine_ok)} confirmed, "
+                   f"{len(mine_no)} rejected, {len(pay_out)} paid by the poster (worth {sum(int(e.get('value') or 0) for e in pay_out):,}), "
+                   f"{len(pay_in)} received, {len(late_claimant)} never paid, {len(late_poster)} the poster gave up on")
+        for e in bposts[-6:]:
+            key = str(e.get("bounty"))
+            claim = next((c for c in bclaims if str(c.get("bounty")) == key), None)
+            verdict = next((v for v in bverdicts if str(v.get("bounty")) == key and v.get("role") == "claimant"), None)
+            paid = any(str(p.get("bounty")) == key for p in bpaid)
+            unpaid = any(str(p.get("bounty")) == key for p in bunpaid)
+            state = ("paid" if paid else "NOT PAID" if unpaid else
+                     "confirmed, payment due" if verdict and verdict.get("ok") else "claim rejected" if verdict else
+                     f"claimed by {claim['agent']}, no verdict yet" if claim else "open")
+            out.append(f"    {clock(e['t'])} {e['agent']} wants {e.get('target')} (player {e.get('target_id')}) for {_fmt_res(e.get('reward'))}: {state}")
+        for e in mine_no[-3:]:
+            out.append(f"    {clock(e['t'])} {e['agent']}'s claim on bounty {e.get('bounty')} was rejected: {e.get('why')}")
+        for e in late_claimant[-3:]:
+            out.append(f"    {clock(e['t'])} {e['agent']} was never paid by {e.get('poster')} (bounty {e.get('bounty')}); shunned")
+    else:
+        out.append("  none (needs the board and the referee: start board.py, referee.py and run_swarm.py --board URL)")
+    out.append("")
+
     out.append("FULL PLANETS (no free building fields)")
     full = Counter(e["agent"] for e in events if e["event"] == "wait" and "no free fields" in str(e.get("why", "")))
     heading = Counter(e["agent"] for e in events if e["event"] == "wait" and "free fields left" in str(e.get("why", "")))
@@ -368,6 +410,12 @@ def summarize(events: list[dict], personas: dict[str, str] | None = None) -> str
     if not others:
         out.append("  none")
     return "\n".join(out) + "\n"
+
+
+def _fmt_res(d) -> str:
+    if not isinstance(d, dict):
+        return "?"
+    return ", ".join(f"{int(v or 0):,} {r}" for r, v in d.items()) or "nothing"
 
 
 def personas_from_state(path: Path) -> dict[str, str]:
