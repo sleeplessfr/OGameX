@@ -9,14 +9,17 @@ import time
 from pathlib import Path
 
 from .brain import choose_building, choose_research, fields_left, pay
-from . import colonise
+from . import colonise, expedition, recycle
 from .combat import tech_from_research
+import random as _random
+from .bandit import outcome_of
 from .military import (Memory, choose_strike, judge_trade, summarize_battle, choose_units, coord_of, pick_attack, pick_target, summarize_report)
 from .client import ApiClient, ApiError
 from .opponents import record_result, record_spy, summary as opp_summary
 from .personas import Persona
 from .defense import AGGRESSOR_MEMORY, GUARD_SECONDS, PEACE_WATCH_SECONDS, RECENT_RAID, ALERT_SECONDS, COOLDOWN_SECONDS as DEFEND_COOLDOWN, WATCH_SECONDS, choose_defense, defence_share, find_threats
 from .trade import COOLDOWN_SECONDS, choose_sale, plan_deal
+from .logistics_agent import LogisticsMixin
 
 
 # When an agent is stuck with nothing to do and no idea how long it will take, look again after this long.
@@ -48,7 +51,7 @@ class TokenStore:
             tmp.replace(self.path)
 
 
-class Agent:
+class Agent(LogisticsMixin):
     def __init__(
         self, name: str, persona: Persona, base_url: str, store: TokenStore, rng: random.Random,
         *, log_dir: str | None = None, email_domain: str = "example.com", client: ApiClient | None = None,
@@ -169,6 +172,7 @@ class Agent:
             hints.append(GUARD_SECONDS)   # robbed recently: the raider will come back
         else:
             hints.append(PEACE_WATCH_SECONDS)
+        hints += self._save_fleet(status, planets, threats)   # logistics: dodge a raid we cannot win, bring the fleet home later
 
         for planet in planets:
             have = dict(planet["resources"])
@@ -179,7 +183,10 @@ class Agent:
             if planet is home:
                 hints += self._plan_research(planet, have, research_queue, goals=goal_research)
                 hints += self._plan_military(status, planet, have, self._economy_saving)
+                hints += self._plan_recycle(status, planet, have)
+                hints += self._plan_expedition(status, planet)
                 hints += self._plan_colony(status, planet, have, goal_research)
+        hints += self._plan_supply(status, planets)   # logistics: feed a starved colony from the richest planet
 
         return self._sleep_time(hints)
 
@@ -355,6 +362,55 @@ class Agent:
             hints += self._build_units(home, units, have, ships_here)
         return hints
 
+    # ---- expeditions ---------------------------------------------------------------------------------
+    def _plan_expedition(self, status: dict, home: dict) -> list[float]:
+        """Read the reports of finished expeditions, then maybe send a new one (rules and odds in swarm/expedition.py)."""
+        if not expedition.wants_expeditions(self.persona):
+            return []
+        st = self.memory.expedition
+        if st["inflight"] and self.now - st["last_read"] >= 120:
+            st["last_read"] = self.now
+            self._read_expeditions()
+        astro = int((status["research"].get("levels") or {}).get("astrophysics", 0))
+        if expedition.can_consider(self.persona, now=self.now, state=st, astro=astro, fleet_slots=status["fleet_slots"],
+                                   on_guard=self._on_guard(), alert=self.now < self.alert_until):
+            return []
+        units = self.client.get(f"/planets/{home['id']}/units")["units"]
+        ships_here = {u["machine_name"]: u["amount"] for u in units if u["amount"] > 0 and u["category"] != "defense"}
+        if not self.ship_stats:
+            self.ship_stats = {s["machine_name"]: s for s in self.client.get("/ships")["ships"]}
+        cargo_of = {n: int(s.get("cargo_capacity") or 0) for n, s in self.ship_stats.items()}
+        try:
+            top = max([int(r.get("score") or 0) for r in self._get_players(self.now)[0]] or [0])
+        except ApiError:
+            top = 0
+        d = expedition.decide(self.persona, self.rng, ships_here=ships_here, cargo_of=cargo_of, top_score=top, state=st)
+        if not d.ships:
+            st["next_at"] = self.now + d.retry_in
+            return []
+        c = home["coordinates"]
+        try:
+            result = self.client.post(f"/planets/{home['id']}/fleet", {
+                "mission": "expedition", "galaxy": c["galaxy"], "system": c["system"], "position": 16,
+                "ships": d.ships, "holding_hours": d.holding_hours})
+        except ApiError as e:
+            self.stats["refused"] += 1
+            st["next_at"] = self.now + expedition.RETRY_SECONDS
+            self.log("expedition_refused", code=e.code, msg=e.message[:120])
+            return []
+        cost_of = {u["machine_name"]: sum((u.get("cost_per_unit") or {}).get(r, 0) for r in ("metal", "crystal", "deuterium")) for u in units}
+        expedition.record_sent(st, self.now, d.ships, expedition.fleet_value(d.ships, cost_of), d.retry_in)
+        self.log("expedition_sent", at=f"{c['galaxy']}:{c['system']}:16", ships=d.ships, hours=d.holding_hours, why=d.why,
+                 seconds=result["mission"]["seconds_remaining"])
+        return []
+
+    def _read_expeditions(self) -> None:
+        data = self.client.get("/messages?category=expeditions&unread_only=1&per_page=20")
+        for row in reversed(data["messages"]):   # oldest first
+            self.client.post(f"/messages/{row['id']}/read")
+            res = expedition.parse_message(row.get("key", ""), row.get("body", ""))
+            self.log("expedition_result", **expedition.record_result(self.memory.expedition, self.now, res))
+
     # ---- character class -----------------------------------------------------------------------------
     def _choose_class(self) -> None:
         """Once per agent: take the free first choice of character class that suits the personality."""
@@ -375,6 +431,14 @@ class Agent:
     # ---- colonies ------------------------------------------------------------------------------------
     def _colony_goals(self, status: dict, home: dict) -> tuple[dict | None, dict | None]:
         """Decide whether to found a colony and, if so, which levels the home planet must reach first."""
+        m = self.memory
+        b2, r2 = recycle.goals(self.persona, m.debris, self.now, status["research"].get("levels") or {})
+        b1, r1 = self._colony_goals_only(status, home)
+        if b1 is None and not (b2 or r2):
+            return None, None
+        return {**(b2 or {}), **(b1 or {})}, {**(r2 or {}), **(r1 or {})}
+
+    def _colony_goals_only(self, status: dict, home: dict) -> tuple[dict | None, dict | None]:
         m = self.memory
         if m.colony_sent_at or self.persona.expansion <= 0:
             return None, None
@@ -528,6 +592,8 @@ class Agent:
             self.memory.intel[c] = {"at": now, "loot": intel.loot, "defenders": intel.defenders, "owner_id": intel.owner_id,
                                     "ships": intel.ships, "defense": intel.defense, "research": intel.research}
             self.memory.pending.pop(c, None)
+            if "debris" in report:
+                recycle.remember(self.memory.debris, c, recycle.total_of(report["debris"]), now, add=False)
             record_spy(self.memory.opponents, c, now, intel.loot, intel.ships, intel.defense)
             if intel.loot < self.persona.min_loot:  # not worth a visit: do not spy on it again for a while
                 self.memory.avoid_until[c] = now + 4 * self.persona.spy_cooldown_s
@@ -555,9 +621,16 @@ class Agent:
                 continue
             self.stats["battles"] += 1
             verdict = judge_trade(b) if b["role"] == "attacker" else None
-            self.log("battle", at=b["at"], role=b["role"], my_loss=b["my_loss"], their_loss=b["their_loss"],
+            margin = outcome = None
+            if b["role"] == "attacker" and b["coord"] and None not in b["coord"]:
+                margin = self.memory.arm_for.pop(tuple(b["coord"]), None)
+                if margin is not None:
+                    outcome = outcome_of(verdict, b["loot"] + b["their_loss"], b["my_loss"])
+                    self.memory.bandit.update(margin, outcome)
+            self.log("battle", at=b["at"], role=b["role"], margin=margin, outcome=outcome, my_loss=b["my_loss"], their_loss=b["their_loss"],
                      loot=b["loot"], debris=b["debris"], rounds=b["rounds"], verdict=verdict,
                      mine=b["my_units"], theirs=b["their_units"])
+            recycle.remember(self.memory.debris, b["coord"], b["debris"], now, add=True)   # a new debris field to harvest
             if b["role"] != "attacker":
                 continue
             self.memory.battles = (self.memory.battles + [{"at": now, **{k: b[k] for k in ("at", "my_loss", "their_loss", "loot")}, "verdict": verdict}])[-30:]
@@ -581,8 +654,10 @@ class Agent:
         coord, intel, reason = pick
         if not self.ship_stats:
             self.ship_stats = {s["machine_name"]: s for s in self.client.get("/ships")["ships"]}
+        # How much to over-estimate the defenders is learned (bandit.py); its own random stream keeps the agent's other choices unchanged.
+        margin = self.memory.bandit.choose(_random.Random(f"{self.name}:{self.memory.bandit.pulls}"))
         strike, go, sim_reason, kind = choose_strike(self.persona, self.rng, ships_here, self.ship_stats, intel,
-                                                     self.my_tech, self.memory.risk_scale)
+                                                     self.my_tech, self.memory.risk_scale, margin)
         where = f"{coord[0]}:{coord[1]}:{coord[2]}"
         if strike is None:
             return False
@@ -609,9 +684,10 @@ class Agent:
             self.log("attack_refused", at=f"{coord[0]}:{coord[1]}:{coord[2]}", code=e.code, msg=e.message[:120])
             return False
         self.memory.attacked[coord] = now
+        self.memory.arm_for[coord] = margin
         self.memory.intel.pop(coord, None)
         self.stats["attacks"] += 1
-        self.log("attack", at=f"{coord[0]}:{coord[1]}:{coord[2]}", why=reason, ships=strike,
+        self.log("attack", at=f"{coord[0]}:{coord[1]}:{coord[2]}", margin=margin, why=reason, ships=strike,
                  seconds=result["mission"]["seconds_remaining"], saw_ships=intel.ships, saw_defense=intel.defense,
                  saw_research=intel.research)
         return True
@@ -633,6 +709,80 @@ class Agent:
         self.stats["units"] += amount
         self.log("units", what=name, amount=amount)
         return []
+
+    # ---- recycling -----------------------------------------------------------------------------------
+    _recycle_at = 0.0   # server time before which the recycling code does not look again (it costs requests)
+
+    def _plan_recycle(self, status: dict, home: dict, have: dict) -> list[float]:
+        """Debris remembered from battle and spy reports (swarm/recycle.py): buy recyclers when it is big enough, send them."""
+        m = self.memory
+        recycle.forget_old(m.debris, self.now)
+        if not m.debris or self.now < self._recycle_at:
+            return []
+        self._recycle_at = self.now + 60.0
+        units = self.client.get(f"/planets/{home['id']}/units")["units"]
+        item = next((u for u in units if u["machine_name"] == recycle.RECYCLER), None)
+        if item is None:       # a game without recyclers
+            return []
+        if not self.ship_stats:
+            self.ship_stats = {s["machine_name"]: s for s in self.client.get("/ships")["ships"]}
+        cargo = int(self.ship_stats.get(recycle.RECYCLER, {}).get("cargo_capacity") or recycle.DEFAULT_CARGO)
+        owned = int(item.get("amount", 0))
+        c = home["coordinates"]
+        slots = status["fleet_slots"]
+        pick = recycle.pick_field(m.debris, self.now, coord_of(c["galaxy"], c["system"], c["position"]))
+        if owned >= 1 and pick and slots["used"] < slots["max"]:
+            return self._send_recyclers(home, have, pick[0], pick[1], recycle.fleet_for(pick[1], owned, cargo), cargo)
+        if home["unit_queue"]:
+            return []
+        n, why = recycle.recyclers_to_buy(self.persona, item, have, recycle.remembered_total(m.debris, self.now), owned, cargo)
+        if n < 1:
+            return []
+        try:
+            self.client.post(f"/planets/{home['id']}/units", {"machine_name": recycle.RECYCLER, "amount": n})
+        except ApiError as e:
+            self.stats["refused"] += 1
+            self.log("units_refused", what=recycle.RECYCLER, code=e.code, msg=e.message[:100])
+            return [60.0]
+        for r in ("metal", "crystal", "deuterium"):
+            have[r] = have.get(r, 0) - item["cost_per_unit"].get(r, 0) * n
+        self.stats["units"] += n
+        self.log("units", what=recycle.RECYCLER, amount=n, why=why)
+        return []
+
+    def _send_recyclers(self, home: dict, have: dict, coord: tuple, amount: int, n: int, cargo: int) -> list[float]:
+        m, where = self.memory, f"{coord[0]}:{coord[1]}:{coord[2]}"
+        body = {"mission": "recycle", "galaxy": coord[0], "system": coord[1], "position": coord[2], "type": "debris_field",
+                "ships": {recycle.RECYCLER: n}}
+
+        def skip(why: str, **extra) -> list[float]:
+            m.debris[coord]["sent_until"] = self.now + 1800     # do not ask again every round
+            self.log("recycle_skipped", at=where, debris=amount, why=why, **extra)
+            return []
+        try:
+            check = self.client.post(f"/planets/{home['id']}/fleet/check", body)
+        except ApiError as e:
+            return skip(e.message[:120], code=e.code)
+        possible = (check.get("missions") or {}).get("recycle") or {}
+        if not possible.get("possible", True):
+            m.debris.pop(coord, None)       # the game says no such field (any more)
+            self.log("recycle_skipped", at=where, debris=amount, why=str(possible.get("reason"))[:120])
+            return []
+        haul = min(amount, int(check.get("cargo_capacity") or n * cargo))
+        fuel = int(check.get("deuterium_consumption") or 0)
+        ok, why = recycle.worth_trip(haul, fuel, int(have.get("deuterium", 0)))
+        if not ok:
+            return skip(why)
+        try:
+            result = self.client.post(f"/planets/{home['id']}/fleet", body)
+        except ApiError as e:
+            self.stats["refused"] += 1
+            return skip(e.message[:120], code=e.code)
+        seconds = int(result["mission"]["seconds_remaining"])
+        recycle.after_sending(m.debris, coord, haul, self.now, 2.0 * seconds)
+        have["deuterium"] = have.get("deuterium", 0) - fuel
+        self.log("recycle_sent", at=where, ships=n, debris=amount, haul=haul, fuel=fuel, seconds=seconds, why=why)
+        return [2.0 * seconds + 5]
 
     def _remember_lab(self, planet: dict, buildings: list[dict]) -> None:
         lab = next((b for b in buildings if b["machine_name"] == "research_lab"), None)

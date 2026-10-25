@@ -15,6 +15,8 @@ python run_swarm.py --count 5
 - `--personas miner,raider` limit / reorder the personalities (default: all, in rotation).
   Available: `miner`, `scientist`, `turtle`, `raider`, `balanced`. Every agent's weights are randomly nudged,
   so two "miners" are never identical. Same `--seed` = same personalities.
+- `--max-rate 12` most requests per second all agents together send (default 4). Raise it with more agents, together with
+  `OGAMEX_API_RATE_LIMIT` in the game's `.env` (default 300 per minute per account).
 - `--first 6 --count 5` add five more agents later (agent0006 .. agent0010) without touching the old ones.
 - Accounts are remembered in `agents_state.json` (email, password, token). Delete the file to start with new
   accounts. **Keep it private.**
@@ -105,6 +107,61 @@ left it heads for the terraformer (energy technology 12, a nanite factory, then 
 5 fields per level); with 3 or fewer it stops upgrading minor buildings (stores, shipyard, research lab). On a full
 planet it builds nothing, does not count that as "saving", and keeps buying ships and defence.
 
+## Character classes
+
+Each agent takes the free first choice of a character class once, by personality: miner and turtle are Collectors, raider
+and balanced are Generals (+2 fleet slots, faster fleets), scientist is a Discoverer (research 25% faster, bigger
+colonies). It never pays to change. Needs `GET/POST /character-class` in the game; an older game without it is simply
+skipped. Log events: `class`, `class_refused`. Rules are in `_choose_class` (`swarm/agent.py`) and `Persona.character_class`.
+
+## Colonies
+
+When the home planet has 70 or fewer free fields, a personality with an appetite for expansion (`Persona.expansion`; it also
+sets how many planets it is content with: 1 + round(4 x expansion)) sets itself a goal: research lab 3, shipyard 4, impulse
+drive 3, espionage technology 4 and enough astrophysics, then it builds one colony ship, scans the home system and 6 systems
+either side for free positions, picks the one with the best mix of fields and production bonus for that position, and sends
+the ship. The new planet is then built up like any other. Colonies are not defended yet. Log events: `expand`,
+`colony_sent`, `colony_founded`, `colony_failed`. Rules are in `swarm/colonise.py`; `expand_planner.py` prints the same
+tables for a human (terraformer versus colony versus moon).
+
+## Logistics (agents with 2+ planets)
+
+Rules are in `swarm/logistics.py` (pure) and `swarm/logistics_agent.py` (the calls, mixed into `Agent`).
+
+- **Supply** (`_plan_supply`): the richest planet sends half the gap per resource to a colony whose stock is worth under 40% of it
+  (mission `transport`, the cargo ships fly home alone). The source keeps at least 30%, the colony's storage is respected, the
+  cargo is capped by the real capacity from `/ships`, and the trip is skipped when the deuterium (from `/planets/{id}/fleet/check`)
+  costs over 5% of the cargo. It only uses cargo ships the agent already has; only a miner or turtle with none may order up to 5
+  small cargos (at most 10% of its stock). One trip per 15 minutes. Events: `supply_sent`, `supply_skipped`.
+- **Fleet saving** (`_save_fleet`): when `GET /fleet` shows an attack on a planet that holds ships worth 8,000+ and the simulated
+  fight cannot be held (attacker strength comes from opponent memory x1.5; unknown attacker = run), the ships and as many
+  resources as fit leave on a `deployment` to the safest other own planet (farthest from the attacker, not itself under attack).
+  A deployment has no return trip, so the fleet is remembered (`Memory.away`, saved to disk) and sent back once the raid
+  has landed (+90 s). Events: `fleet_saved`, `fleet_stays`, `fleet_save_failed`, `fleet_returned`. Not done: a single-planet agent
+  has nowhere to send its fleet. Report section: LOGISTICS.
+
+## Learning
+
+- **Memory per agent** (`memory/<name>.json`): risk scale, avoid list, aggressors, merchant cooldown, colony goal.
+- **Opponent memory** (`swarm/opponents.py`): per target, its last strength and the results of our attacks; the raider ranks
+  targets by loot times a track-record factor (0.25 to 1.5, losses count double, old news fades after 12 hours).
+- **Fight margin bandit** (`swarm/bandit.py`): the attack check can assume the defender is 1.2, 1.5, 2 or 3 times stronger
+  than the spy report says. Each attack tries one of these (Thompson sampling), and the battle report tells whether it paid
+  off, so each raider slowly learns the margin that suits it. Report section: LEARNED FIGHT MARGIN.
+
+## Expeditions
+
+An agent sends a small cargo fleet to position 16 of its home system (`swarm/expedition.py`). Discoverers (the scientist) go whenever
+a slot is free; the other personalities have an `expedition_interest` (0.05 to 0.25) and only go once astrophysics is 3 and then rarely
+(6 h pause). Rules taken from the game's `ExpeditionMission.php`: it needs astrophysics 1, a free expedition slot
+(`/status` `fleet_slots.expedition_used/max`: floor(sqrt(astrophysics)), +2 for a Discoverer) and a normal fleet slot; there is no
+fleet-size limit and the holding time does not change the odds, so agents hold 1 hour. Finds are capped by cargo capacity, so the fleet is
+mostly cargo ships (pathfinders first for a Discoverer) plus a few fighters as escort, never more than 40-60% of the ships at home. About
+1 in 3 expeditions finds resources, 1 in 6 ships, 1 in 13 dark matter, 1 in 500 loses the fleet. It stays home while it is on guard or an
+attack is on its way. Reports (`/messages?category=expeditions`) are parsed into counts saved in the agent's memory (`expedition`: outcomes,
+resources, dark matter, ships found and lost); a lost fleet shrinks the next fleet and pauses for 6 hours, good trips grow it again.
+Log events: `expedition_sent`, `expedition_result`, `expedition_refused`. Report section: EXPEDITIONS.
+
 ## The merchant
 
 A merchant call costs 3,500 dark matter (accounts start with 8,000), shows random rates and trades once. So an agent
@@ -116,10 +173,21 @@ owns a spare resource that can pay for the whole shortfall even at the worst rat
 The attack check assumes the defender has 1.5 times the units the spy report showed, sends the smallest fleet that is sure
 enough to win, and never risks fighters worth more than 4 times the loot.
 
+## Recycling debris
+
+Fights leave metal and crystal floating at the target's coordinates. The API does not show debris fields in the galaxy view,
+so agents learn about them from reports they read anyway: `debris` in their own battle reports (as attacker or defender) and in
+spy reports. Fields are remembered in `memory/<name>.json` for 24 hours. Fighting personalities (raider, balanced, general class)
+buy recyclers once 15,000 debris is remembered; peaceful ones only for 60,000 or more (needs shipyard 4, combustion drive 6,
+shielding 2; the agent just waits until the game allows it). It dry-runs the trip (`/fleet/check`), goes only if the haul is
+worth at least twice the fuel, sends `recycle` to the `debris_field`, and the ships unload the haul when they come home.
+Log events: `recycle_sent`, `recycle_skipped`, `units` (what=recycler); see RECYCLING in the report. Rules: `swarm/recycle.py`.
+
 ## Not built yet
 
-Colonising, expeditions, the scrap merchant, alliances, recycling debris, fleet-saving, retaliation, and LLM-driven
-decisions. The brain is rule-based; the personas are the knobs; the only learning so far is the risk lesson above.
+The scrap merchant, alliances, moons (sensor phalanx, jump gate), defending colonies, retaliation, and LLM-driven
+decisions. The brain is rule-based; the personas are the knobs; learning so far is the risk lesson, opponent memory and the
+fight margin bandit above.
 
 ## Tests
 

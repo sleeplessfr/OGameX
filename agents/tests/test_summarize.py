@@ -55,6 +55,24 @@ class SummarizeTests(unittest.TestCase):
         self.assertEqual(len(sl.read_events(d, since=80)), 1)          # --hours filter
         self.assertEqual(sl.personas_from_state(d / "missing.json"), {})
 
+class RecyclingReportTests(unittest.TestCase):
+    def test_report_counts_trips_haul_and_skips(self):
+        t = 1_700_000_000
+        events = [
+            ev(t, "a1", "units", what="recycler", amount=3, why="60,000 debris remembered"),
+            ev(t + 1, "a1", "recycle_sent", at="1:1:5", ships=3, debris=60000, haul=40000, fuel=120, seconds=60),
+            ev(t + 2, "a1", "recycle_sent", at="1:2:5", ships=1, debris=20000, haul=20000, fuel=30, seconds=60),
+            ev(t + 3, "a1", "recycle_skipped", at="1:9:5", debris=5000, why="haul 5,000 not worth 900 deuterium"),
+        ]
+        text = sl.summarize(events)
+        self.assertIn("a1: 2 trips, about 60,000 metal+crystal expected, 150 deuterium burned, 3 recyclers built, 1 skipped", text)
+        self.assertIn("skipped 1:9:5: haul 5,000 not worth 900 deuterium", text)
+
+    def test_report_without_recycling_says_none(self):
+        text = sl.summarize([ev(1000.0, "a1", "build", what="metal_mine")])
+        self.assertIn("RECYCLING", text)
+        self.assertRegex(text, r"RECYCLING[^\n]*\n  none")
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -78,3 +96,30 @@ class ClassAndColonyReportTests(unittest.TestCase):
     def test_report_without_them_says_none(self):
         text = sl.summarize([{"t": 1000.0, "agent": "agent0001", "event": "build", "what": "metal_mine"}])
         self.assertIn("none in this period", text)
+
+
+class ExpeditionReportTests(unittest.TestCase):
+    def test_report_counts_outcomes_resources_and_losses(self):
+        events = [
+            {"t": 1000.0, "agent": "agent0001", "event": "expedition_sent", "ships": {"small_cargo": 4}},
+            {"t": 1100.0, "agent": "agent0001", "event": "expedition_result", "outcome": "resources", "metal": 12000},
+            {"t": 1200.0, "agent": "agent0001", "event": "expedition_sent", "ships": {"small_cargo": 4}},
+            {"t": 1300.0, "agent": "agent0001", "event": "expedition_result", "outcome": "ships", "ships": {"small_cargo": 3}},
+            {"t": 1400.0, "agent": "agent0001", "event": "expedition_sent", "ships": {"small_cargo": 4}},
+            {"t": 1500.0, "agent": "agent0001", "event": "expedition_result", "outcome": "loss", "lost": {"small_cargo": 4}, "lost_value": 4000},
+            {"t": 1600.0, "agent": "agent0001", "event": "expedition_result", "outcome": "dark_matter", "dark_matter": 150},
+            {"t": 1700.0, "agent": "agent0001", "event": "expedition_refused", "code": "mission_rejected"},
+        ]
+        text = sl.summarize(events)
+        self.assertIn("EXPEDITIONS", text)
+        self.assertIn("agent0001: 3 sent, 4 reports, 1 refused: resources 1, ships 1, loss 1, dark_matter 1", text)
+        self.assertIn("found metal 12,000", text)
+        self.assertIn("dark matter 150", text)
+        self.assertIn("ships lost worth 4,000", text)
+        self.assertIn("net resources +8,000", text)
+        self.assertIn("ships found: 3 small_cargo", text)
+        self.assertIn("ships lost: 4 small_cargo", text)
+
+    def test_no_expeditions_says_none(self):
+        text = sl.summarize([{"t": 1000.0, "agent": "a", "event": "build", "what": "metal_mine"}])
+        self.assertIn("EXPEDITIONS", text)

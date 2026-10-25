@@ -177,6 +177,22 @@ def summarize(events: list[dict], personas: dict[str, str] | None = None) -> str
         out.append("  none yet")
     out.append("")
 
+    out.append("LEARNED FIGHT MARGIN (how many times the spy report's defenders the raider assumed, and how it went)")
+    margin_rows: dict = defaultdict(lambda: defaultdict(Counter))
+    for e in events:
+        if e["event"] == "battle" and e.get("margin") is not None and e.get("outcome"):
+            margin_rows[e["agent"]][e["margin"]][e["outcome"]] += 1
+    if margin_rows:
+        for agent in sorted(margin_rows):
+            parts = []
+            for m in sorted(margin_rows[agent]):
+                c = margin_rows[agent][m]
+                parts.append(f"x{m:g}: {sum(c.values())} attacks, {c['win']} profit, {c['bad']} bad")
+            out.append(f"  {agent}: " + "; ".join(parts))
+    else:
+        out.append("  none yet")
+    out.append("")
+
     out.append("CHARACTER CLASSES (chosen once by each agent)")
     classes = {e["agent"]: e.get("chosen") for e in events if e["event"] == "class"}
     refused = [e for e in events if e["event"] == "class_refused"]
@@ -196,6 +212,86 @@ def summarize(events: list[dict], personas: dict[str, str] | None = None) -> str
             detail = e.get("why") or e.get("at") or ""
             extra = f" at {e['at']}" if e.get("at") and e.get("why") else ""
             out.append(f"  {clock(e['t'])} {e['agent']} {e['event']}: {detail}{extra}")
+    else:
+        out.append("  none")
+    out.append("")
+
+    out.append("RECYCLING (recycle_sent = recyclers sent to a debris field, recycle_skipped = not worth it or no such field)")
+    sent = [e for e in events if e["event"] == "recycle_sent"]
+    skipped_r = [e for e in events if e["event"] == "recycle_skipped"]
+    bought = [e for e in events if e["event"] == "units" and e.get("what") == "recycler"]
+    if sent or skipped_r or bought:
+        for agent in sorted({e["agent"] for e in sent + skipped_r + bought}):
+            mine = [e for e in sent if e["agent"] == agent]
+            haul = sum(int(e.get("haul") or 0) for e in mine)
+            fuel = sum(int(e.get("fuel") or 0) for e in mine)
+            n_bought = sum(int(e.get("amount") or 0) for e in bought if e["agent"] == agent)
+            n_skipped = sum(1 for e in skipped_r if e["agent"] == agent)
+            out.append(f"  {agent}: {len(mine)} trips, about {haul:,} metal+crystal expected, {fuel:,} deuterium burned, "
+                       f"{n_bought} recyclers built, {n_skipped} skipped")
+        for e in skipped_r[-3:]:
+            out.append(f"  {clock(e['t'])} {e['agent']} skipped {e.get('at')}: {e.get('why')}")
+    else:
+        out.append("  none")
+    out.append("")
+
+    out.append("EXPEDITIONS (sent, what came back, net resources and dark matter found, ships found and lost)")
+    exp_events = [e for e in events if e["event"] in ("expedition_sent", "expedition_result", "expedition_refused")]
+    if exp_events:
+        for a in sorted({e["agent"] for e in exp_events}):
+            mine = [e for e in exp_events if e["agent"] == a]
+            results = [e for e in mine if e["event"] == "expedition_result"]
+            outcomes = Counter(e.get("outcome", "other") for e in results)
+            found = {r: sum(int(e.get(r) or 0) for e in results) for r in ("metal", "crystal", "deuterium", "dark_matter")}
+            ships_found: Counter = Counter()
+            ships_lost: Counter = Counter()
+            for e in results:
+                ships_found.update({k: int(v) for k, v in (e.get("ships") or {}).items()})
+                ships_lost.update({k: int(v) for k, v in (e.get("lost") or {}).items()})
+            lost_value = sum(int(e.get("lost_value") or 0) for e in results)
+            gained = found["metal"] + found["crystal"] + found["deuterium"]
+            sent = sum(1 for e in mine if e["event"] == "expedition_sent")
+            refused = sum(1 for e in mine if e["event"] == "expedition_refused")
+            out.append(f"  {a}: {sent} sent, {len(results)} reports"
+                       + (f", {refused} refused" if refused else "")
+                       + (": " + ", ".join(f"{k} {v}" for k, v in outcomes.most_common()) if outcomes else ""))
+            out.append(f"    found metal {found['metal']:,}, crystal {found['crystal']:,}, deuterium {found['deuterium']:,}, "
+                       f"dark matter {found['dark_matter']:,}; ships lost worth {lost_value:,}; net resources {gained - lost_value:+,}")
+            if ships_found:
+                out.append("    ships found: " + ", ".join(f"{n} {k}" for k, n in sorted(ships_found.items())))
+            if ships_lost:
+                out.append("    ships lost: " + ", ".join(f"{n} {k}" for k, n in sorted(ships_lost.items())))
+    else:
+        out.append("  none")
+    out.append("")
+
+    out.append("LOGISTICS (supply = resources sent between own planets, saved = fleet dodged a raid it could not win)")
+    sent = [e for e in events if e["event"] == "supply_sent"]
+    skips = [e for e in events if e["event"] == "supply_skipped"]
+    saved = [e for e in events if e["event"] == "fleet_saved"]
+    back = [e for e in events if e["event"] == "fleet_returned"]
+    stays = [e for e in events if e["event"] == "fleet_stays"]
+    failed = [e for e in events if e["event"] == "fleet_save_failed"]
+    if sent or skips or saved or back or stays or failed:
+        moved: Counter = Counter()
+        for e in sent:
+            for r, v in (e.get("resources") or {}).items():
+                moved[r] += int(v or 0)
+        fuel = sum(int(e.get("fuel") or 0) for e in sent)
+        out.append(f"  {len(sent)} supply trips sent ({sum(int(e.get('value') or 0) for e in sent):,} worth: "
+                   f"{', '.join(f'{r} {v:,}' for r, v in moved.items()) or 'nothing'}; {fuel:,} deuterium fuel), {len(skips)} skipped")
+        for why, n in Counter(str(e.get("why", ""))[:60] for e in skips).most_common(3):
+            out.append(f"    skipped {n}x: {why}")
+        carried: Counter = Counter()
+        for e in saved:
+            for r, v in (e.get("resources") or {}).items():
+                carried[r] += int(v or 0)
+        out.append(f"  {len(saved)} fleets saved (ships worth {sum(int(e.get('value') or 0) for e in saved):,}; "
+                   f"resources taken along: {', '.join(f'{r} {v:,}' for r, v in carried.items()) or 'none'}), "
+                   f"{sum(1 for e in back if e.get('ok'))} brought home, {sum(1 for e in back if not e.get('ok'))} lost track of, "
+                   f"{len(stays)} stayed to fight, {len(failed)} could not run")
+        for e in (saved + failed)[-5:]:
+            out.append(f"    {clock(e['t'])} {e['agent']} {e['event']}: {e.get('why') or ''} {('ships ' + str(e.get('ships'))) if e.get('ships') else ''}".rstrip())
     else:
         out.append("  none")
     out.append("")

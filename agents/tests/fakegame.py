@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import re
 from urllib.parse import parse_qs, urlparse
 
 from swarm.client import ApiError
@@ -25,8 +26,12 @@ UNITS = {
     "large_cargo": ("ship", 1500, 1500, 0, 25000),
     "light_fighter": ("ship", 600, 200, 0, 50),
     "colony_ship": ("ship", 1000, 2000, 1000, 7500),
+    "recycler": ("ship", 1000, 500, 0, 20000),
     "rocket_launcher": ("defense", 500, 0, 0, 0),
 }
+
+
+OWN = {10: (1, 3, 8), 11: (1, 4, 6)}   # the two planets when logistics_stuff is on
 
 
 class FakeGame:
@@ -59,8 +64,24 @@ class FakeGame:
         self.class_stuff = False            # the /character-class endpoint exists
         self.char_class = None
         self.colony_stuff = False           # show astrophysics, colony ships... (off so older tests are unchanged)
+        self.recycle_stuff = False          # recyclers, debris fields and the fleet check exist (off so older tests are unchanged)
+        self.debris: dict[tuple, int] = {}  # debris fields: coordinates -> metal+crystal lying there
+        self.recycle_fuel = 50              # deuterium a recycle trip burns
+        self.recycled = 0                   # total picked up and brought home
         self.colonies: list[tuple] = []     # positions where a colony ship settled
+        self.expedition_stuff = False       # expeditions: position 16, expedition slots, outcome messages (off so older tests are unchanged)
+        self.exp_outcomes = ["resources"]   # outcome of each expedition in turn (cycled): resources, ships, dark_matter, nothing, delay, loss
+        self.exp_done = 0
+        self.is_discoverer = False
         self.field_max = 10 ** 6           # building fields on the planet; every building level uses one
+        # --- logistics: a second own planet (id 11) and transport / deployment between the two ---
+        self.logistics_stuff = False
+        self.res2 = {"metal": 0.0, "crystal": 0.0, "deuterium": 0.0}   # the colony's stock (it produces nothing here)
+        self.ships2 = {k: 0 for k, v in UNITS.items() if v[0] == "ship"}
+        self.defense2 = {"rocket_launcher": 0}
+        self.fuel_cost = 10                # deuterium every own-planet flight burns
+        self.storage2 = 10 ** 6
+        self.own_log: list[dict] = []     # every own-planet mission ever sent, for the tests
 
     # -- economy --
     def energy_prod(self):
@@ -117,11 +138,23 @@ class FakeGame:
     # -- fleets and messages --
     def _process_missions(self):
         for m in list(self.missions):
+            if m.get("own"):
+                self._process_own(m)
+                continue
             if not m["arrived"] and self.now >= m["arrive"]:
                 m["arrived"] = True
+                if m["mission"] == "recycle":
+                    cap = m["ships"].get("recycler", 0) * UNITS["recycler"][4]
+                    took = min(cap, self.debris.get(m["to"], 0))
+                    self.debris[m["to"]] = self.debris.get(m["to"], 0) - took
+                    m["cargo"] = took
+                    continue
                 if m["mission"] == "colonisation":
                     self.colonies.append(m["to"])
                     self.missions.remove(m)   # the ship is used up
+                    continue
+                if m["mission"] == "expedition":
+                    self._expedition_arrives(m)
                     continue
                 target = next(o for o in self.others if o["coord"] == m["to"])
                 if m["mission"] == "espionage":
@@ -148,6 +181,8 @@ class FakeGame:
                         target["resources"][r] -= v
                         self.res[r] += v
                     self.battle_losses += my_loss
+                    if self.recycle_stuff:
+                        self.debris[m["to"]] = self.debris.get(m["to"], 0) + my_loss // 2
                     self._add_message("combat_report", {
                         "target": {"galaxy": m["to"][0], "system": m["to"][1], "position": m["to"][2], "type": 1,
                                    "owner_id": target["user_id"]},
@@ -156,22 +191,109 @@ class FakeGame:
                         "loot": loot, "debris": {"metal": my_loss // 2, "crystal": 0, "deuterium": 0}, "rounds": 5})
             if self.now >= m["back"]:
                 self.missions.remove(m)
+                self.res["metal"] += m.get("cargo", 0)
+                self.recycled += m.get("cargo", 0)
                 for name, n in m["ships"].items():
                     self.ships[name] += n
+                for r, v in (m.get("bring") or {}).items():
+                    self.res[r] += v
 
-    def _add_message(self, key, report):
-        self.messages.append({"id": self.next_message_id, "key": key, "viewed": False, "report": report})
+    def _add_message(self, key, report, body=""):
+        self.messages.append({"id": self.next_message_id, "key": key, "viewed": False, "report": report, "body": body})
         self.next_message_id += 1
 
-    def _units_list(self):
+    def _expedition_arrives(self, m):
+        outcome = self.exp_outcomes[self.exp_done % len(self.exp_outcomes)]
+        self.exp_done += 1
+        key, body = {
+            "resources": ("expedition_gain_resources", "Your scouts found a rich asteroid.\n\nMetal 12,345 have been captured."),
+            "ships": ("expedition_gain_ships", "A derelict fleet joins you.\n\nThe following ships are now part of the fleet:\n"
+                                              "Small Cargo: 3\nLight Fighter: 12"),
+            "dark_matter": ("expedition_gain_dark_matter", "Strange matter.\n\n(150 Dark Matter)"),
+            "nothing": ("expedition_failed", "Nothing but void."),
+            "delay": ("expedition_failed_and_delay", "A storm delays you."),
+            "loss": ("expedition_loss_of_fleet", "The last message was: a black hole."),
+        }[outcome]
+        if outcome == "resources":
+            m["bring"] = {"metal": 12345}
+        elif outcome == "ships":
+            m["ships"] = dict(m["ships"], small_cargo=m["ships"].get("small_cargo", 0) + 3, light_fighter=m["ships"].get("light_fighter", 0) + 12)
+        elif outcome == "dark_matter":
+            self.dark_matter += 150
+        elif outcome == "delay":
+            m["back"] += 7200
+        elif outcome == "loss":
+            m["ships"] = {k: 0 for k in m["ships"]}
+        self._add_message(key, None, body)
+
+    def _stock(self, pid):
+        return self.res if pid == 10 else self.res2
+
+    def _ship_box(self, pid):
+        return self.ships if pid == 10 else self.ships2
+
+    def _process_own(self, m):
+        """A transport or deployment between the two own planets."""
+        if not m["arrived"] and self.now >= m["arrive"]:
+            m["arrived"] = True
+            for r, v in m["resources"].items():
+                self._stock(m["dst"])[r] += v
+            m["resources"] = {}
+            if m["mission"] == "deployment":
+                for name, n in m["ships"].items():
+                    self._ship_box(m["dst"])[name] += n
+                self.missions.remove(m)
+                return
+        if m["arrived"] and self.now >= m["back"]:
+            self.missions.remove(m)
+            for name, n in m["ships"].items():
+                self._ship_box(m["src"])[name] += n
+
+    def _own_fleet(self, src, body, check):
+        to = (body["galaxy"], body["system"], body["position"])
+        dst = next((pid for pid, c in OWN.items() if c == to and pid != src), None)
+        if dst is None:
+            return None
+        if check:
+            cap = sum(UNITS[n][4] * k for n, k in body["ships"].items())
+            ok = {"possible": True, "reason": None}
+            return {"missions": {"transport": ok, "deployment": ok}, "duration_seconds": 60,
+                    "deuterium_consumption": self.fuel_cost, "cargo_capacity": cap, "fuel_capacity": 10 ** 6, "distance": 1000}
+        if len(self.missions) >= self.slots_max:
+            raise ApiError(422, "mission_rejected", "Maximum number of fleets reached.")
+        box, stock = self._ship_box(src), self._stock(src)
+        for n, v in body["ships"].items():
+            if box.get(n, 0) < v:
+                raise ApiError(422, "mission_rejected", "Not enough units on the planet to send the fleet.")
+        cargo = {r: int(v) for r, v in (body.get("resources") or {}).items() if v}
+        if sum(cargo.values()) > sum(UNITS[n][4] * k for n, k in body["ships"].items()):
+            raise ApiError(422, "mission_rejected", "Cargo too small.")
+        need = dict(cargo)
+        need["deuterium"] = need.get("deuterium", 0) + self.fuel_cost
+        if any(stock[r] < v for r, v in need.items()):
+            raise ApiError(422, "mission_rejected", "Not enough resources or fuel.")
+        for r, v in need.items():
+            stock[r] -= v
+        for n, v in body["ships"].items():
+            box[n] -= v
+        m = {"own": True, "mission": body["mission"], "src": src, "dst": dst, "to": to, "ships": dict(body["ships"]),
+             "resources": cargo, "arrived": False, "arrive": self.now + 60, "back": self.now + 120}
+        self.missions.append(m)
+        self.own_log.append(m)
+        return {"mission": {"id": 500 + len(self.own_log), "mission": body["mission"], "seconds_remaining": 60}}
+
+    def _units_list(self, pid=10):
+        res, ships, defense = (self.res, self.ships, self.defense) if pid == 10 else (self.res2, self.ships2, self.defense2)
         items = []
         for name, (cat, mc, cc, dc, cap) in UNITS.items():
             if name == "colony_ship" and not self.colony_stuff:
                 continue
+            if name == "recycler" and not self.recycle_stuff:
+                continue
             cost = {"metal": mc, "crystal": cc, "deuterium": dc}
-            fits = [int(self.res[r] // v) for r, v in cost.items() if v > 0]
-            amount = self.ships.get(name, 0) if cat == "ship" else self.defense.get(name, 0)
-            met = self.levels["shipyard"] >= (4 if name == "colony_ship" else 1)
+            fits = [int(res[r] // v) for r, v in cost.items() if v > 0]
+            amount = ships.get(name, 0) if cat == "ship" else defense.get(name, 0)
+            met = self.levels["shipyard"] >= (4 if name in ("colony_ship", "recycler") else 1)
             items.append({"id": 1, "machine_name": name, "title": name, "category": cat, "amount": amount,
                           "cost_per_unit": {**cost, "energy": 0}, "seconds_per_unit": 10, "requirements_met": met,
                           "character_class_met": True, "max_buildable": min(fits) if (met and fits) else 0})
@@ -187,6 +309,8 @@ class FakeGame:
             return self._merchant_state()
         if route == "/planets/10/units":
             return {"planet_id": 10, "units": self._units_list(), "queue": []}
+        if route == "/planets/11/units" and self.logistics_stuff:
+            return {"planet_id": 11, "units": self._units_list(11), "queue": []}
         if route.startswith("/galaxy/"):
             _, _, g, s = route.split("/")
             taken = {o["coord"] for o in self.others} | {(1, 3, 8)}
@@ -211,8 +335,9 @@ class FakeGame:
         if route == "/messages":
             rows = [m for m in self.messages if not (q.get("unread_only") == "1" and m["viewed"])
                     and (q.get("category") != "espionage" or m["key"] == "espionage_report")
-                    and (q.get("category") != "combat" or m["key"] == "combat_report")]
-            return {"messages": [{"id": m["id"], "key": m["key"], "viewed": m["viewed"],
+                    and (q.get("category") != "combat" or m["key"] == "combat_report")
+                    and (q.get("category") != "expeditions" or m["key"].startswith("expedition_"))]
+            return {"messages": [{"id": m["id"], "key": m["key"], "viewed": m["viewed"], "body": m.get("body", ""),
                                   "has_espionage_report": m["key"] == "espionage_report",
                                   "has_battle_report": m["key"] == "combat_report"} for m in rows]}
         if route.startswith("/messages/"):
@@ -267,6 +392,11 @@ class FakeGame:
         return None
 
     def _handle_new_post(self, path, body):
+        m = re.fullmatch(r"/planets/(10|11)/fleet(/check)?", path)
+        if self.logistics_stuff and m:
+            r = self._own_fleet(int(m.group(1)), body, bool(m.group(2)))
+            if r is not None:
+                return r
         merchant = self._handle_merchant_post(path, body)
         if merchant is not None:
             return merchant
@@ -287,11 +417,29 @@ class FakeGame:
             else:
                 self.defense[name] += amount
             return {"requested": amount, "ordered": amount, "queue": []}
+        if path == "/planets/10/fleet/check":
+            ok = body["mission"] == "recycle" and (body["galaxy"], body["system"], body["position"]) in self.debris
+            return {"missions": {"recycle": {"possible": ok, "reason": None if ok else "No debris field there."}},
+                    "duration_seconds": 60, "deuterium_consumption": self.recycle_fuel,
+                    "cargo_capacity": sum(n * UNITS[k][4] for k, n in body["ships"].items()), "fuel_capacity": 1000, "distance": 10}
         if path == "/planets/10/fleet":
             if len(self.missions) >= self.slots_max:
                 raise ApiError(422, "mission_rejected", "Maximum number of fleets reached.")
             to = (body["galaxy"], body["system"], body["position"])
-            if body["mission"] != "colonisation" and not any(o["coord"] == to for o in self.others):
+            if body["mission"] == "recycle":
+                if body.get("type") != "debris_field" or to not in self.debris:
+                    raise ApiError(422, "mission_rejected", "No debris field there.")
+                if self.res["deuterium"] < self.recycle_fuel:
+                    raise ApiError(422, "mission_rejected", "Not enough deuterium.")
+                self.res["deuterium"] -= self.recycle_fuel
+            elif body["mission"] == "expedition":
+                if not self.expedition_stuff or to[2] != 16 or self.tech["astrophysics"] < 1:
+                    raise ApiError(422, "mission_rejected", "Fleets cannot be sent to this target. You have to research Astrophysics first.")
+                if not 1 <= int(body.get("holding_hours", 0)) <= self.tech["astrophysics"]:
+                    raise ApiError(422, "invalid_holding_time", "holding_hours for an expedition must be between 1 and your astrophysics level.")
+                if sum(1 for x in self.missions if x["mission"] == "expedition") >= self._expedition_max():
+                    raise ApiError(422, "mission_rejected", "You are conducting too many expeditions at the same time.")
+            elif body["mission"] != "colonisation" and not any(o["coord"] == to for o in self.others):
                 raise ApiError(422, "mission_rejected", "No planet there.")
             for n, v in body["ships"].items():
                 if self.ships.get(n, 0) < v:
@@ -309,6 +457,21 @@ class FakeGame:
                     m["viewed"] = True
             return {"message": {"id": mid, "viewed": True}}
         return None
+
+    def _expedition_max(self):
+        return math.isqrt(self.tech["astrophysics"]) + (2 if self.is_discoverer else 0)
+
+    def _colony_status(self):
+        if not self.logistics_stuff:
+            return []
+        g, sy, po = OWN[11]
+        return [{"id": 11, "name": "Colony", "type": "planet", "coordinates": {"galaxy": g, "system": sy, "position": po},
+                 "resources": {r: int(v) for r, v in self.res2.items()},
+                 "storage": {r: self.storage2 for r in self.res2}, "production_per_hour": {"metal": 10, "crystal": 5, "deuterium": 0},
+                 "energy": 0, "fields": {"used": 5, "max": 150},
+                 # a long running build keeps the agent from asking for this planet's building list (not simulated)
+                 "building_queue": [{"queue_id": 9, "machine_name": "metal_mine", "active": True, "seconds_remaining": 3600}],
+                 "unit_queue": []}]
 
     # -- API --
     def get(self, path):
@@ -330,9 +493,12 @@ class FakeGame:
                     "production_per_hour": {r: int(v) for r, v in rate.items()},
                     "energy": int(self.energy_prod() - self.energy_need()),
                     "fields": {"used": sum(self.levels.values()), "max": self.field_max},
-                    "building_queue": self.qdict(self.bq, "b"), "unit_queue": []}],
+                    "building_queue": self.qdict(self.bq, "b"), "unit_queue": []}] + self._colony_status(),
                 "research": {"levels": {k: v for k, v in self.tech.items()}, "queue": self.qdict(self.rq, "r")},
-                "fleet_slots": {"used": len(self.missions), "max": self.slots_max}, "unread_messages": 0}
+                "fleet_slots": {"used": len(self.missions), "max": self.slots_max,
+                                **({"expedition_used": sum(1 for x in self.missions if x["mission"] == "expedition"),
+                                    "expedition_max": self._expedition_max()} if self.expedition_stuff else {})},
+                "unread_messages": 0}
         if path == "/planets/10/buildings":
             items = []
             for name in BASE:
@@ -345,7 +511,7 @@ class FakeGame:
         if path == "/planets/10/research":
             items = []
             for name in TECH:
-                if name in ("astrophysics", "impulse_drive", "espionage_technology") and not self.colony_stuff:
+                if name in ("astrophysics", "impulse_drive", "espionage_technology") and not (self.colony_stuff or self.expedition_stuff):
                     continue
                 lvl = self.tech[name]
                 cost = self.cost(name, lvl, TECH)

@@ -32,7 +32,8 @@ on neighbours, reads the reports and sometimes attacks. How it does all that dep
 
 Each agent's traits are randomly nudged, so two raiders are never identical. Decisions are rule-based for now; the
 personalities are the knobs. Agents run a small battle simulation before attacking, build defence when a fleet is
-flying towards them, and may use the merchant when stuck waiting. Details are in [`agents/README.md`](agents/README.md).
+flying towards them, and may use the merchant when stuck waiting. They choose a character class, found colonies when
+their home planet runs out of fields, and learn from their fights. Details are in [`agents/README.md`](agents/README.md).
 
 **Safety:** agents only spy on and attack **other agents**. Your own account and any other human player are left alone
 (unless you start the agents with `--attack-humans`). Agents have no admin rights and never change server settings.
@@ -88,7 +89,7 @@ python -m unittest discover -s . -t . -p "test_*.py"
 
 - Test the spying and attacking on a real server and fix what real reports reveal
 - Read battle results, remember who is dangerous, adapt (first simple learning)
-- Colonising and expeditions as agent behaviour, more personalities
+- Expeditions, defending colonies, more personalities
 - A language model for the big decisions, with a budget cap and per-agent memory
 - A battle simulator endpoint, alliances, trading
 
