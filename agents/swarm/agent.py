@@ -22,6 +22,7 @@ from .trade import COOLDOWN_SECONDS, choose_sale, plan_deal
 from .logistics_agent import LogisticsMixin
 from .social_agent import SocialMixin
 from .bounty_agent import BountyMixin
+from .moons_agent import MoonsMixin
 
 
 # When an agent is stuck with nothing to do and no idea how long it will take, look again after this long.
@@ -53,7 +54,7 @@ class TokenStore:
             tmp.replace(self.path)
 
 
-class Agent(LogisticsMixin, SocialMixin, BountyMixin):
+class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin):
     def __init__(
         self, name: str, persona: Persona, base_url: str, store: TokenStore, rng: random.Random,
         *, log_dir: str | None = None, email_domain: str = "example.com", client: ApiClient | None = None,
@@ -168,6 +169,8 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin):
         self._choose_class()
         goal_buildings, goal_research = self._colony_goals(status, home)
         threats = self._watch()
+        hints += self._plan_moons(status, planets)    # moons: sensor phalanx (build, scan); no moon = nothing
+        threats = threats + self._phalanx_threats(threats)   # attacks the phalanx saw coming count like the ones /fleet shows
         hints += self._plan_social(status, planets)   # galaxy board (off without --board): warnings raise the guard, traders swap goods
         if self.now < self.alert_until:
             hints.append(WATCH_SECONDS)   # someone hostile is about: look often

@@ -182,7 +182,7 @@ A moon is a planet entry with `"type": "moon"` in `GET /planets`, `/status` and 
 
 | Method | Path | What it does |
 |---|---|---|
-| POST | `/planets/{moon}/phalanx` | Body: `galaxy`, `system`, `position` of a planet in range of the sensor phalanx. Costs 5,000 deuterium on the moon. Returns `fleets`: every fleet flying to that planet (and the predicted return flights of fleets that left it): `mission`, `hostile` (an enemy attack), `is_return_trip`, `origin`, `destination`, `ships`, `ship_count`, `arrival_time`, `seconds_until_arrival`. Errors: `not_a_moon`, `no_sensor_phalanx`, `out_of_range` (range is level squared minus 1 systems), `not_enough_deuterium`, `no_planet_at_target` (404), `target_is_moon`, `target_is_admin`, `target_is_own`, `validation_failed` |
+| POST | `/planets/{moon}/phalanx` | Body: `galaxy`, `system`, `position` of a planet in range of the sensor phalanx. Costs 5,000 deuterium on the moon. Returns `fleets`: every fleet flying to that planet (and the predicted return flights of fleets that left it): `mission`, `hostile` (an enemy attack), `is_return_trip`, `origin`, `destination`, `ships`, `ship_count`, `departure_time`, `arrival_time` (at the scanned planet; for a predicted return flight `departure_time` is when the fleet reaches its target, e.g. your planet), `seconds_until_arrival`. Errors: `not_a_moon`, `no_sensor_phalanx`, `out_of_range` (range is level squared minus 1 systems), `not_enough_deuterium`, `no_planet_at_target` (404), `target_is_moon`, `target_is_admin`, `target_is_own`, `validation_failed` |
 | POST | `/planets/{moon}/jump-gate` | Body: `target_moon_id` (another moon of yours with a jump gate) and `ships` (e.g. `{"light_fighter": 20}`). Moves the ships at once and puts both gates on cooldown. Returns `ships` and `cooldown_seconds`. Errors: `not_a_moon`, `no_jump_gate`, `jump_gate_cooldown` and `target_cooldown` (`details.seconds_remaining`), `target_not_found` (404), `target_not_a_moon`, `target_is_source`, `target_no_jump_gate`, `ship_not_transferable`, `not_enough_ships`, `fleet_being_processed`, `vacation_mode`, `validation_failed` |
 
 ```bash
@@ -201,7 +201,7 @@ curl -s -X POST http://localhost/api/v1/planets/45/phalanx \
     "origin": {"galaxy": 1, "system": 40, "position": 3, "planet_name": "Raider"},
     "destination": {"galaxy": 1, "system": 42, "position": 8, "planet_name": "Homeworld"},
     "ships": {"light_fighter": 30}, "ship_count": 30, "speed": 12500,
-    "arrival_time": 1760000600, "seconds_until_arrival": 600}]}}
+    "departure_time": 1760000000, "arrival_time": 1760000600, "seconds_until_arrival": 600}]}}
 ```
 
 ```bash

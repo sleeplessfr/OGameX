@@ -141,6 +141,30 @@ Rules are in `swarm/logistics.py` (pure) and `swarm/logistics_agent.py` (the cal
   has landed (+90 s). Events: `fleet_saved`, `fleet_stays`, `fleet_save_failed`, `fleet_returned`. Not done: a single-planet agent
   has nowhere to send its fleet. Report section: LOGISTICS.
 
+## Moons: sensor phalanx (agents that own a moon)
+
+Rules are in `swarm/moons.py` (pure) and `swarm/moons_agent.py` (the calls, mixed into `Agent`). An agent without a moon does
+nothing new. Needs the moon endpoints of the game (`POST /planets/{moon}/phalanx`, see `docs/API.md`, "Moons"); a game without
+them answers 404 once and the agent never asks again.
+
+- **Building** (`_moon_build`): fighters (aggression 0.25+ or the General class: raider, balanced) want a sensor phalanx level 3
+  (range 8 systems), the others only when some planet holds 400,000+ (metal-equivalents), then level 2. The lunar base comes first
+  when the game says the phalanx's requirements are not met. A moon has no mines, so what it lacks is carried from the planet at
+  the same coordinates in cargo ships the agent already owns (`moon_fed`, mission `transport`, `"type": "moon"`); no cargo ships
+  = one quiet `phalanx_skipped` line. Orders are logged as ordinary `build` events, a finished upgrade as `phalanx_built`.
+- **Scanning** (`_moon_scan`): every 3 minutes (90 s while alert), at most 6 scans an hour for fighters and 3 for the others
+  (5,000 deuterium each, from the moon's own stock; the agent brings deuterium for two scans only if it is a fighter or alert).
+  Who: known aggressors first, then a raider's targets (spy reports, opponent memory), then the other players' main planets
+  from `/highscore`, only in range, never the same planet within 10-60 minutes. Refused planets (`out_of_range`, moon, ...) are left alone 6 h.
+- **Early warning:** a scanned rival whose fleet is out attacking one of our planets shows a return flight whose origin is our
+  planet; its `departure_time` is when the attack lands. Such an attack becomes a `Threat` (defence orders, alert, aggressor memory:
+  `_phalanx_threats`) and an `Attack` for fleet saving (`_phalanx_attacks`, used by `_save_fleet`), unless `GET /fleet` already shows it.
+  Event `phalanx_warning`. Note the phalanx cannot scan our own planets, so it finds a raid by scanning the raider's home.
+- **Raiding:** a scanned rival whose ships are out (`away` in `Memory.moons`) raises the worth of a raid on it by up to 30%
+  (`away_factor`, used by `pick_attack`), more the larger the share of its known strength that is away.
+- Events: `moon_seen`, `phalanx_built`, `phalanx_scan`, `phalanx_warning`, `phalanx_skipped`, `moon_fed`. Report section: MOONS.
+- Not done: the jump gate (the API has it, agents do not use it), scanning to find new raid targets, building the moon's own defence.
+
 ## Learning
 
 - **Memory per agent** (`memory/<name>.json`): risk scale, avoid list, aggressors, merchant cooldown, colony goal.
@@ -294,7 +318,7 @@ does anything.
 
 ## Not built yet
 
-The scrap merchant, alliances (the board has an ALLIANCE kind but no agent uses it yet), moons (sensor phalanx, jump gate), defending colonies, other retaliation than the revenge join, and LLM-driven
+The scrap merchant, alliances (the board has an ALLIANCE kind but no agent uses it yet), jump gate use by agents, defending colonies, other retaliation than the revenge join, and LLM-driven
 decisions. The brain is rule-based; the personas are the knobs; learning so far is the risk lesson, opponent memory and the
 fight margin bandit above.
 

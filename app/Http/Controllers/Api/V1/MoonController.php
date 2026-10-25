@@ -114,6 +114,7 @@ class MoonController extends ApiController
                 'ships' => $movement['ships'],
                 'ship_count' => $movement['ship_count'],
                 'speed' => $movement['fleet_speed'],
+                'departure_time' => (int)$movement['time_departure'],
                 'arrival_time' => $arrival,
                 'seconds_until_arrival' => max(0, $arrival - $now),
             ];
