@@ -172,13 +172,16 @@ def choose_building(
         usable = [b for b in usable if b["machine_name"] not in ("shipyard", "nano_factory")]
     by_name = {b["machine_name"]: b for b in usable}
 
+    def forced(item: dict, why: str) -> Choice:
+        return _forced_with_room(item, have, production, why, planet, by_name)
+
     left = fields_left(planet)
     if left is not None and left <= 0:
         return Choice(None, None, "no free fields on this planet (a terraformer adds some)", full=True)
 
     # 1. Energy: mines starve without it. Nothing else matters until the power is back.
     if planet["energy"] <= persona.energy_buffer and "solar_plant" in by_name:
-        return _forced(by_name["solar_plant"], have, production, "low energy")
+        return forced(by_name["solar_plant"], "low energy")
 
     # 2. A store that is nearly full wastes production.
     for r in RESOURCES:
@@ -189,13 +192,13 @@ def choose_building(
     # 2a. Goals the agent has set itself (a shipyard for the colony ship, ...).
     for name, target in (goals or {}).items():
         if name in by_name and by_name[name]["level"] < target:
-            return _forced(by_name[name], have, production, f"needed for a colony ({name} {target})")
+            return forced(by_name[name], f"needed for a colony ({name} {target})")
 
     # 2b. Running out of fields: the terraformer gives new ones, and its prerequisites become important.
     weights = persona.building_weights
     if left is not None and left <= FIELD_ALARM:
         if "terraformer" in by_name and by_name["terraformer"]["level"] < 30:
-            return _forced(by_name["terraformer"], have, production, f"only {left} free fields left")
+            return forced(by_name["terraformer"], f"only {left} free fields left")
         weights = {**weights, "nano_factory": max(weights.get("nano_factory", 0.0), 6.0),
                    "robot_factory": max(weights.get("robot_factory", 0.0), 3.0)}
         if left <= FIELDS_LOW:
@@ -215,7 +218,7 @@ def choose_building(
         top = ranked[0]
         need = extra_energy_needed(top["machine_name"], top["level"])
         if planet["energy"] - need < persona.energy_buffer:
-            return _forced(by_name["solar_plant"], have, production, f"power for {top['machine_name']}")
+            return forced(by_name["solar_plant"], f"power for {top['machine_name']}")
         # One step ahead: while the power is still enough, build the solar plant whenever it is affordable right now,
         # so that it is never the thing everything else has to wait for.
         solar_item = by_name["solar_plant"]
@@ -228,7 +231,7 @@ def choose_building(
             if ranked[0]["cost"].get(r, 0) > have.get(r, 0) and production.get(r, 0) <= 0:
                 producer = by_name.get(PRODUCER_OF[r])
                 if producer is not None:
-                    return _forced(producer, have, production, f"{ranked[0]['machine_name']} needs {r}")
+                    return forced(producer, f"{ranked[0]['machine_name']} needs {r}")
     return _pick(ranked, persona, rng, have, production, "building")
 
 
@@ -260,3 +263,16 @@ def _forced(item: dict, have: dict, production: dict, why: str) -> Choice:
         return Choice(item["machine_name"], None, f"{why}: {item['machine_name']}")
     return Choice(None, seconds_to_afford(item["cost"], have, production), f"{why}: waiting for {item['machine_name']}", item["cost"])
 
+
+
+def _forced_with_room(item: dict, have: dict, production: dict, why: str, planet: dict, by_name: dict) -> Choice:
+    """_forced, except when the item costs more of a resource than the planet can ever store: then the store comes first.
+
+    Without this an agent can wait for ever: the stock sits at the storage cap, below the price, and the 'low energy' rule
+    (which comes before the 'storage almost full' rule) keeps insisting on a solar plant it can never pay."""
+    for r in RESOURCES:
+        cap = planet.get("storage", {}).get(r, 0)
+        if cap > 0 and item["cost"].get(r, 0) > cap and STORE_FOR[r] in by_name:
+            return _forced(by_name[STORE_FOR[r]], have, production,
+                           f"{item['machine_name']} costs more {r} than the store holds ({item['cost'][r]:,} vs {cap:,})")
+    return _forced(item, have, production, why)
