@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import random
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -21,6 +23,20 @@ class ApiError(Exception):
 
 
 class ApiClient:
+    # One pace for every client in this process: the game allows 300 requests a minute (per player, or per address if
+    # it cannot tell the players apart), and 20 agents starting together used to burst past it. 0.25 s = 240 a minute.
+    shared_interval = 0.25
+    _shared_lock = threading.Lock()
+    _shared_next = 0.0
+
+    @classmethod
+    def _shared_pause(cls) -> float:
+        with cls._shared_lock:
+            now = time.monotonic()
+            start = max(now, cls._shared_next)
+            cls._shared_next = start + cls.shared_interval
+            return start - now
+
     def __init__(self, base_url: str, token: str | None = None, timeout: float = 30.0, min_interval: float = 0.15):
         self.base_url = base_url.rstrip("/")
         self.token = token
@@ -32,6 +48,10 @@ class ApiClient:
         wait = self.min_interval - (time.monotonic() - self._last_request)
         if wait > 0:
             time.sleep(wait)
+        if self.shared_interval > 0:
+            wait = self._shared_pause()
+            if wait > 0:
+                time.sleep(wait)
 
         headers = {"Accept": "application/json"}
         data = None
@@ -60,7 +80,7 @@ class ApiClient:
         if status >= 400 or not (isinstance(payload, dict) and payload.get("success")):
             err = (payload or {}).get("error", {}) if isinstance(payload, dict) else {}
             if status == 429:
-                error = ApiError(429, "rate_limited", "Too many requests", {"retry_after": 30})
+                error = ApiError(429, "rate_limited", "Too many requests", {"retry_after": 20 + random.random() * 20})   # jitter: agents must not all wake at once
             else:
                 # A crash inside the game (HTTP 500) comes back as Laravel's own JSON, not our envelope: keep its message.
                 body = payload if isinstance(payload, dict) else {}
