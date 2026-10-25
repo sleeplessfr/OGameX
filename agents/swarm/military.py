@@ -41,13 +41,19 @@ class Memory:
     battles: list[dict] = field(default_factory=list)  # recent results of own attacks (newest last, capped)
     aggressors: dict[Coord, float] = field(default_factory=dict)  # planets that attacked us (when we last saw one coming)
     trade_cooldown_until: float = 0.0  # no new merchant call before this server time (dark matter is scarce)
+    expanding: bool = False            # the home planet is crowded and this agent has decided to found a colony
+    colony_sent_at: float = 0.0        # server time a colony ship left (0 = none on its way)
+    colony_planets_before: int = 0     # planets owned when it left, to see whether it worked
+    colony_until: float = 0.0          # no new colony attempt before this server time
 
     # Saved to disk so a restart does not make the agent forget (JSON cannot have tuple keys, so coordinates become "g:s:p").
     _COORD_MAPS = ("spied", "attacked", "pending", "intel", "avoid_until", "aggressors")
 
     def to_dict(self) -> dict:
         out: dict = {"need_cargo": self.need_cargo, "risk_scale": self.risk_scale, "battles": self.battles,
-                     "trade_cooldown_until": self.trade_cooldown_until}
+                     "trade_cooldown_until": self.trade_cooldown_until, "expanding": self.expanding,
+                     "colony_sent_at": self.colony_sent_at, "colony_planets_before": self.colony_planets_before,
+                     "colony_until": self.colony_until}
         for name in self._COORD_MAPS:
             out[name] = {":".join(map(str, c)): v for c, v in getattr(self, name).items()}
         return out
@@ -70,6 +76,16 @@ class Memory:
             pass
         try:
             m.trade_cooldown_until = float(data.get("trade_cooldown_until", 0.0))
+        except (TypeError, ValueError):
+            pass
+        m.expanding = bool(data.get("expanding", False))
+        for key in ("colony_sent_at", "colony_until"):
+            try:
+                setattr(m, key, float(data.get(key, 0.0)))
+            except (TypeError, ValueError):
+                pass
+        try:
+            m.colony_planets_before = int(data.get("colony_planets_before", 0))
         except (TypeError, ValueError):
             pass
         battles = data.get("battles")

@@ -160,9 +160,9 @@ def _pick(
 
 def choose_building(
     persona: Persona, rng: random.Random, planet: dict, buildings: list[dict],
-    *, research_busy: bool, units_busy: bool, have: dict,
+    *, research_busy: bool, units_busy: bool, have: dict, goals: dict | None = None,
 ) -> Choice:
-    """Pick the next building for one planet. `have` is the resources still free this round."""
+    """Pick the next building for one planet. `goals` ({name: level}) are must-reach levels, e.g. for a colony ship. `have` is the resources still free this round."""
     production = planet["production_per_hour"]
     usable = [b for b in buildings if b["requirements_met"]]
     # The game refuses these while research / unit production is running.
@@ -185,6 +185,11 @@ def choose_building(
         storage = planet["storage"].get(r, 0)
         if storage > 0 and have.get(r, 0) >= persona.store_alarm * storage and STORE_FOR[r] in by_name:
             return _forced(by_name[STORE_FOR[r]], have, production, f"{r} storage almost full")
+
+    # 2a. Goals the agent has set itself (a shipyard for the colony ship, ...).
+    for name, target in (goals or {}).items():
+        if name in by_name and by_name[name]["level"] < target:
+            return _forced(by_name[name], have, production, f"needed for a colony ({name} {target})")
 
     # 2b. Running out of fields: the terraformer gives new ones, and its prerequisites become important.
     weights = persona.building_weights
@@ -228,10 +233,14 @@ def choose_building(
 
 
 def choose_research(
-    persona: Persona, rng: random.Random, planet: dict, research: list[dict], *, have: dict,
+    persona: Persona, rng: random.Random, planet: dict, research: list[dict], *, have: dict, goals: dict | None = None,
 ) -> Choice:
     production = planet["production_per_hour"]
     usable = [t for t in research if t["requirements_met"]]
+    by_name = {t["machine_name"]: t for t in usable}
+    for name, target in (goals or {}).items():   # levels the agent has set itself (astrophysics for a colony, ...)
+        if name in by_name and by_name[name]["level"] < target:
+            return _forced(by_name[name], have, production, f"needed for a colony ({name} {target})")
     left = fields_left(planet)
     if left is not None and left <= FIELD_ALARM:
         # The terraformer needs energy technology 12 and a nanite factory (computer technology 10, robot factory 10).

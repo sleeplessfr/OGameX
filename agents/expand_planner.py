@@ -25,6 +25,8 @@ import math
 import sys
 
 from swarm.brain import VALUE
+from swarm.colonise import (ASTRO_FOR_POSITION, FIELD_RANGE, POSITION_BONUS, TEMPERATURE, astro_needed, max_colonies,
+                            position_income)
 
 # machine name: (metal, crystal, deuterium, growth per level). Level n costs base * factor ** (n - 1).
 PRICES = {
@@ -37,29 +39,7 @@ PRICES = {
     "solar_plant": (75, 30, 0, 1.5),
 }
 COLONY_SHIP = (10_000, 20_000, 10_000)
-# average number of fields at each position (middle of the game's range; app/Factories/PlanetServiceFactory.php)
-FIELD_RANGE = {1: (96, 172), 2: (104, 176), 3: (112, 182), 4: (118, 208), 5: (133, 232), 6: (146, 242), 7: (152, 248),
-               8: (156, 252), 9: (150, 246), 10: (142, 232), 11: (136, 210), 12: (125, 186), 13: (114, 172),
-               14: (100, 168), 15: (90, 164)}
-
-
-# Production bonus by position (app/Services/PlanetService.php, getProductionForPositionBonuses): metal, crystal
-POSITION_BONUS = {1: (1, 1.4), 2: (1, 1.3), 3: (1, 1.2), 6: (1.17, 1), 7: (1.23, 1), 8: (1.35, 1), 9: (1.23, 1), 10: (1.17, 1)}
-# average temperature at each position (middle of the game's range); deuterium output is 10 * L * 1.1^L * (1.44 - 0.004 * temperature)
-TEMPERATURE = {1: (220, 260), 2: (170, 210), 3: (120, 160), 4: (70, 110), 5: (60, 100), 6: (50, 90), 7: (40, 80), 8: (30, 70),
-               9: (20, 60), 10: (10, 50), 11: (0, 40), 12: (-10, 30), 13: (-50, -10), 14: (-90, -50), 15: (-130, -90)}
-ASTRO_FOR_POSITION = {1: 8, 15: 8, 2: 6, 14: 6, 3: 4, 13: 4}
-
-
-def position_income(position: int, levels=(25, 22, 20)) -> float:
-    """Hourly production value (x1 speed, power not limiting) of the same mines at this position."""
-    mm, cm, dm = levels
-    bm, bc = POSITION_BONUS.get(position, (1, 1))
-    t = sum(TEMPERATURE[position]) / 2
-    metal = (30 + 30 * mm * 1.1 ** mm) * bm
-    crystal = (15 + 20 * cm * 1.1 ** cm) * bc
-    deut = 10 * dm * 1.1 ** dm * (1.44 - 0.004 * t)
-    return metal * VALUE["metal"] + crystal * VALUE["crystal"] + deut * VALUE["deuterium"]
+# Position tables and the colony rules live in swarm/colonise.py, so the agents and this calculator agree.
 
 
 def level_cost(name: str, level: int) -> tuple[float, float, float]:
@@ -86,17 +66,6 @@ def value(cost) -> float:
 
 def fields_from_terraformer(level: int) -> int:
     return 5 * level + level // 2
-
-
-def max_colonies(astro: int) -> int:
-    return int(math.floor(astro / 2 + 0.5))   # the game's round(level / 2)
-
-
-def astro_needed(colonies_wanted: int) -> int:
-    level = 0
-    while max_colonies(level) < colonies_wanted:
-        level += 1
-    return level
 
 
 def fmt(n: float) -> str:

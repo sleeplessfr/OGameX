@@ -13,7 +13,9 @@ BASE = {  # metal, crystal, deuterium, growth factor
     "deuterium_store": (1000, 1000, 0, 2.0),
 }
 TECH = {"energy_technology": (0, 800, 400, 2.0), "computer_technology": (0, 400, 600, 2.0),
-        "combustion_drive": (400, 0, 600, 2.0), "laser_technology": (200, 100, 0, 2.0)}
+        "combustion_drive": (400, 0, 600, 2.0), "laser_technology": (200, 100, 0, 2.0),
+        "astrophysics": (4000, 8000, 4000, 1.75), "impulse_drive": (2000, 4000, 600, 2.0),
+        "espionage_technology": (200, 1000, 200, 2.0)}
 
 
 # Units: (category, metal, crystal, deuterium, cargo capacity). Costs are made cheap so tests stay short.
@@ -22,6 +24,7 @@ UNITS = {
     "small_cargo": ("ship", 500, 500, 0, 5000),
     "large_cargo": ("ship", 1500, 1500, 0, 25000),
     "light_fighter": ("ship", 600, 200, 0, 50),
+    "colony_ship": ("ship", 1000, 2000, 1000, 7500),
     "rocket_launcher": ("defense", 500, 0, 0, 0),
 }
 
@@ -53,6 +56,8 @@ class FakeGame:
         self.merchant_quality = 0.9         # share of the fair value the merchant pays
         self.trades_done = 0
         self.battle_losses = 0
+        self.colony_stuff = False           # show astrophysics, colony ships... (off so older tests are unchanged)
+        self.colonies: list[tuple] = []     # positions where a colony ship settled
         self.field_max = 10 ** 6           # building fields on the planet; every building level uses one
 
     # -- economy --
@@ -112,6 +117,10 @@ class FakeGame:
         for m in list(self.missions):
             if not m["arrived"] and self.now >= m["arrive"]:
                 m["arrived"] = True
+                if m["mission"] == "colonisation":
+                    self.colonies.append(m["to"])
+                    self.missions.remove(m)   # the ship is used up
+                    continue
                 target = next(o for o in self.others if o["coord"] == m["to"])
                 if m["mission"] == "espionage":
                     self._add_message("espionage_report", {
@@ -155,10 +164,12 @@ class FakeGame:
     def _units_list(self):
         items = []
         for name, (cat, mc, cc, dc, cap) in UNITS.items():
+            if name == "colony_ship" and not self.colony_stuff:
+                continue
             cost = {"metal": mc, "crystal": cc, "deuterium": dc}
             fits = [int(self.res[r] // v) for r, v in cost.items() if v > 0]
             amount = self.ships.get(name, 0) if cat == "ship" else self.defense.get(name, 0)
-            met = self.levels["shipyard"] > 0
+            met = self.levels["shipyard"] >= (4 if name == "colony_ship" else 1)
             items.append({"id": 1, "machine_name": name, "title": name, "category": cat, "amount": amount,
                           "cost_per_unit": {**cost, "energy": 0}, "seconds_per_unit": 10, "requirements_met": met,
                           "character_class_met": True, "max_buildable": min(fits) if (met and fits) else 0})
@@ -174,6 +185,12 @@ class FakeGame:
             return self._merchant_state()
         if route == "/planets/10/units":
             return {"planet_id": 10, "units": self._units_list(), "queue": []}
+        if route.startswith("/galaxy/"):
+            _, _, g, s = route.split("/")
+            taken = {o["coord"] for o in self.others} | {(1, 3, 8)}
+            return {"galaxy": int(g), "system": int(s), "positions": [
+                {"position": p, "planet": ({"id": 99, "name": "x"} if (int(g), int(s), p) in taken else None)}
+                for p in range(1, 16)]}
         if route == "/ships":
             return {"ships": [{"machine_name": n, "cargo_capacity": v[4]} for n, v in UNITS.items() if v[0] == "ship"]}
         if route == "/highscore":
@@ -262,7 +279,7 @@ class FakeGame:
             if len(self.missions) >= self.slots_max:
                 raise ApiError(422, "mission_rejected", "Maximum number of fleets reached.")
             to = (body["galaxy"], body["system"], body["position"])
-            if not any(o["coord"] == to for o in self.others):
+            if body["mission"] != "colonisation" and not any(o["coord"] == to for o in self.others):
                 raise ApiError(422, "mission_rejected", "No planet there.")
             for n, v in body["ships"].items():
                 if self.ships.get(n, 0) < v:
@@ -316,6 +333,8 @@ class FakeGame:
         if path == "/planets/10/research":
             items = []
             for name in TECH:
+                if name in ("astrophysics", "impulse_drive", "espionage_technology") and not self.colony_stuff:
+                    continue
                 lvl = self.tech[name]
                 cost = self.cost(name, lvl, TECH)
                 items.append({"id": 1, "machine_name": name, "title": name, "level": lvl, "next_level": lvl + 1,

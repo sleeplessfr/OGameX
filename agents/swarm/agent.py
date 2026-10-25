@@ -8,7 +8,8 @@ import threading
 import time
 from pathlib import Path
 
-from .brain import choose_building, choose_research, pay
+from .brain import choose_building, choose_research, fields_left, pay
+from . import colonise
 from .combat import tech_from_research
 from .military import (Memory, choose_strike, judge_trade, summarize_battle, choose_units, coord_of, pick_attack, pick_target, summarize_report)
 from .client import ApiClient, ApiError
@@ -71,6 +72,7 @@ class Agent:
         self._economy_saving = False
         self._last_battle_check = -1e12
         self.my_tech = None  # (weapons, shields, armour) levels, from /status
+        self.planets_owned = 1
         self.alert_until = 0.0           # server time until which a hostile fleet keeps us alert
         self.defend_cooldown_until = 0.0
         self._seen_threats: set[int] = set()
@@ -156,6 +158,8 @@ class Agent:
         home = next((p for p in planets if p["id"] == status["player"]["current_planet_id"]), planets[0])
         research_busy = bool(research_queue)
 
+        self.planets_owned = len(planets)
+        goal_buildings, goal_research = self._colony_goals(status, home)
         threats = self._watch()
         if self.now < self.alert_until:
             hints.append(WATCH_SECONDS)   # someone hostile is about: look often
@@ -169,14 +173,15 @@ class Agent:
             if planet is home:
                 self._prepare_defense(home, have, threats)   # before the economy spends the stock the raider is after
             self._economy_saving = False
-            hints += self._plan_buildings(planet, have, research_busy)
+            hints += self._plan_buildings(planet, have, research_busy, goals=goal_buildings if planet is home else None)
             if planet is home:
-                hints += self._plan_research(planet, have, research_queue)
+                hints += self._plan_research(planet, have, research_queue, goals=goal_research)
                 hints += self._plan_military(status, planet, have, self._economy_saving)
+                hints += self._plan_colony(status, planet, have, goal_research)
 
         return self._sleep_time(hints)
 
-    def _plan_buildings(self, planet: dict, have: dict, research_busy: bool) -> list[float]:
+    def _plan_buildings(self, planet: dict, have: dict, research_busy: bool, goals: dict | None = None) -> list[float]:
         queue = planet["building_queue"]
         if queue:
             return [q["seconds_remaining"] for q in queue if q.get("active")] or []
@@ -185,7 +190,7 @@ class Agent:
         if data["queue_full"]:
             return []
         choice = choose_building(self.persona, self.rng, planet, data["buildings"],
-                                 research_busy=research_busy, units_busy=bool(planet["unit_queue"]), have=have)
+                                 research_busy=research_busy, units_busy=bool(planet["unit_queue"]), have=have, goals=goals)
         if choice.machine_name is None:
             self._economy_saving = not choice.full   # a full planet is not saving for anything: ships and defence still work
             self.log("wait", planet=planet["id"], why=choice.reason, hint=_r(choice.wait_seconds))
@@ -282,10 +287,10 @@ class Agent:
         self.log("trade", planet=planet["id"], gave=result["gave"], received=result["received"], why=why)
         return True
 
-    def _plan_research(self, planet: dict, have: dict, research_queue: list) -> list[float]:
+    def _plan_research(self, planet: dict, have: dict, research_queue: list, goals: dict | None = None) -> list[float]:
         if research_queue:
             return [q["seconds_remaining"] for q in research_queue if q.get("active")] or []
-        if self.rng.random() > self.persona.research_share:
+        if self.rng.random() > self.persona.research_share and not goals:
             return []
         if self.lab_level is None:
             self._remember_lab(planet, self.client.get(f"/planets/{planet['id']}/buildings")["buildings"])
@@ -294,7 +299,7 @@ class Agent:
         data = self.client.get(f"/planets/{planet['id']}/research")
         if data["research_lab_upgrading"] or data["queue_full"]:
             return []
-        choice = choose_research(self.persona, self.rng, planet, data["research"], have=have)
+        choice = choose_research(self.persona, self.rng, planet, data["research"], have=have, goals=goals)
         if choice.machine_name is None:
             return [choice.wait_seconds if choice.wait_seconds else IDLE_RECHECK]
         return self._act("research", planet, choice, data["research"], have, f"/planets/{planet['id']}/research")
@@ -347,6 +352,103 @@ class Agent:
         if may_buy and not home["unit_queue"]:
             hints += self._build_units(home, units, have, ships_here)
         return hints
+
+    # ---- colonies ------------------------------------------------------------------------------------
+    def _colony_goals(self, status: dict, home: dict) -> tuple[dict | None, dict | None]:
+        """Decide whether to found a colony and, if so, which levels the home planet must reach first."""
+        m = self.memory
+        if m.colony_sent_at or self.persona.expansion <= 0:
+            return None, None
+        if not m.expanding:
+            if self.now < m.colony_until or not colonise.wants_colony(self.persona, home, self.planets_owned, self.rng):
+                return None, None
+            m.expanding = True
+            self.log("expand", why=f"only {fields_left(home)} free fields on the home planet", planets=self.planets_owned,
+                     astrophysics_needed=colonise.astro_needed(self.planets_owned))
+        return colonise.goals(self.planets_owned, status["research"].get("levels") or {})
+
+    def _plan_colony(self, status: dict, home: dict, have: dict, missing_research: dict | None) -> list[float]:
+        m = self.memory
+        if m.colony_sent_at:
+            return self._follow_colony(home)
+        if not m.expanding or missing_research:
+            return []          # still researching: the research and building goals do the work
+        units = self.client.get(f"/planets/{home['id']}/units")["units"]
+        ships = {u["machine_name"]: u["amount"] for u in units if u["amount"] > 0 and u["category"] != "defense"}
+        if ships.get("colony_ship", 0) >= 1:
+            slots = status["fleet_slots"]
+            if slots["used"] >= slots["max"]:
+                return [60.0]
+            return self._send_colony(status, home)
+        item = next((u for u in units if u["machine_name"] == "colony_ship"), None)
+        if item is None or home["unit_queue"]:
+            return [60.0] if home["unit_queue"] else []
+        if not item.get("requirements_met", True):
+            return [IDLE_RECHECK]      # the shipyard goal is being built
+        if item.get("max_buildable", 1) < 1:
+            return [IDLE_RECHECK]
+        try:
+            self.client.post(f"/planets/{home['id']}/units", {"machine_name": "colony_ship", "amount": 1})
+        except ApiError as e:
+            self.stats["refused"] += 1
+            self.log("units_refused", what="colony_ship", code=e.code, msg=e.message[:100])
+            return [60.0]
+        for r in ("metal", "crystal", "deuterium"):
+            have[r] = have.get(r, 0) - item["cost_per_unit"].get(r, 0)
+        self.log("units", what="colony_ship", amount=1, why="founding a colony")
+        return [60.0]
+
+    def _send_colony(self, status: dict, home: dict) -> list[float]:
+        m = self.memory
+        c = home["coordinates"]
+        home_coord = (c["galaxy"], c["system"], c["position"])
+        astro = int((status["research"].get("levels") or {}).get("astrophysics", 0))
+        views = []
+        for g, s in colonise.systems_to_scan(home_coord):
+            try:
+                views.append(self.client.get(f"/galaxy/{g}/{s}"))
+            except ApiError:
+                continue
+        pick = colonise.pick_target(self.persona, self.rng, home_coord, views, astro)
+        if pick is None:
+            m.colony_until = self.now + 3600
+            self.log("colony_failed", why="no free position near home")
+            return []
+        (g, s, p), why = pick
+        try:
+            result = self.client.post(f"/planets/{home['id']}/fleet", {
+                "mission": "colonisation", "galaxy": g, "system": s, "position": p, "type": "planet",
+                "ships": {"colony_ship": 1}})
+        except ApiError as e:
+            self.stats["refused"] += 1
+            m.colony_until = self.now + 1800
+            self.log("colony_failed", at=f"{g}:{s}:{p}", code=e.code, why=e.message[:120])
+            return []
+        m.colony_sent_at = self.now
+        m.colony_planets_before = self.planets_owned
+        self.log("colony_sent", at=f"{g}:{s}:{p}", why=why, seconds=result["mission"]["seconds_remaining"])
+        return [min(120.0, float(result["mission"]["seconds_remaining"]) + 5)]
+
+    def _follow_colony(self, home: dict) -> list[float]:
+        m = self.memory
+        if self.planets_owned > m.colony_planets_before:
+            m.colony_sent_at, m.expanding = 0.0, False
+            m.colony_until = self.now + 1800
+            self.log("colony_founded", planets=self.planets_owned)
+            return []
+        if self.now - m.colony_sent_at < 120:
+            return [60.0]
+        units = self.client.get(f"/planets/{home['id']}/units")["units"]
+        if any(u["machine_name"] == "colony_ship" and u["amount"] > 0 for u in units):   # it came back: the position was taken
+            m.colony_sent_at = 0.0
+            m.colony_until = self.now + 900
+            self.log("colony_failed", why="the ship came back")
+            return []
+        if self.now - m.colony_sent_at > 6 * 3600:   # lost track of it: start over
+            m.colony_sent_at, m.expanding = 0.0, False
+            self.log("colony_failed", why="no sign of the ship or the colony")
+            return []
+        return [60.0]
 
     def _allowed_target_ids(self) -> set[int] | None:
         if self.attack_humans:

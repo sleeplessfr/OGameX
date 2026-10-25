@@ -83,7 +83,7 @@ class FullPlanetInTheFakeGameTests(unittest.TestCase):
         game.levels.update(levels or {})
         game.res.update(stock or {})
         store = TokenStore(str(Path(tempfile.mkdtemp()) / "t.json"))
-        agent = Agent("sim", PRESETS["raider"], "x", store, random.Random(3), client=game)
+        agent = Agent("sim", replace(PRESETS["raider"], expansion=0.0), "x", store, random.Random(3), client=game)
         agent.log = lambda *a, **k: None
         agent.user_id = 1
         elapsed = 0.0
