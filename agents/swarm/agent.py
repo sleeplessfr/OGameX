@@ -13,6 +13,7 @@ from . import colonise
 from .combat import tech_from_research
 from .military import (Memory, choose_strike, judge_trade, summarize_battle, choose_units, coord_of, pick_attack, pick_target, summarize_report)
 from .client import ApiClient, ApiError
+from .opponents import record_result, record_spy, summary as opp_summary
 from .personas import Persona
 from .defense import AGGRESSOR_MEMORY, GUARD_SECONDS, PEACE_WATCH_SECONDS, RECENT_RAID, ALERT_SECONDS, COOLDOWN_SECONDS as DEFEND_COOLDOWN, WATCH_SECONDS, choose_defense, defence_share, find_threats
 from .trade import COOLDOWN_SECONDS, choose_sale, plan_deal
@@ -527,10 +528,12 @@ class Agent:
             self.memory.intel[c] = {"at": now, "loot": intel.loot, "defenders": intel.defenders, "owner_id": intel.owner_id,
                                     "ships": intel.ships, "defense": intel.defense, "research": intel.research}
             self.memory.pending.pop(c, None)
+            record_spy(self.memory.opponents, c, now, intel.loot, intel.ships, intel.defense)
             if intel.loot < self.persona.min_loot:  # not worth a visit: do not spy on it again for a while
                 self.memory.avoid_until[c] = now + 4 * self.persona.spy_cooldown_s
             self.stats["reports"] += 1
-            self.log("report", at=f"{c[0]}:{c[1]}:{c[2]}", loot=intel.loot, defenders=intel.defenders)
+            self.log("report", at=f"{c[0]}:{c[1]}:{c[2]}", loot=intel.loot, defenders=intel.defenders,
+                     strength=self.memory.opponents[c].get("strength"))
         return []
 
     def _read_battles(self, now: float) -> None:
@@ -558,6 +561,9 @@ class Agent:
             if b["role"] != "attacker":
                 continue
             self.memory.battles = (self.memory.battles + [{"at": now, **{k: b[k] for k in ("at", "my_loss", "their_loss", "loot")}, "verdict": verdict}])[-30:]
+            if b["coord"] and None not in b["coord"]:
+                rec = record_result(self.memory.opponents, tuple(b["coord"]), now, verdict, b["loot"] + b["their_loss"], b["my_loss"])
+                self.log("opponent", **opp_summary(tuple(b["coord"]), rec))
             if verdict == "bad":
                 self.stats["lessons"] += 1
                 self.memory.risk_scale = max(0.2, self.memory.risk_scale * 0.6)

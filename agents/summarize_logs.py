@@ -162,6 +162,21 @@ def summarize(events: list[dict], personas: dict[str, str] | None = None) -> str
         out.append("  none")
     out.append("")
 
+    out.append("OPPONENTS KNOWN (what raiders learned about their targets: our attacks, wins, losses, net result)")
+    latest: dict = {}
+    for e in events:
+        if e["event"] == "opponent":
+            latest[(e["agent"], e.get("at"))] = e
+    seen = {(e["agent"], e.get("at")): e for e in events if e["event"] == "report" and e.get("strength") is not None}
+    if latest:
+        for (agent, at), e in sorted(latest.items(), key=lambda kv: -kv[1].get("attacks", 0))[:10]:
+            strength = (seen.get((agent, at)) or {}).get("strength", e.get("strength"))
+            out.append(f"  {agent} on {at}: {e.get('attacks', 0)} attacks, {e.get('wins', 0)} won, {e.get('losses', 0)} lost, "
+                       f"net {e.get('net', 0):+,}; last seen strength {strength if strength is not None else '?'}")
+    else:
+        out.append("  none yet")
+    out.append("")
+
     out.append("FULL PLANETS (no free building fields)")
     full = Counter(e["agent"] for e in events if e["event"] == "wait" and "no free fields" in str(e.get("why", "")))
     heading = Counter(e["agent"] for e in events if e["event"] == "wait" and "free fields left" in str(e.get("why", "")))
