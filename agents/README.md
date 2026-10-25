@@ -144,6 +144,24 @@ owns a spare resource that can pay for the whole shortfall even at the worst rat
 The attack check assumes the defender has 1.5 times the units the spy report showed, sends the smallest fleet that is sure
 enough to win, and never risks fighters worth more than 4 times the loot.
 
+## Observatory
+
+```
+python observatory.py            (then open http://localhost:8080)
+```
+
+A read-only web page to watch the swarm, in four tabs: the **map** (systems where agents live, coloured by personality,
+colonies marked with a hole, battles of the last 6 hours ringed; hover a planet for its owner and the agent's latest
+news), **The Daily Ogame** (a newspaper written from the logs with fixed templates, the biggest event as headline: no
+language model and no network), a live **feed** (filter by agent, personality, kind or text) and a **leaderboard** (the
+game's highscore plus attacks, net loot and colonies counted from the logs).
+
+It never writes to the game or to the agents' files. It reads `logs/*.jsonl` and `agents_state.json` (only for one agent's
+token), and asks the game only for `GET /galaxy/..` and `GET /highscore` (at most about 4 requests a second). If the game
+cannot be reached the map and ranking say so and the rest keeps working. Options: `--port`, `--host` (default
+127.0.0.1: only this computer), `--logs`, `--state`, `--base-url`, `--galaxy`, `--refresh`, `--news-hours`. It can run
+next to the swarm and be started or stopped at any time.
+
 ## Not built yet
 
 Expeditions, the scrap merchant, alliances, recycling debris, fleet-saving, defending colonies, retaliation, and LLM-driven
