@@ -177,6 +177,29 @@ def summarize(events: list[dict], personas: dict[str, str] | None = None) -> str
         out.append("  none yet")
     out.append("")
 
+    out.append("CHARACTER CLASSES (chosen once by each agent)")
+    classes = {e["agent"]: e.get("chosen") for e in events if e["event"] == "class"}
+    refused = [e for e in events if e["event"] == "class_refused"]
+    if classes or refused:
+        for name in sorted(set(classes.values())):
+            out.append(f"  {name}: {', '.join(sorted(a for a, c in classes.items() if c == name))}")
+        for e in refused[:5]:
+            out.append(f"  {clock(e['t'])} {e['agent']} refused: {e.get('code')} {e.get('msg')}")
+    else:
+        out.append("  none in this period")
+    out.append("")
+
+    out.append("COLONIES (expand = wants one, sent = ship on its way, founded = new planet, failed = see why)")
+    colony = [e for e in events if e["event"] in ("expand", "colony_sent", "colony_founded", "colony_failed")]
+    if colony:
+        for e in colony[-25:]:
+            detail = e.get("why") or e.get("at") or ""
+            extra = f" at {e['at']}" if e.get("at") and e.get("why") else ""
+            out.append(f"  {clock(e['t'])} {e['agent']} {e['event']}: {detail}{extra}")
+    else:
+        out.append("  none")
+    out.append("")
+
     out.append("FULL PLANETS (no free building fields)")
     full = Counter(e["agent"] for e in events if e["event"] == "wait" and "no free fields" in str(e.get("why", "")))
     heading = Counter(e["agent"] for e in events if e["event"] == "wait" and "free fields left" in str(e.get("why", "")))

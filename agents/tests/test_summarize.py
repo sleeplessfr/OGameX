@@ -58,3 +58,23 @@ class SummarizeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ClassAndColonyReportTests(unittest.TestCase):
+    def test_report_lists_classes_and_colony_events(self):
+        events = [
+            {"t": 1000.0, "agent": "agent0001", "event": "class", "chosen": "collector"},
+            {"t": 1001.0, "agent": "agent0002", "event": "class", "chosen": "discoverer"},
+            {"t": 1002.0, "agent": "agent0002", "event": "expand", "why": "only 67 free fields on the home planet"},
+            {"t": 2000.0, "agent": "agent0002", "event": "colony_sent", "at": "1:3:9", "why": "position 9: about 198 fields"},
+            {"t": 3000.0, "agent": "agent0002", "event": "colony_founded", "planets": 2},
+        ]
+        text = sl.summarize(events)
+        self.assertIn("collector: agent0001", text)
+        self.assertIn("discoverer: agent0002", text)
+        self.assertIn("agent0002 colony_sent: position 9: about 198 fields at 1:3:9", text)
+        self.assertIn("agent0002 colony_founded", text)
+
+    def test_report_without_them_says_none(self):
+        text = sl.summarize([{"t": 1000.0, "agent": "agent0001", "event": "build", "what": "metal_mine"}])
+        self.assertIn("none in this period", text)
