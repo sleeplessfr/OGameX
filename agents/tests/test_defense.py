@@ -136,6 +136,20 @@ class AgentDefenseTests(unittest.TestCase):
         agent2.tick()
         self.assertLess(spent_on_probe, 60_000 - other.res["metal"])
 
+    def test_on_guard_after_a_recent_raid_it_rearms_without_any_fleet_in_sight(self):
+        # regression: the log line of a defence order used to assume a fleet was coming and crashed on min([])
+        self.game.advance(100)
+        self.agent.memory.aggressors[(1, 3, 7)] = self.game.now - 60     # robbed a minute ago
+        self.assertEqual(self.game.hostile, [])
+        stock = self.game.res["metal"]
+        self.agent.tick()
+        defend = self.events("defend")
+        self.assertEqual(len(defend), 1)
+        self.assertIn("on guard", defend[0]["why"])
+        self.assertEqual(self.agent.stats["errors"], 0)
+        self.assertGreater(defend[0]["amount"], 0)
+        self.assertLessEqual(defend[0]["amount"] * 500, stock * MINER.caution * 0.25)   # a quarter of the usual reaction (fake rocket launcher: 500 metal)
+
     def test_a_peaceful_persona_without_caution_does_nothing(self):
         self.agent.persona = replace(MINER, caution=0.0)
         self.game.hostile = [mission(7, "attack", left=60) | {"arrive_at": self.game.now + 60}]

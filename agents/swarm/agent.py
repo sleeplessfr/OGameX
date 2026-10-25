@@ -240,9 +240,12 @@ class Agent:
         for r in ("metal", "crystal", "deuterium"):
             have[r] = have.get(r, 0) - cost.get(r, 0) * amount
         self.stats["defences"] += amount
-        first = min(threats, key=lambda t: t.arrives_in)
-        self.log("defend", what=name, amount=amount,
-                 why=f"{first.kind} on its way from {':'.join(map(str, first.origin))}, arrives in {_r(first.arrives_in)} s")
+        if threats:
+            first = min(threats, key=lambda t: t.arrives_in)
+            why = f"{first.kind} on its way from {':'.join(map(str, first.origin))}, arrives in {_r(first.arrives_in)} s"
+        else:
+            why = "on guard after a recent raid: rearming"
+        self.log("defend", what=name, amount=amount, why=why)
 
     def _maybe_trade(self, planet: dict, choice, have: dict) -> bool:
         """Call the merchant when stuck waiting with a big surplus of something else (see trade.py). True = traded."""
