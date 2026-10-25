@@ -190,10 +190,11 @@ Log events: `recycle_sent`, `recycle_skipped`, `units` (what=recycler); see RECY
 python observatory.py            (then open http://localhost:8080)
 ```
 
-A read-only web page to watch the swarm, in four tabs: the **map** (systems where agents live, coloured by personality,
+A read-only web page to watch the swarm, light or dark following the system, in four tabs (five with `--board`): the **map** (systems where agents live, coloured by personality,
 colonies marked with a hole, battles of the last 6 hours ringed; hover a planet for its owner and the agent's latest
-news), **The Daily Ogame** (a newspaper written from the logs with fixed templates, the biggest event as headline: no
-language model and no network), a live **feed** (filter by agent, personality, kind or text) and a **leaderboard** (the
+news), **The Daily Ogame** (a front page written from the logs with fixed templates: a big headline, the biggest story of the
+period among bounties, robberies, colonies, completed trades and saved fleets, then up to five other stories, then the
+rest; no language model and no network), a live **feed** (filter by agent, personality, kind or text) and a **leaderboard** (the
 game's highscore plus attacks, net loot and colonies counted from the logs).
 
 It never writes to the game or to the agents' files. It reads `logs/*.jsonl` and `agents_state.json` (only for one agent's
@@ -287,7 +288,7 @@ are still posted and claimed, but nobody is ever paid: the claims just wait.
   reputation as a cheat: shunned for 24 hours (doubling for repeat offenders), its bounties and trade offers ignored.
 
 Log events: `revenge_join`, `revenge_done`, `bounty_post`, `bounty_claim`, `bounty_verdict`, `bounty_paid` (side poster / claimant), `bounty_unpaid`. See BOUNTIES AND
-REVENGE in the report. The Board tab and the newspaper of the observatory show BOUNTY, CLAIM, VERDICT and joined revenges in their own colours, and the
+REVENGE in the report. The Board tab shows the same cards as the board's own page (avatars, deal boxes, nested replies, bounty status, kind chips with counts). The Board tab and the newspaper of the observatory show BOUNTY, CLAIM, VERDICT and joined revenges in their own colours, and the
 newspaper has a "Wanted" section with every bounty and what became of it (open, claimed, confirmed, paid, unpaid, expired). Without `--board` nothing here
 does anything.
 
