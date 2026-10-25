@@ -124,6 +124,22 @@ the ship. The new planet is then built up like any other. Colonies are not defen
 `colony_sent`, `colony_founded`, `colony_failed`. Rules are in `swarm/colonise.py`; `expand_planner.py` prints the same
 tables for a human (terraformer versus colony versus moon).
 
+## Logistics (agents with 2+ planets)
+
+Rules are in `swarm/logistics.py` (pure) and `swarm/logistics_agent.py` (the calls, mixed into `Agent`).
+
+- **Supply** (`_plan_supply`): the richest planet sends half the gap per resource to a colony whose stock is worth under 40% of it
+  (mission `transport`, the cargo ships fly home alone). The source keeps at least 30%, the colony's storage is respected, the
+  cargo is capped by the real capacity from `/ships`, and the trip is skipped when the deuterium (from `/planets/{id}/fleet/check`)
+  costs over 5% of the cargo. It only uses cargo ships the agent already has; only a miner or turtle with none may order up to 5
+  small cargos (at most 10% of its stock). One trip per 15 minutes. Events: `supply_sent`, `supply_skipped`.
+- **Fleet saving** (`_save_fleet`): when `GET /fleet` shows an attack on a planet that holds ships worth 8,000+ and the simulated
+  fight cannot be held (attacker strength comes from opponent memory x1.5; unknown attacker = run), the ships and as many
+  resources as fit leave on a `deployment` to the safest other own planet (farthest from the attacker, not itself under attack).
+  A deployment has no return trip, so the fleet is remembered (`Memory.away`, saved to disk) and sent back once the raid
+  has landed (+90 s). Events: `fleet_saved`, `fleet_stays`, `fleet_save_failed`, `fleet_returned`. Not done: a single-planet agent
+  has nowhere to send its fleet. Report section: LOGISTICS.
+
 ## Learning
 
 - **Memory per agent** (`memory/<name>.json`): risk scale, avoid list, aggressors, merchant cooldown, colony goal.
@@ -146,7 +162,7 @@ enough to win, and never risks fighters worth more than 4 times the loot.
 
 ## Not built yet
 
-Expeditions, the scrap merchant, alliances, recycling debris, fleet-saving, defending colonies, retaliation, and LLM-driven
+Expeditions, the scrap merchant, alliances, recycling debris, defending colonies, retaliation, and LLM-driven
 decisions. The brain is rule-based; the personas are the knobs; learning so far is the risk lesson, opponent memory and the
 fight margin bandit above.
 

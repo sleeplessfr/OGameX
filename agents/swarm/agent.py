@@ -19,6 +19,7 @@ from .opponents import record_result, record_spy, summary as opp_summary
 from .personas import Persona
 from .defense import AGGRESSOR_MEMORY, GUARD_SECONDS, PEACE_WATCH_SECONDS, RECENT_RAID, ALERT_SECONDS, COOLDOWN_SECONDS as DEFEND_COOLDOWN, WATCH_SECONDS, choose_defense, defence_share, find_threats
 from .trade import COOLDOWN_SECONDS, choose_sale, plan_deal
+from .logistics_agent import LogisticsMixin
 
 
 # When an agent is stuck with nothing to do and no idea how long it will take, look again after this long.
@@ -50,7 +51,7 @@ class TokenStore:
             tmp.replace(self.path)
 
 
-class Agent:
+class Agent(LogisticsMixin):
     def __init__(
         self, name: str, persona: Persona, base_url: str, store: TokenStore, rng: random.Random,
         *, log_dir: str | None = None, email_domain: str = "example.com", client: ApiClient | None = None,
@@ -171,6 +172,7 @@ class Agent:
             hints.append(GUARD_SECONDS)   # robbed recently: the raider will come back
         else:
             hints.append(PEACE_WATCH_SECONDS)
+        hints += self._save_fleet(status, planets, threats)   # logistics: dodge a raid we cannot win, bring the fleet home later
 
         for planet in planets:
             have = dict(planet["resources"])
@@ -182,6 +184,7 @@ class Agent:
                 hints += self._plan_research(planet, have, research_queue, goals=goal_research)
                 hints += self._plan_military(status, planet, have, self._economy_saving)
                 hints += self._plan_colony(status, planet, have, goal_research)
+        hints += self._plan_supply(status, planets)   # logistics: feed a starved colony from the richest planet
 
         return self._sleep_time(hints)
 

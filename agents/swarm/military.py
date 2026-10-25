@@ -51,6 +51,8 @@ class Memory:
     colony_sent_at: float = 0.0        # server time a colony ship left (0 = none on its way)
     colony_planets_before: int = 0     # planets owned when it left, to see whether it worked
     colony_until: float = 0.0          # no new colony attempt before this server time
+    supply_next_at: float = 0.0        # no new supply trip between own planets before this server time (logistics.py)
+    away: list = field(default_factory=list)  # fleets sent to another own planet to dodge a raid, still to be brought home
 
     # Saved to disk so a restart does not make the agent forget (JSON cannot have tuple keys, so coordinates become "g:s:p").
     _COORD_MAPS = ("spied", "attacked", "pending", "intel", "avoid_until", "aggressors", "opponents", "arm_for")
@@ -59,7 +61,8 @@ class Memory:
         out: dict = {"need_cargo": self.need_cargo, "risk_scale": self.risk_scale, "battles": self.battles,
                      "trade_cooldown_until": self.trade_cooldown_until, "expanding": self.expanding, "class_done": self.class_done,
                      "colony_sent_at": self.colony_sent_at, "colony_planets_before": self.colony_planets_before,
-                     "colony_until": self.colony_until, "bandit": self.bandit.to_dict()}
+                     "colony_until": self.colony_until, "bandit": self.bandit.to_dict(),
+                     "supply_next_at": self.supply_next_at, "away": self.away}
         for name in self._COORD_MAPS:
             out[name] = {":".join(map(str, c)): v for c, v in getattr(self, name).items()}
         return out
@@ -95,6 +98,12 @@ class Memory:
             m.colony_planets_before = int(data.get("colony_planets_before", 0))
         except (TypeError, ValueError):
             pass
+        try:
+            m.supply_next_at = float(data.get("supply_next_at", 0.0))
+        except (TypeError, ValueError):
+            pass
+        away = data.get("away")
+        m.away = [a for a in away if isinstance(a, dict)] if isinstance(away, list) else []
         m.bandit = Bandit.from_dict(data.get("bandit"))
         battles = data.get("battles")
         m.battles = battles if isinstance(battles, list) else []
