@@ -432,6 +432,14 @@ class Agent(LogisticsMixin):
     def _colony_goals(self, status: dict, home: dict) -> tuple[dict | None, dict | None]:
         """Decide whether to found a colony and, if so, which levels the home planet must reach first."""
         m = self.memory
+        b2, r2 = recycle.goals(self.persona, m.debris, self.now, status["research"].get("levels") or {})
+        b1, r1 = self._colony_goals_only(status, home)
+        if b1 is None and not (b2 or r2):
+            return None, None
+        return {**(b2 or {}), **(b1 or {})}, {**(r2 or {}), **(r1 or {})}
+
+    def _colony_goals_only(self, status: dict, home: dict) -> tuple[dict | None, dict | None]:
+        m = self.memory
         if m.colony_sent_at or self.persona.expansion <= 0:
             return None, None
         if not m.expanding:

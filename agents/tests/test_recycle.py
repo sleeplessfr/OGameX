@@ -252,3 +252,21 @@ class AgentInTheFakeGameTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RecycleGoalsTest(unittest.TestCase):
+    def test_a_fighter_with_debris_aims_for_the_recycler_techs(self):
+        persona = PRESETS["raider"]
+        fields = {(1, 2, 3): {"at": 100.0, "amount": 50000, "sent_until": 0}}
+        b, r = recycle.goals(persona, fields, 200.0, {"combustion_drive": 6})
+        self.assertEqual(b, {"shipyard": 4})
+        self.assertEqual(r, {"shielding_technology": 2})
+
+    def test_no_debris_no_goals(self):
+        persona = PRESETS["raider"]
+        self.assertEqual(recycle.goals(persona, {}, 0.0, {}), ({}, {}))
+
+    def test_a_peaceful_agent_has_none(self):
+        persona = PRESETS["turtle"]
+        fields = {(1, 2, 3): {"at": 100.0, "amount": 500000, "sent_until": 0}}
+        self.assertEqual(recycle.goals(persona, fields, 200.0, {}), ({}, {}))

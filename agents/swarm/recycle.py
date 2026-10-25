@@ -149,3 +149,15 @@ def after_sending(fields: dict, coord: Coord, sent_cargo: int, now: float, round
     info["sent_until"] = now + round_trip_s + RESEND_MARGIN
     if info["amount"] < MIN_DEBRIS:
         del fields[coord]
+
+
+RECYCLER_RESEARCH = (("combustion_drive", 6), ("shielding_technology", 2))
+RECYCLER_SHIPYARD = 4
+
+
+def goals(persona: Persona, fields: dict, now: float, research_levels: dict) -> tuple[dict, dict]:
+    """(buildings, research) a fighting agent works towards once enough debris has been seen to justify recyclers."""
+    if not fights(persona) or remembered_total(fields, now) < MIN_BUY_DEBRIS:
+        return {}, {}
+    research = {n: lv for n, lv in RECYCLER_RESEARCH if int(research_levels.get(n, 0) or 0) < lv}
+    return {"shipyard": RECYCLER_SHIPYARD}, research
