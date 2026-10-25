@@ -312,6 +312,7 @@ class MemorySaveTests(unittest.TestCase):
         m.spied[(1, 2, 3)] = 100.0
         m.intel[(1, 2, 3)] = {"at": 100.0, "loot": 5000, "defenders": 4, "owner_id": 7, "skip_until": 900.0}
         m.avoid_until[(1, 4, 9)] = 777.0
+        m.aggressors[(1, 3, 7)] = 555.0
         m.risk_scale = 0.36
         m.need_cargo = True
         m.battles.append({"profit": -5})

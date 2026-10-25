@@ -13,6 +13,7 @@ from .combat import tech_from_research
 from .military import (Memory, build_strike, can_carry_enough, carrying_capacity, judge_fight, judge_trade, summarize_battle, choose_units, coord_of, pick_attack, pick_target, summarize_report)
 from .client import ApiClient, ApiError
 from .personas import Persona
+from .defense import AGGRESSOR_MEMORY, ALERT_SECONDS, COOLDOWN_SECONDS as DEFEND_COOLDOWN, WATCH_SECONDS, choose_defense, defence_share, find_threats
 from .trade import COOLDOWN_SECONDS, choose_sale, plan_deal
 
 
@@ -70,9 +71,12 @@ class Agent:
         self._economy_saving = False
         self._last_battle_check = -1e12
         self.my_tech = None  # (weapons, shields, armour) levels, from /status
+        self.alert_until = 0.0           # server time until which a hostile fleet keeps us alert
+        self.defend_cooldown_until = 0.0
+        self._seen_threats: set[int] = set()
         self.dark_matter = 0     # from /status each round
         self.now = 0.0           # server time of the current round
-        self.stats = {"trades": 0, "ticks": 0, "builds": 0, "researches": 0, "refused": 0, "errors": 0,
+        self.stats = {"threats": 0, "defences": 0, "trades": 0, "ticks": 0, "builds": 0, "researches": 0, "refused": 0, "errors": 0,
                       "spies": 0, "reports": 0, "attacks": 0, "units": 0, "battles": 0, "lessons": 0}
 
     # ---- memory on disk ------------------------------------------------------------------------------
@@ -141,7 +145,8 @@ class Agent:
         status = self.client.get("/status")
         hints: list[float] = []
         self.dark_matter = int(status["player"].get("dark_matter") or 0)
-        self.now = float(status.get("server_time") or time.time())
+        server_time = status.get("server_time")
+        self.now = time.time() if server_time is None else float(server_time)
         research_queue = status["research"]["queue"]
         planets = [p for p in status["planets"] if p["type"] == "planet"]
         if not planets:
@@ -151,8 +156,14 @@ class Agent:
         home = next((p for p in planets if p["id"] == status["player"]["current_planet_id"]), planets[0])
         research_busy = bool(research_queue)
 
+        threats = self._watch()
+        if self.now < self.alert_until:
+            hints.append(WATCH_SECONDS)   # someone hostile is about: look often
+
         for planet in planets:
             have = dict(planet["resources"])
+            if planet is home:
+                self._prepare_defense(home, have, threats)   # before the economy spends the stock the raider is after
             self._economy_saving = False
             hints += self._plan_buildings(planet, have, research_busy)
             if planet is home:
@@ -178,6 +189,52 @@ class Agent:
                 return [5.0]  # we just got what was missing: look again at once
             return [choice.wait_seconds if choice.wait_seconds else IDLE_RECHECK]
         return self._act("build", planet, choice, data["buildings"], have, f"/planets/{planet['id']}/buildings")
+
+    # ---- defence -------------------------------------------------------------------------------------
+    def _watch(self) -> list:
+        """Foreign fleets heading for us. A hostile one keeps the agent alert for a while."""
+        try:
+            missions = self.client.get("/fleet").get("missions", [])
+        except ApiError:
+            return []
+        threats = find_threats(missions)
+        for t in threats:
+            if t.id not in self._seen_threats:
+                self._seen_threats.add(t.id)
+                self.stats["threats"] += 1
+                self.log("threat", kind=t.kind, mission=t.id, **{"from": ":".join(map(str, t.origin))}, arrives_in=_r(t.arrives_in))
+        for t in threats:
+            if t.is_attack:
+                self.memory.aggressors[t.origin] = self.now
+        if threats:
+            self.alert_until = self.now + ALERT_SECONDS
+        return threats
+
+    def _prepare_defense(self, home: dict, have: dict, threats: list) -> None:
+        """Turn part of the stock into defence units before the fleet lands: it would be stolen otherwise."""
+        known = {c for c, when in self.memory.aggressors.items() if self.now - when < AGGRESSOR_MEMORY}
+        share = defence_share(self.persona, threats, known)
+        if share <= 0 or self.now < self.defend_cooldown_until or home["unit_queue"]:
+            return
+        units = self.client.get(f"/planets/{home['id']}/units")["units"]
+        pick = choose_defense(self.persona, units, have, share)
+        if pick is None:
+            return
+        name, amount = pick
+        self.defend_cooldown_until = self.now + DEFEND_COOLDOWN
+        try:
+            self.client.post(f"/planets/{home['id']}/units", {"machine_name": name, "amount": amount})
+        except ApiError as e:
+            self.stats["refused"] += 1
+            self.log("units_refused", what=name, code=e.code, msg=e.message[:100])
+            return
+        cost = next(u["cost_per_unit"] for u in units if u["machine_name"] == name)
+        for r in ("metal", "crystal", "deuterium"):
+            have[r] = have.get(r, 0) - cost.get(r, 0) * amount
+        self.stats["defences"] += amount
+        first = min(threats, key=lambda t: t.arrives_in)
+        self.log("defend", what=name, amount=amount,
+                 why=f"{first.kind} on its way from {':'.join(map(str, first.origin))}, arrives in {_r(first.arrives_in)} s")
 
     def _maybe_trade(self, planet: dict, choice, have: dict) -> bool:
         """Call the merchant when stuck waiting with a big surplus of something else (see trade.py). True = traded."""

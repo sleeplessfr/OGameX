@@ -36,10 +36,11 @@ class Memory:
     need_cargo: bool = False   # a worthwhile target had to be skipped because the fleet cannot carry enough loot
     risk_scale: float = 1.0    # learned caution: shrinks after costly defeats, recovers slowly after profitable raids
     battles: list[dict] = field(default_factory=list)  # recent results of own attacks (newest last, capped)
+    aggressors: dict[Coord, float] = field(default_factory=dict)  # planets that attacked us (when we last saw one coming)
     trade_cooldown_until: float = 0.0  # no new merchant call before this server time (dark matter is scarce)
 
     # Saved to disk so a restart does not make the agent forget (JSON cannot have tuple keys, so coordinates become "g:s:p").
-    _COORD_MAPS = ("spied", "attacked", "pending", "intel", "avoid_until")
+    _COORD_MAPS = ("spied", "attacked", "pending", "intel", "avoid_until", "aggressors")
 
     def to_dict(self) -> dict:
         out: dict = {"need_cargo": self.need_cargo, "risk_scale": self.risk_scale, "battles": self.battles,

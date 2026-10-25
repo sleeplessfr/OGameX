@@ -23,6 +23,7 @@ class Persona:
     tick_seconds: float = 45.0  # typical pause between two looks at the game when nothing is pending
     research_share: float = 1.0  # 0..1 how keen the agent is to research at all
     max_save_seconds: float = 3600.0  # never save up for longer than this; buy something else instead
+    caution: float = 0.0        # 0..1 share of the stock turned into defence when a hostile fleet is on its way
     # --- military / social traits (all default to "peaceful") ---
     aggression: float = 0.0      # 0..1 chance to attack when a good target is found (0 = never attacks)
     scout_interest: float = 0.0  # 0..1 chance to send spy probes at a neighbour when idle
@@ -49,7 +50,7 @@ PRESETS: dict[str, Persona] = {
         "miner", "Pure economy: mines first, research only when rich.",
         {**ECONOMY, "metal_mine": 4.0, "crystal_mine": 3.0, "robot_factory": 1.5, "research_lab": 0.6, "shipyard": 0.2},
         {"energy_technology": 1.0, "computer_technology": 0.5, "combustion_drive": 0.2},
-        balance=0.8, patience=0.85, research_share=0.4, tick_seconds=60, max_save_seconds=1800,
+        balance=0.8, patience=0.85, research_share=0.4, tick_seconds=60, max_save_seconds=1800, caution=0.6,
         aggression=0.05, scout_interest=0.1, army_share=0.05, unit_weights={"small_cargo": 1.0, "espionage_probe": 1.0},
         probes_wanted=1, min_loot=2000, risk_ratio=0.3, max_target_ratio=0.8),
     "scientist": Persona(
@@ -58,7 +59,7 @@ PRESETS: dict[str, Persona] = {
         {"energy_technology": 3.0, "computer_technology": 2.0, "laser_technology": 2.0, "ion_technology": 1.2,
          "hyperspace_technology": 1.5, "espionage_technology": 1.0, "combustion_drive": 1.0,
          "impulse_drive": 1.0, "astrophysics": 1.5, "plasma_technology": 1.0},
-        balance=1.2, patience=0.6, research_share=1.0, tick_seconds=45, max_save_seconds=7200,
+        balance=1.2, patience=0.6, research_share=1.0, tick_seconds=45, max_save_seconds=7200, caution=0.5,
         aggression=0.0, scout_interest=0.4, army_share=0.1, unit_weights={"espionage_probe": 3.0, "small_cargo": 1.0},
         probes_wanted=3, probes_per_spy=2, spy_cooldown_s=7200),
     "turtle": Persona(
@@ -67,7 +68,7 @@ PRESETS: dict[str, Persona] = {
          "shipyard": 1.0},
         {"shielding_technology": 2.0, "armor_technology": 2.0, "energy_technology": 1.5, "weapon_technology": 0.8,
          "computer_technology": 1.0},
-        balance=1.5, patience=0.9, store_alarm=0.75, research_share=0.7, tick_seconds=75, max_save_seconds=7200,
+        balance=1.5, patience=0.9, store_alarm=0.75, research_share=0.7, tick_seconds=75, max_save_seconds=7200, caution=0.9,
         aggression=0.0, scout_interest=0.05, army_share=0.3,
         unit_weights={"rocket_launcher": 3.0, "light_laser": 2.0, "heavy_laser": 1.0, "small_shield_dome": 1.0,
                       "espionage_probe": 0.5},
@@ -77,7 +78,7 @@ PRESETS: dict[str, Persona] = {
         {**ECONOMY, "shipyard": 3.5, "robot_factory": 2.0, "deuterium_synthesizer": 2.5, "research_lab": 1.5},
         {"combustion_drive": 3.0, "impulse_drive": 2.0, "weapon_technology": 2.0, "armor_technology": 1.5,
          "shielding_technology": 1.0, "espionage_technology": 2.0, "energy_technology": 1.0},
-        balance=0.7, randomness=0.35, patience=0.4, research_share=0.8, tick_seconds=30, max_save_seconds=900,
+        balance=0.7, randomness=0.35, patience=0.4, research_share=0.8, tick_seconds=30, max_save_seconds=900, caution=0.3,
         aggression=0.85, scout_interest=0.8, army_share=0.5,
         unit_weights={"light_fighter": 3.0, "cruiser": 2.0, "heavy_fighter": 1.5, "small_cargo": 1.5, "large_cargo": 1.0,
                       "espionage_probe": 1.0},
@@ -88,7 +89,7 @@ PRESETS: dict[str, Persona] = {
         dict(ECONOMY),
         {"energy_technology": 2.0, "computer_technology": 1.5, "laser_technology": 1.0, "combustion_drive": 1.0,
          "espionage_technology": 0.8, "weapon_technology": 0.6, "armor_technology": 0.6, "shielding_technology": 0.6},
-        balance=1.0, patience=0.65, research_share=0.7, tick_seconds=45,
+        balance=1.0, patience=0.65, research_share=0.7, tick_seconds=45, caution=0.5,
         aggression=0.3, scout_interest=0.4, army_share=0.2,
         unit_weights={"light_fighter": 1.0, "small_cargo": 1.0, "espionage_probe": 1.0, "rocket_launcher": 1.0},
         probes_wanted=2, risk_ratio=0.6, min_loot=800),
@@ -114,4 +115,6 @@ def make_persona(index: int, rng: random.Random, names: list[str] | None = None)
         aggression=min(1.0, max(0.0, base.aggression * rng.uniform(0.8, 1.2))),
         unit_weights=jitter(base.unit_weights),
         risk_ratio=max(0.05, base.risk_ratio * rng.uniform(0.8, 1.25)),
+        # drawn LAST, so that adding it did not change any earlier draw: existing agents keep their personalities
+        caution=min(1.0, max(0.0, base.caution + rng.uniform(-0.15, 0.15))) if base.caution > 0 else 0.0,
     )

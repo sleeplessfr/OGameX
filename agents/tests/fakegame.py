@@ -48,6 +48,7 @@ class FakeGame:
                         "ships": {"small_cargo": 1}, "defense": {"rocket_launcher": 0}}]
         self.attacks_resolved = 0
         self.dark_matter = 8000
+        self.hostile: list[dict] = []   # foreign fleets heading for us, as GET /fleet shows them
         self.merchant: dict | None = None   # {"type", "receive": {res: {"rate", "per_unit_given"}}}
         self.merchant_quality = 0.9         # share of the fair value the merchant pays
         self.trades_done = 0
@@ -166,6 +167,8 @@ class FakeGame:
         url = urlparse(path)
         q = {k: v[0] for k, v in parse_qs(url.query).items()}
         route = url.path
+        if route == "/fleet":
+            return {"missions": [dict(m, seconds_remaining=max(0, m["arrive_at"] - self.now)) for m in self.hostile]}
         if route == "/merchant":
             return self._merchant_state()
         if route == "/planets/10/units":

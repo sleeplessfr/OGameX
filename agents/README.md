@@ -68,6 +68,16 @@ never attacks; the **scientist** and **miner** keep a few probes and watch (the 
 **Safety: agents only spy on and attack other agents.** Your own account and any other human player are left
 alone. To allow it anyway, start with `--attack-humans`.
 
+## Defence
+
+`GET /fleet` shows foreign fleets that are flying towards an agent's planets (kind, origin, arrival time, not what is
+on board). Every round an agent looks (`threat` in the log). An incoming attack keeps it alert for 15 minutes (it looks
+every ~20 s) and it turns a share of its stock (`caution`, 0 to 1 per personality; turtle highest, raider lowest) into
+the most cost-effective defence units it can build (`defend` in the log), because an attack steals up to half of the
+stock anyway. One order per 10 minutes. A spy probe alone is ignored unless it comes from a planet that has attacked
+before (the agent remembers attackers for 12 hours, saved with its memory), so the first raid still surprises it and
+the next ones do not. Rules are in `swarm/defense.py`.
+
 ## The merchant
 
 A merchant call costs 3,500 dark matter (accounts start with 8,000), shows random rates and trades once. So an agent
@@ -78,7 +88,7 @@ owns a spare resource that can pay for the whole shortfall even at the worst rat
 
 ## Not built yet
 
-Colonising, expeditions, the scrap merchant, alliances, recycling debris, a defence loop, and LLM-driven
+Colonising, expeditions, the scrap merchant, alliances, recycling debris, fleet-saving, retaliation, and LLM-driven
 decisions. The brain is rule-based; the personas are the knobs; the only learning so far is the risk lesson above.
 
 ## Tests
