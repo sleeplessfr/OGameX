@@ -216,6 +216,36 @@ def summarize(events: list[dict], personas: dict[str, str] | None = None) -> str
         out.append("  none")
     out.append("")
 
+    out.append("EXPEDITIONS (sent, what came back, net resources and dark matter found, ships found and lost)")
+    exp_events = [e for e in events if e["event"] in ("expedition_sent", "expedition_result", "expedition_refused")]
+    if exp_events:
+        for a in sorted({e["agent"] for e in exp_events}):
+            mine = [e for e in exp_events if e["agent"] == a]
+            results = [e for e in mine if e["event"] == "expedition_result"]
+            outcomes = Counter(e.get("outcome", "other") for e in results)
+            found = {r: sum(int(e.get(r) or 0) for e in results) for r in ("metal", "crystal", "deuterium", "dark_matter")}
+            ships_found: Counter = Counter()
+            ships_lost: Counter = Counter()
+            for e in results:
+                ships_found.update({k: int(v) for k, v in (e.get("ships") or {}).items()})
+                ships_lost.update({k: int(v) for k, v in (e.get("lost") or {}).items()})
+            lost_value = sum(int(e.get("lost_value") or 0) for e in results)
+            gained = found["metal"] + found["crystal"] + found["deuterium"]
+            sent = sum(1 for e in mine if e["event"] == "expedition_sent")
+            refused = sum(1 for e in mine if e["event"] == "expedition_refused")
+            out.append(f"  {a}: {sent} sent, {len(results)} reports"
+                       + (f", {refused} refused" if refused else "")
+                       + (": " + ", ".join(f"{k} {v}" for k, v in outcomes.most_common()) if outcomes else ""))
+            out.append(f"    found metal {found['metal']:,}, crystal {found['crystal']:,}, deuterium {found['deuterium']:,}, "
+                       f"dark matter {found['dark_matter']:,}; ships lost worth {lost_value:,}; net resources {gained - lost_value:+,}")
+            if ships_found:
+                out.append("    ships found: " + ", ".join(f"{n} {k}" for k, n in sorted(ships_found.items())))
+            if ships_lost:
+                out.append("    ships lost: " + ", ".join(f"{n} {k}" for k, n in sorted(ships_lost.items())))
+    else:
+        out.append("  none")
+    out.append("")
+
     out.append("FULL PLANETS (no free building fields)")
     full = Counter(e["agent"] for e in events if e["event"] == "wait" and "no free fields" in str(e.get("why", "")))
     heading = Counter(e["agent"] for e in events if e["event"] == "wait" and "free fields left" in str(e.get("why", "")))

@@ -78,3 +78,30 @@ class ClassAndColonyReportTests(unittest.TestCase):
     def test_report_without_them_says_none(self):
         text = sl.summarize([{"t": 1000.0, "agent": "agent0001", "event": "build", "what": "metal_mine"}])
         self.assertIn("none in this period", text)
+
+
+class ExpeditionReportTests(unittest.TestCase):
+    def test_report_counts_outcomes_resources_and_losses(self):
+        events = [
+            {"t": 1000.0, "agent": "agent0001", "event": "expedition_sent", "ships": {"small_cargo": 4}},
+            {"t": 1100.0, "agent": "agent0001", "event": "expedition_result", "outcome": "resources", "metal": 12000},
+            {"t": 1200.0, "agent": "agent0001", "event": "expedition_sent", "ships": {"small_cargo": 4}},
+            {"t": 1300.0, "agent": "agent0001", "event": "expedition_result", "outcome": "ships", "ships": {"small_cargo": 3}},
+            {"t": 1400.0, "agent": "agent0001", "event": "expedition_sent", "ships": {"small_cargo": 4}},
+            {"t": 1500.0, "agent": "agent0001", "event": "expedition_result", "outcome": "loss", "lost": {"small_cargo": 4}, "lost_value": 4000},
+            {"t": 1600.0, "agent": "agent0001", "event": "expedition_result", "outcome": "dark_matter", "dark_matter": 150},
+            {"t": 1700.0, "agent": "agent0001", "event": "expedition_refused", "code": "mission_rejected"},
+        ]
+        text = sl.summarize(events)
+        self.assertIn("EXPEDITIONS", text)
+        self.assertIn("agent0001: 3 sent, 4 reports, 1 refused: resources 1, ships 1, loss 1, dark_matter 1", text)
+        self.assertIn("found metal 12,000", text)
+        self.assertIn("dark matter 150", text)
+        self.assertIn("ships lost worth 4,000", text)
+        self.assertIn("net resources +8,000", text)
+        self.assertIn("ships found: 3 small_cargo", text)
+        self.assertIn("ships lost: 4 small_cargo", text)
+
+    def test_no_expeditions_says_none(self):
+        text = sl.summarize([{"t": 1000.0, "agent": "a", "event": "build", "what": "metal_mine"}])
+        self.assertIn("EXPEDITIONS", text)
