@@ -489,8 +489,14 @@ def make_handler(observatory: Observatory):
     return Handler
 
 
+class _Server(ThreadingHTTPServer):
+    # On Windows the default (allow_reuse_address) lets a second program share a busy port without any error, and the
+    # browser then talks to the OTHER program. Refuse a busy port instead.
+    allow_reuse_address = False
+
+
 def serve(observatory: Observatory, host: str = "127.0.0.1", port: int = 8080) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer((host, port), make_handler(observatory))
+    return _Server((host, port), make_handler(observatory))
 
 
 def scan_loop(observatory: Observatory, stop: threading.Event) -> None:
