@@ -13,7 +13,8 @@ python run_swarm.py --count 5
 
 - `--count N` any number of agents. Each gets its own account, planet and personality.
 - `--personas miner,raider` limit / reorder the personalities (default: all, in rotation).
-  Available: `miner`, `scientist`, `turtle`, `raider`, `balanced`. Every agent's weights are randomly nudged,
+  Available: `miner`, `scientist`, `turtle`, `raider`, `balanced` (handed out in this order by default) and `trader`
+  (only with `--personas`, see the galaxy board below). Every agent's weights are randomly nudged,
   so two "miners" are never identical. Same `--seed` = same personalities.
 - `--max-rate 12` most requests per second all agents together send (default 4). Raise it with more agents, together with
   `OGAMEX_API_RATE_LIMIT` in the game's `.env` (default 300 per minute per account).
@@ -201,9 +202,53 @@ cannot be reached the map and ranking say so and the rest keeps working. Options
 127.0.0.1: only this computer), `--logs`, `--state`, `--base-url`, `--galaxy`, `--refresh`, `--news-hours`. It can run
 next to the swarm and be started or stopped at any time.
 
+## Galaxy board and trading (optional)
+
+A small notice board where agents leave short messages for each other, so rule-based agents can react to each other
+without any language model. It is a **separate program** and **off by default**: nothing changes unless you start it and pass
+`--board`.
+
+```
+python board.py                                   (terminal 1: http://127.0.0.1:8765, posts saved in board.jsonl)
+python run_swarm.py --count 6 --personas miner,turtle,raider,trader --board http://localhost:8765
+python observatory.py --board http://localhost:8765   (optional: adds a Board tab and a newspaper section)
+```
+
+Posts have a kind: `OFFER`, `WANT`, `BOUNTY`, `WARNING`, `REVENGE`, `TAUNT`, `ALLIANCE`, a text of at most 200 characters and a small
+`data` object. `POST /post`, `GET /posts?since=<id>&kind=OFFER,WANT&limit=50`, `GET /health` (JSON). Safety: it listens on 127.0.0.1 only
+and refuses other peers, posts expire (30 min to 12 h by kind, at most a day), only the newest 2,000 are kept, every agent may post
+20 times an hour (agents limit themselves to 6), request bodies are capped. The client (`swarm/boardclient.py`) has a 2 second timeout
+and, after a failure, does not try again for a minute: **if the board is down the agents behave exactly as they did without it.**
+If it was not reachable when the swarm started, the agents simply start using it once it is up.
+
+What agents do with it (rules in `swarm/social.py`, calls in `swarm/social_agent.py`):
+
+- **Robbed -> WARNING and REVENGE.** An agent that reads a battle report in which it was robbed (loot or losses of 1,000 or more)
+  posts the raider's player id and the coordinates the fleet came from (seen in `/fleet`, kept in `Memory.aggressors`), plus the
+  strength opponent memory has for that planet. Once per 30 minutes. Every personality of the default rotation reads battle reports; the trader keeps one probe for that.
+- **Warnings raise the guard.** A careful, peaceful agent (caution 0.5+, aggression 0.2 or less: miner, scientist, turtle, trader) that reads
+  a fresh WARNING/REVENGE about a raider or victim within 25 systems puts the raider on its aggressor list as if it had hit 90
+  minutes ago: it looks every minute and keeps rearming for the next 90 minutes, and a probe from that planet counts as a threat.
+- **The trader** (persona `trader`: steady economy, `collector` class, builds up to 5 small cargos if it has none) swaps a surplus for what it lacks
+  with **other agents only**. Its target mix is 50% metal, 30% crystal, 20% deuterium (by value). When one resource is far above and another far
+  below, it posts an OFFER/WANT (a tenth of the surplus at the 3:2:1 reference prices of the merchant, asking 3% more than fair) and answers
+  anybody else's fair offer. Goods go by `transport` in four instalments, **tit-for-tat**: whoever answers sends first, one small instalment
+  on credit; each side sends the next only after the previous one has really arrived (the game's `transport_received` message names what
+  came). Whoever has not paid back after the flight time twice plus 30 minutes is a cheat: `trade_cheated`, shunned for 24 hours (doubling
+  for repeat offenders, up to 8 days), and its offers are ignored. Partners who paid before get bigger instalments (three instead of four).
+  Reputation is saved in the agent's memory (`memory/<name>.json`, key `social`).
+- **Caps so nobody can be drained:** a deal is at most 10% of the stock of the resource given; goods out and not yet paid for, over all deals,
+  are at most 10% of the stock's value; two deals at a time; deals under 3,000 metal-equivalents are not made; no new flight while under
+  attack; the recipient must be one of your agents (it is in `agents_state.json`, its user id matches and the coordinates are its main
+  planet in the ranking's first 100), never a human player or your own account.
+
+Log events: `board_post`, `board_read`, `trade_offer` (action posted / answered / accepted / done / skipped / refused), `trade_sent`,
+`trade_received`, `trade_cheated`, `board_error`. See BOARD AND TRADE in the report. The default rotation of personalities is unchanged
+(the trader is not in it), and adding it did not change anybody else's random draws.
+
 ## Not built yet
 
-The scrap merchant, alliances, moons (sensor phalanx, jump gate), defending colonies, retaliation, and LLM-driven
+The scrap merchant, alliances (the board has an ALLIANCE kind but no agent uses it yet), bounties, moons (sensor phalanx, jump gate), defending colonies, retaliation, and LLM-driven
 decisions. The brain is rule-based; the personas are the knobs; learning so far is the risk lesson, opponent memory and the
 fight margin bandit above.
 
