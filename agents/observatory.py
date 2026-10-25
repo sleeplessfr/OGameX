@@ -153,6 +153,24 @@ def describe(e: dict) -> str:
         return f"received {_res(g('resources'))} from {g('partner')}"
     if k == "trade_cheated":
         return f"was cheated by {g('partner')} (owed {num(g('owed')):,}); shunned"
+    if k == "revenge_join":
+        return f"joined {g('victim')}'s call for revenge against {g('raider_at')}"
+    if k == "revenge_done":
+        return f"revenge on {g('raider_at')} is over (looted {num(g('loot')):,})"
+    if k == "bounty_post":
+        return f"put a bounty of {_res(g('reward'))} on the raider at {g('target')}"
+    if k == "bounty_claim":
+        return f"claimed bounty {g('bounty')} after a raid on {g('at')} (loot {num(g('loot')):,})"
+    if k == "bounty_verdict":
+        return f"the referee {'confirmed' if g('ok') else 'rejected'} the claim on bounty {g('bounty')}: {str(g('why', ''))[:80]}"
+    if k == "bounty_paid":
+        if g("side") == "poster":
+            return f"paid the bounty {_res(g('resources'))} to {g('to')}"
+        return f"was paid the bounty {_res(g('resources'))} by {g('poster')}"
+    if k == "bounty_unpaid":
+        if g("side") == "poster":
+            return f"could not pay bounty {g('bounty')} to {g('claimant')}: {str(g('why', ''))[:60]}"
+        return f"was never paid bounty {g('bounty')} by {g('poster')}; shunned"
     if k == "lesson":
         return str(g("why", "learned a lesson"))
     if k == "class":
@@ -233,6 +251,18 @@ def articles_from(events: list[dict], owner_of=None) -> list[dict]:
         elif k == "trade_cheated":
             out.append(dict(t=t, kind="trade", score=max(20_000, num(e.get("owed"))), title=f"{a} is cheated by {e.get('partner')}",
                             text=f"{a} sent goods and got nothing back from {e.get('partner')} (owed {num(e.get('owed')):,}). The cheat is shunned from now on."))
+        elif k == "bounty_post":
+            out.append(dict(t=t, kind="bounty", score=max(15_000, num(e.get("value"))), title=f"{a} puts a price on a raider",
+                            text=f"WANTED: the raider at {e.get('target')}. {a} offers {_res(e.get('reward'))} to whoever hits it, paid after the referee confirms."))
+        elif k == "bounty_paid" and e.get("side") == "poster":
+            out.append(dict(t=t, kind="bounty", score=max(15_000, num(e.get("value"))), title=f"{a} pays a bounty",
+                            text=f"{a} sent {_res(e.get('resources'))} to {e.get('to')} for a confirmed raid. A debt honoured."))
+        elif k == "bounty_unpaid" and e.get("side") == "claimant":
+            out.append(dict(t=t, kind="bounty", score=40_000, title=f"{a} is never paid",
+                            text=f"The referee confirmed {a}'s claim on bounty {e.get('bounty')}, but {e.get('poster')} never paid. {e.get('poster')} is shunned."))
+        elif k == "revenge_join":
+            out.append(dict(t=t, kind="revenge", score=25_000, title=f"{a} joins a revenge",
+                            text=f"{a} answers {e.get('victim')}'s call and sets out after the raider at {e.get('raider_at')}."))
         elif k == "lesson":
             out.append(dict(t=t, kind="lesson", score=50_000, title=f"{a} learns the hard way",
                             text=f"{e.get('why')}."))
@@ -388,7 +418,7 @@ class Universe:
 
 # ---- the galaxy board (read only) ---------------------------------------------------------------------
 BOARD_KEEP = 200            # posts shown
-NOTICE_KINDS = ("WARNING", "REVENGE", "BOUNTY", "ALLIANCE", "OFFER", "WANT", "TAUNT")   # in this order of interest
+NOTICE_KINDS = ("WARNING", "REVENGE", "BOUNTY", "CLAIM", "VERDICT", "ALLIANCE", "OFFER", "WANT", "TAUNT")   # in this order of interest
 
 
 class BoardReader:
@@ -423,7 +453,58 @@ class BoardReader:
 
 
 def describe_post(p: dict) -> str:
-    return str(p.get("text", ""))[:200]
+    text = str(p.get("text", ""))[:200]
+    d = p.get("data") if isinstance(p.get("data"), dict) else {}
+    if p.get("kind") == "REVENGE" and d.get("reply_to") is not None:
+        return "joins the call for revenge: " + text      # a hunter answering a REVENGE call
+    return text
+
+
+def _post_id(x) -> str:
+    return str(x)
+
+
+def wanted_notices(posts: list[dict], events: list[dict], now: float | None = None, limit: int = 8) -> list[dict]:
+    """The 'wanted' notices: every BOUNTY on the board with what became of it. Status, strongest first: paid / unpaid (from the
+    agents' bounty_paid / bounty_unpaid events), confirmed or rejected (the referee's VERDICT), claimed (a CLAIM waits), expired, open.
+    Read only, and tolerant of anything odd on the board."""
+    now = time.time() if not now else now
+    claims: dict[str, list[dict]] = {}
+    verdicts: dict[str, list[dict]] = {}
+    for p in posts:
+        d = p.get("data") if isinstance(p.get("data"), dict) else {}
+        if p.get("kind") == "CLAIM" and d.get("bounty_id") is not None:
+            claims.setdefault(_post_id(d["bounty_id"]), []).append(p)
+        elif p.get("kind") == "VERDICT" and d.get("bounty_id") is not None and p.get("agent") == "referee":
+            verdicts.setdefault(_post_id(d["bounty_id"]), []).append(p)
+    paid = {_post_id(e.get("bounty")) for e in events if e.get("event") == "bounty_paid"}
+    unpaid = {_post_id(e.get("bounty")) for e in events if e.get("event") == "bounty_unpaid"}
+    out = []
+    for p in sorted(posts, key=lambda p: -float(p.get("t") or 0)):
+        d = p.get("data") if isinstance(p.get("data"), dict) else {}
+        if p.get("kind") != "BOUNTY":
+            continue
+        key = _post_id(p.get("id"))
+        vs = verdicts.get(key, [])
+        if key in paid:
+            status = "paid"
+        elif key in unpaid:
+            status = "unpaid"
+        elif any((v.get("data") or {}).get("ok") is True for v in vs):
+            status = "confirmed, payment due"
+        elif vs:
+            status = "claim rejected"
+        elif claims.get(key):
+            status = "claimed, waiting for the referee"
+        elif num(d.get("expires")) and num(d.get("expires")) < now:
+            status = "expired"
+        else:
+            status = "open"
+        claimant = next((c.get("agent") for c in claims.get(key, [])), None)
+        out.append({"id": p.get("id"), "t": p.get("t"), "poster": str(p.get("agent", "?")), "target_at": str(d.get("target_at", "?")),
+                    "target_id": d.get("target_player_id"), "reward": _res(d.get("reward")), "status": status,
+                    "claimant": str(claimant) if claimant else None})
+    return out[:limit]
 
 
 def notices_from(posts: list[dict], limit: int = 6) -> list[dict]:
@@ -478,16 +559,18 @@ class Observatory:
         self.universe.refresh(hints)
         self.board.refresh()
 
-    def _board_state(self, agents: dict) -> dict:
+    def _board_state(self, agents: dict, wanted: list[dict] | None = None) -> dict:
         b = self.board
         rows = sorted(b.posts, key=lambda p: -float(p.get("t") or 0))[:BOARD_KEEP] if b.available else []
+        status = {_post_id(w["id"]): w["status"] for w in wanted or []}
         counts: dict[str, int] = {}
         for p in rows:
             counts[p["kind"]] = counts.get(p["kind"], 0) + 1
         return {"enabled": bool(b.url), "available": b.available, "note": b.note, "counts": counts,
                 "posts": [{"id": p.get("id"), "t": p.get("t"), "expires": p.get("expires"), "agent": str(p.get("agent", "?")),
                            "persona": (agents.get(str(p.get("agent", "?"))) or {}).get("persona"), "kind": p["kind"],
-                           "text": describe_post(p)} for p in rows]}
+                           "text": describe_post(p), "reply": isinstance(p.get("data"), dict) and p["data"].get("reply_to") is not None,
+                           "status": status.get(_post_id(p.get("id"))) if p["kind"] == "BOUNTY" else None} for p in rows]}
 
     def _persona_of(self, agent: str) -> str | None:
         if time.time() - self._persona_read > 30:
@@ -551,6 +634,8 @@ class Observatory:
                                "colonies": a["colonies"] if a else None})
             news = build_newspaper(events, self.news_hours, lambda c: owner_at.get(c) if c else None)
             news["board"] = notices_from(self.board.posts) if self.board.available else []
+            wanted = wanted_notices(self.board.posts, events, self.board.now) if self.board.available else []
+            news["wanted"] = wanted
             feed = [{"t": e["t"], "agent": e["agent"], "kind": e["event"], "persona": agents.get(e["agent"], {}).get("persona"),
                      "text": describe(e)} for e in events[-1500:] if e["event"] not in NOISE][-600:]
             feed.reverse()
@@ -560,7 +645,7 @@ class Observatory:
                     "personas": list(PERSONAS), "agents": agents, "kinds": sorted({f["kind"] for f in feed}),
                     "map": {"available": self.universe.available, "note": self.universe.note, "systems": systems,
                             "scanned": len(self.universe.systems)},
-                    "newspaper": news, "feed": feed, "board": self._board_state(agents),
+                    "newspaper": news, "feed": feed, "board": self._board_state(agents, wanted),
                     "leaderboard": {"available": bool(self.universe.highscore), "rows": leader, "agents": counters}}
 
 
@@ -696,6 +781,8 @@ table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:6px 10px
 <section id="board" class="tab"><div class="bar">Sort by <select id="bsort"><option value="general">General</option><option value="economy">Economy</option><option value="research">Research</option><option value="military">Military</option></select> <span class="dim">Alliance stays empty until agents found alliances.</span></div><div id="boardnote" class="warn"></div><div id="boardtable"></div></section>
 </main>
 <script>
+const KC={OFFER:"#3ddc97",WANT:"#4cc9f0",WARNING:"#ffb703",REVENGE:"#ff4d6d",BOUNTY:"#f9c74f",CLAIM:"#ff9f43",VERDICT:"#43d9ad",TAUNT:"#c77dff",ALLIANCE:"#7b9cff"};
+const KCP={OFFER:"#0a7a4f",WANT:"#116a92",WARNING:"#9a5b00",REVENGE:"#b3193b",BOUNTY:"#8a6500",CLAIM:"#b25400",VERDICT:"#0b7a5f",TAUNT:"#7a2fb8",ALLIANCE:"#2f4cc0"};
 const COLORS={miner:"#d9a441",scientist:"#4aa3ff",turtle:"#4fbf7a",raider:"#e5534b",balanced:"#b07cf0",other:"#6b7280"};
 const $=id=>document.getElementById(id);
 function el(tag,cls,text){const e=document.createElement(tag);if(cls)e.className=cls;if(text!==undefined)e.textContent=text;return e}
@@ -731,7 +818,11 @@ function drawNews(){
   const mast=el("div","mast");mast.appendChild(el("h2","","The Daily Ogame"));mast.appendChild(el("div","date",`${n.dateline} - last ${n.hours} h, ${n.events_considered} events`));p.appendChild(mast);
   const h=el("div","head");h.appendChild(el("h3","",n.headline.title));h.appendChild(el("p","",n.headline.text));p.appendChild(h);
   const cols=el("div","cols");n.articles.forEach(a=>{const r=el("article");r.appendChild(el("h3","",a.title));r.appendChild(el("p","",a.text));cols.appendChild(r)});p.appendChild(cols);
-  if(n.board&&n.board.length){const b=el("div","notices");b.appendChild(el("h3","","From the galaxy board"));n.board.forEach(x=>{const r=el("p","");r.appendChild(el("b","",x.kind+" "));r.append(`${x.agent}: ${x.text}`);b.appendChild(r)});p.appendChild(b)}}
+  if(n.board&&n.board.length){const b=el("div","notices");b.appendChild(el("h3","","From the galaxy board"));n.board.forEach(x=>{const r=el("p","");const k=el("b","",x.kind+" ");k.style.color=KCP[x.kind]||"inherit";r.appendChild(k);r.append(`${x.agent}: ${x.text}`);b.appendChild(r)});p.appendChild(b)}
+  if(n.wanted&&n.wanted.length){const w=el("div","notices");w.appendChild(el("h3","","Wanted"));
+    n.wanted.forEach(x=>{const r=el("p","");const k=el("b","","WANTED ");k.style.color=KCP.BOUNTY;r.appendChild(k);
+      r.append(`player ${x.target_id==null?"?":x.target_id} at ${x.target_at}. Reward ${x.reward}, posted by ${x.poster}${x.claimant?`, claimed by ${x.claimant}`:""}: `);
+      const st=el("i","",x.status);r.appendChild(st);w.appendChild(r)});p.appendChild(w)}}
 function fillSelect(sel,label,values){const cur=sel.value;sel.replaceChildren();sel.appendChild(new Option(label,""));values.forEach(v=>sel.appendChild(new Option(v,v)));sel.value=values.includes(cur)?cur:""}
 function drawFeed(){
   fillSelect($("fa"),"all agents",Object.keys(S.agents));fillSelect($("fp"),"all personalities",S.personas);fillSelect($("fk"),"all kinds",S.kinds);
@@ -746,7 +837,8 @@ function drawGalaxyBoard(){
   const fk=$("gk").value;let shown=0;
   for(const p of g.posts){if(fk&&p.kind!==fk)continue;
     const r=el("div","row");r.appendChild(el("span","t",when(p.t)));const a=el("span","a",p.agent);a.style.color=COLORS[p.persona]||COLORS.other;
-    r.append(a,el("b","",p.kind+" "),p.text);rows.appendChild(r);if(++shown>=200)break}
+    const k=el("b","",(p.reply?"\u21b3 ":"")+p.kind+" ");k.style.color=KC[p.kind]||"inherit";
+    r.append(a,k,p.text);if(p.status){const st=el("span","dim"," ["+p.status+"]");r.appendChild(st)}rows.appendChild(r);if(++shown>=200)break}
   if(!shown&&g.available)rows.appendChild(el("div","dim","The board is empty."))}
 function drawBoard(){
   const b=S.leaderboard,box=$("boardtable");box.replaceChildren();
