@@ -177,6 +177,22 @@ def summarize(events: list[dict], personas: dict[str, str] | None = None) -> str
         out.append("  none yet")
     out.append("")
 
+    out.append("LEARNED FIGHT MARGIN (how many times the spy report's defenders the raider assumed, and how it went)")
+    margin_rows: dict = defaultdict(lambda: defaultdict(Counter))
+    for e in events:
+        if e["event"] == "battle" and e.get("margin") is not None and e.get("outcome"):
+            margin_rows[e["agent"]][e["margin"]][e["outcome"]] += 1
+    if margin_rows:
+        for agent in sorted(margin_rows):
+            parts = []
+            for m in sorted(margin_rows[agent]):
+                c = margin_rows[agent][m]
+                parts.append(f"x{m:g}: {sum(c.values())} attacks, {c['win']} profit, {c['bad']} bad")
+            out.append(f"  {agent}: " + "; ".join(parts))
+    else:
+        out.append("  none yet")
+    out.append("")
+
     out.append("CHARACTER CLASSES (chosen once by each agent)")
     classes = {e["agent"]: e.get("chosen") for e in events if e["event"] == "class"}
     refused = [e for e in events if e["event"] == "class_refused"]

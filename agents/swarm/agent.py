@@ -11,6 +11,8 @@ from pathlib import Path
 from .brain import choose_building, choose_research, fields_left, pay
 from . import colonise
 from .combat import tech_from_research
+import random as _random
+from .bandit import outcome_of
 from .military import (Memory, choose_strike, judge_trade, summarize_battle, choose_units, coord_of, pick_attack, pick_target, summarize_report)
 from .client import ApiClient, ApiError
 from .opponents import record_result, record_spy, summary as opp_summary
@@ -555,7 +557,13 @@ class Agent:
                 continue
             self.stats["battles"] += 1
             verdict = judge_trade(b) if b["role"] == "attacker" else None
-            self.log("battle", at=b["at"], role=b["role"], my_loss=b["my_loss"], their_loss=b["their_loss"],
+            margin = outcome = None
+            if b["role"] == "attacker" and b["coord"] and None not in b["coord"]:
+                margin = self.memory.arm_for.pop(tuple(b["coord"]), None)
+                if margin is not None:
+                    outcome = outcome_of(verdict, b["loot"] + b["their_loss"], b["my_loss"])
+                    self.memory.bandit.update(margin, outcome)
+            self.log("battle", at=b["at"], role=b["role"], margin=margin, outcome=outcome, my_loss=b["my_loss"], their_loss=b["their_loss"],
                      loot=b["loot"], debris=b["debris"], rounds=b["rounds"], verdict=verdict,
                      mine=b["my_units"], theirs=b["their_units"])
             if b["role"] != "attacker":
@@ -581,8 +589,10 @@ class Agent:
         coord, intel, reason = pick
         if not self.ship_stats:
             self.ship_stats = {s["machine_name"]: s for s in self.client.get("/ships")["ships"]}
+        # How much to over-estimate the defenders is learned (bandit.py); its own random stream keeps the agent's other choices unchanged.
+        margin = self.memory.bandit.choose(_random.Random(f"{self.name}:{self.memory.bandit.pulls}"))
         strike, go, sim_reason, kind = choose_strike(self.persona, self.rng, ships_here, self.ship_stats, intel,
-                                                     self.my_tech, self.memory.risk_scale)
+                                                     self.my_tech, self.memory.risk_scale, margin)
         where = f"{coord[0]}:{coord[1]}:{coord[2]}"
         if strike is None:
             return False
@@ -609,9 +619,10 @@ class Agent:
             self.log("attack_refused", at=f"{coord[0]}:{coord[1]}:{coord[2]}", code=e.code, msg=e.message[:120])
             return False
         self.memory.attacked[coord] = now
+        self.memory.arm_for[coord] = margin
         self.memory.intel.pop(coord, None)
         self.stats["attacks"] += 1
-        self.log("attack", at=f"{coord[0]}:{coord[1]}:{coord[2]}", why=reason, ships=strike,
+        self.log("attack", at=f"{coord[0]}:{coord[1]}:{coord[2]}", margin=margin, why=reason, ships=strike,
                  seconds=result["mission"]["seconds_remaining"], saw_ships=intel.ships, saw_defense=intel.defense,
                  saw_research=intel.research)
         return True

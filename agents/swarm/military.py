@@ -8,6 +8,7 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass, field
 
+from .bandit import Bandit
 from .brain import RESOURCES
 from .combat import Estimate, Tech, estimate_battle, tech_from_research, unit_value
 from .opponents import target_factor
@@ -42,6 +43,8 @@ class Memory:
     battles: list[dict] = field(default_factory=list)  # recent results of own attacks (newest last, capped)
     aggressors: dict[Coord, float] = field(default_factory=dict)  # planets that attacked us (when we last saw one coming)
     opponents: dict[Coord, dict] = field(default_factory=dict)  # per-target record: strength seen, our wins/losses/net (opponents.py)
+    bandit: Bandit = field(default_factory=Bandit)  # learns how much to over-estimate defenders (bandit.py)
+    arm_for: dict[Coord, float] = field(default_factory=dict)  # which margin each attack in flight was planned with
     trade_cooldown_until: float = 0.0  # no new merchant call before this server time (dark matter is scarce)
     class_done: bool = False           # the character class has been chosen (or cannot be)
     expanding: bool = False            # the home planet is crowded and this agent has decided to found a colony
@@ -50,13 +53,13 @@ class Memory:
     colony_until: float = 0.0          # no new colony attempt before this server time
 
     # Saved to disk so a restart does not make the agent forget (JSON cannot have tuple keys, so coordinates become "g:s:p").
-    _COORD_MAPS = ("spied", "attacked", "pending", "intel", "avoid_until", "aggressors", "opponents")
+    _COORD_MAPS = ("spied", "attacked", "pending", "intel", "avoid_until", "aggressors", "opponents", "arm_for")
 
     def to_dict(self) -> dict:
         out: dict = {"need_cargo": self.need_cargo, "risk_scale": self.risk_scale, "battles": self.battles,
                      "trade_cooldown_until": self.trade_cooldown_until, "expanding": self.expanding, "class_done": self.class_done,
                      "colony_sent_at": self.colony_sent_at, "colony_planets_before": self.colony_planets_before,
-                     "colony_until": self.colony_until}
+                     "colony_until": self.colony_until, "bandit": self.bandit.to_dict()}
         for name in self._COORD_MAPS:
             out[name] = {":".join(map(str, c)): v for c, v in getattr(self, name).items()}
         return out
@@ -92,6 +95,7 @@ class Memory:
             m.colony_planets_before = int(data.get("colony_planets_before", 0))
         except (TypeError, ValueError):
             pass
+        m.bandit = Bandit.from_dict(data.get("bandit"))
         battles = data.get("battles")
         m.battles = battles if isinstance(battles, list) else []
         return m
@@ -265,12 +269,12 @@ def required_win_chance(persona: Persona, risk_scale: float = 1.0) -> float:
 
 
 def judge_fight(persona: Persona, rng: random.Random, strike: dict[str, int], intel: Intel, my_tech: Tech | None,
-                haul: int, risk_scale: float = 1.0) -> tuple[bool, str, Estimate | None]:
+                haul: int, risk_scale: float = 1.0, margin: float = DEFENDER_MARGIN) -> tuple[bool, str, Estimate | None]:
     """Simulate the fight with the fleet we would really send. Returns (go, reason, estimate). When the report did not
     show the defenders' composition there is nothing to simulate: (True, '', None) and the old rules decide."""
     if not intel.composition_known:
         return True, "", None
-    defenders = {n: int(-(-v * DEFENDER_MARGIN // 1)) for n, v in intel.all_defenders().items()}
+    defenders = {n: int(-(-v * margin // 1)) for n, v in intel.all_defenders().items()}
     est = estimate_battle(strike, defenders, rng, my_tech or (0, 0, 0), tech_from_research(intel.research))
     gain = est.win_chance * haul + 0.5 * est.their_loss_value - est.my_loss_value
     facts = f"win chance {est.win_chance:.0%}, expected loss {est.my_loss_value:,.0f} for loot {haul:,}"
@@ -283,7 +287,7 @@ def judge_fight(persona: Persona, rng: random.Random, strike: dict[str, int], in
 
 
 def choose_strike(persona: Persona, rng: random.Random, ships_here: dict[str, int], ship_stats: dict[str, dict],
-                  intel: Intel, my_tech: Tech | None, risk_scale: float = 1.0
+                  intel: Intel, my_tech: Tech | None, risk_scale: float = 1.0, margin: float = DEFENDER_MARGIN
                   ) -> tuple[dict[str, int] | None, bool, str, str]:
     """The smallest fleet that is sure enough to win and not worth too much compared to the loot.
     Returns (strike, go, reason, kind) where kind is 'nofleet', 'cargo' (cannot carry the loot) or 'fight'.
@@ -305,7 +309,7 @@ def choose_strike(persona: Persona, rng: random.Random, ships_here: dict[str, in
         if exposed > MAX_EXPOSURE * haul:
             last = (strike, False, f"fleet worth {exposed:,} for a loot of {haul:,}: too much to risk", "fight")
             break   # bigger fleets only get more exposed
-        go, why, _ = judge_fight(persona, rng, strike, intel, my_tech, haul, risk_scale)
+        go, why, _ = judge_fight(persona, rng, strike, intel, my_tech, haul, risk_scale, margin)
         if go:
             return strike, True, why, "fight"
         last = (strike, False, why, "fight")
