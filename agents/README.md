@@ -100,7 +100,7 @@ the next ones do not. Rules are in `swarm/defense.py`.
 
 ## Planet fields
 
-Every building level uses one field of the planet. The agent reads the free fields from the API. With 12 or fewer
+Every building level uses one field of the planet. The agent reads the free fields from the API. With 30 or fewer
 left it heads for the terraformer (energy technology 12, a nanite factory, then the terraformer itself, which adds
 5 fields per level); with 3 or fewer it stops upgrading minor buildings (stores, shipyard, research lab). On a full
 planet it builds nothing, does not count that as "saving", and keeps buying ships and defence.

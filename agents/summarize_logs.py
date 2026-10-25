@@ -162,6 +162,16 @@ def summarize(events: list[dict], personas: dict[str, str] | None = None) -> str
         out.append("  none")
     out.append("")
 
+    out.append("FULL PLANETS (no free building fields)")
+    full = Counter(e["agent"] for e in events if e["event"] == "wait" and "no free fields" in str(e.get("why", "")))
+    heading = Counter(e["agent"] for e in events if e["event"] == "wait" and "free fields left" in str(e.get("why", "")))
+    if full or heading:
+        for a in sorted(set(full) | set(heading)):
+            out.append(f"  {a}: {heading[a]} waits on the way to the terraformer, {full[a]} waits with a full planet")
+    else:
+        out.append("  none")
+    out.append("")
+
     out.append("ERRORS")
     errs = [e for e in events if e["event"] in ("api_error", "error", "giving_up")]
     if errs:

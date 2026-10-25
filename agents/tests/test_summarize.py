@@ -27,6 +27,8 @@ class SummarizeTests(unittest.TestCase):
             ev(t + 7, "a2", "trade", gave={"metal": 100}, received={"crystal": 90}),
             ev(t - 5, "a1", "attack", at="1:3:4", why="weak target; simulated fight: win chance 70%", ships={"light_fighter": 20}),
             ev(t + 8, "a1", "lesson", why="lost 60000 for 2000 gained"),
+            ev(t + 10, "a2", "wait", why="no free fields on this planet (a terraformer adds some)"),
+            ev(t + 11, "a2", "wait", why="only 20 free fields left: waiting for terraformer"),
             ev(t + 9, "a1", "api_error", status=502, code="bad_response", msg="Not JSON", request="GET /status"),
         ]
         text = sl.summarize(events, {"a1": "(raider)"})
@@ -41,6 +43,7 @@ class SummarizeTests(unittest.TestCase):
         self.assertIn("trade", text)
         self.assertIn("lost 60000 for 2000 gained", text)
         self.assertIn("1x api_error status=502", text)
+        self.assertIn("a2: 1 waits on the way to the terraformer, 1 waits with a full planet", text)
         self.assertIn("reason: weak target; simulated fight: win chance 70%", text)
 
     def test_reads_log_files_and_ignores_broken_lines(self):

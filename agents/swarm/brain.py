@@ -78,7 +78,7 @@ def payback_factors(items: list[dict], planet: dict, solar: dict | None, strengt
 
 
 # --- planet fields: every building level uses one field; the terraformer (5+ fields per level) is the way out --------------
-FIELD_ALARM = 12        # fewer free fields than this: head for the terraformer
+FIELD_ALARM = 30        # fewer free fields than this: head for the terraformer (its prerequisites take hours at this cost)
 FIELDS_LOW = 3          # fewer than this: do not spend a field on an upgrade of something minor
 MINOR = {"metal_store", "crystal_store", "deuterium_store", "shipyard", "research_lab", "fusion_plant"}
 
