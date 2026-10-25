@@ -6,6 +6,8 @@
 
 Four tabs: a MAP of the systems where agents live (coloured by personality, colonies marked, recent battles ringed),
 a NEWSPAPER written from the logs (no language model, no network), a live FEED of events, and a LEADERBOARD.
+With `--board URL` (the galaxy board, board.py) a fifth tab shows the posts the agents leave for each other and the
+newspaper gets a "From the galaxy board" section. That is a plain GET of /posts, fail-soft: without the board nothing changes.
 
 It is strictly read-only. It reads the agents' log files, and it asks the game only for the galaxy view and the highscore
 (GET requests, at most about 4 per second, using the token of one existing agent). It never writes to the game, never
@@ -19,12 +21,14 @@ import json
 import sys
 import threading
 import time
+import urllib.request
 from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from swarm.client import ApiClient, ApiError
+from swarm.boardclient import TIMEOUT as BOARD_TIMEOUT
 
 KEEP_EVENTS = 20000          # events kept in memory (counters are kept for the whole history)
 NOISE = ("wait", "opponent")  # logged often and of no interest to a reader: left out of the feed
@@ -137,6 +141,18 @@ def describe(e: dict) -> str:
         return f"built {g('amount')} {g('what')} ({g('why')})"
     if k == "trade":
         return f"traded with the merchant: gave {_res(g('gave'))} for {_res(g('received'))}"
+    if k == "board_post":
+        return f"posted on the board ({g('kind')}): {str(g('text', ''))[:100]}"
+    if k == "board_read":
+        return f"read the board: {g('posts')} new posts{', raised its guard' if g('guard') else ''}"
+    if k == "trade_offer":
+        return f"{g('action', 'offered')}: gives {_res(g('give'))} for {_res(g('want'))}{' with ' + str(g('with')) if g('with') else ''}"
+    if k == "trade_sent":
+        return f"sent {_res(g('resources'))} to {g('to')} (instalment {g('instalment')})"
+    if k == "trade_received":
+        return f"received {_res(g('resources'))} from {g('partner')}"
+    if k == "trade_cheated":
+        return f"was cheated by {g('partner')} (owed {num(g('owed')):,}); shunned"
     if k == "lesson":
         return str(g("why", "learned a lesson"))
     if k == "class":
@@ -214,6 +230,9 @@ def articles_from(events: list[dict], owner_of=None) -> list[dict]:
             gave = sum(num(v) for v in (e.get("gave") or {}).values()) if isinstance(e.get("gave"), dict) else 0
             out.append(dict(t=t, kind="trade", score=gave, title=f"{a} deals with the merchant",
                             text=f"{a} gave {_res(e.get('gave'))} and received {_res(e.get('received'))}. Reason: {e.get('why')}."))
+        elif k == "trade_cheated":
+            out.append(dict(t=t, kind="trade", score=max(20_000, num(e.get("owed"))), title=f"{a} is cheated by {e.get('partner')}",
+                            text=f"{a} sent goods and got nothing back from {e.get('partner')} (owed {num(e.get('owed')):,}). The cheat is shunned from now on."))
         elif k == "lesson":
             out.append(dict(t=t, kind="lesson", score=50_000, title=f"{a} learns the hard way",
                             text=f"{e.get('why')}."))
@@ -367,9 +386,70 @@ class Universe:
             self._sleep(1.0 / SCAN_RATE)
 
 
+# ---- the galaxy board (read only) ---------------------------------------------------------------------
+BOARD_KEEP = 200            # posts shown
+NOTICE_KINDS = ("WARNING", "REVENGE", "BOUNTY", "ALLIANCE", "OFFER", "WANT", "TAUNT")   # in this order of interest
+
+
+class BoardReader:
+    """Reads the posts of board.py with a plain GET. Never writes, never raises: a board that is not there is just "unavailable"."""
+
+    def __init__(self, url: str | None, fetch=None, clock=time.time, ttl: float = 20.0):
+        self.url = url.rstrip("/") if url else None
+        self._fetch = fetch or self._http
+        self._clock = clock
+        self.ttl = ttl
+        self.posts: list[dict] = []
+        self.available = False
+        self.note = "no board connected (start board.py and pass --board)" if not self.url else "board not read yet"
+        self.fetched_at = -1e12
+        self.now = 0.0
+
+    def _http(self, path: str):
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(self.url + path, timeout=BOARD_TIMEOUT) as r:
+            return json.loads(r.read().decode("utf-8"))
+
+    def refresh(self) -> None:
+        if not self.url or self._clock() - self.fetched_at < self.ttl:
+            return
+        self.fetched_at = self._clock()
+        try:
+            data = self._fetch(f"/posts?limit={BOARD_KEEP}")
+            posts = [p for p in data["posts"] if isinstance(p, dict) and isinstance(p.get("kind"), str)]
+            self.posts, self.now, self.available, self.note = posts, float(data.get("now") or self._clock()), True, ""
+        except Exception as e:   # down, garbage, whatever: the rest of the observatory keeps working
+            self.available, self.note = False, f"the board at {self.url} cannot be reached ({type(e).__name__})"
+
+
+def describe_post(p: dict) -> str:
+    return str(p.get("text", ""))[:200]
+
+
+def notices_from(posts: list[dict], limit: int = 6) -> list[dict]:
+    """The newspaper's board section: the newest post of each kind first, in order of interest, then the rest."""
+    newest = sorted(posts, key=lambda p: -float(p.get("t") or 0))
+    picked, seen = [], set()
+    for kind in NOTICE_KINDS:
+        for p in newest:
+            if p["kind"] == kind and id(p) not in seen:
+                picked.append(p)
+                seen.add(id(p))
+                break
+    for p in newest:
+        if len(picked) >= limit:
+            break
+        if id(p) not in seen:
+            picked.append(p)
+            seen.add(id(p))
+    return [{"t": p.get("t"), "agent": str(p.get("agent", "?")), "kind": p["kind"], "text": describe_post(p)} for p in picked[:limit]]
+
+
 # ---- putting it together ------------------------------------------------------------------------------
 class Observatory:
-    def __init__(self, logs: str | Path, state: str | Path, client=None, galaxy: int = 1, news_hours: float = 24.0, refresh: int = 30):
+    def __init__(self, logs: str | Path, state: str | Path, client=None, galaxy: int = 1, news_hours: float = 24.0, refresh: int = 30,
+                 board: BoardReader | None = None):
+        self.board = board or BoardReader(None)
         self.tail = LogTail(logs)
         self.events: deque = deque(maxlen=KEEP_EVENTS)
         self.tally = Tally()
@@ -396,6 +476,18 @@ class Observatory:
                     if c and c[0] == self.galaxy:
                         hints.add(c[1])
         self.universe.refresh(hints)
+        self.board.refresh()
+
+    def _board_state(self, agents: dict) -> dict:
+        b = self.board
+        rows = sorted(b.posts, key=lambda p: -float(p.get("t") or 0))[:BOARD_KEEP] if b.available else []
+        counts: dict[str, int] = {}
+        for p in rows:
+            counts[p["kind"]] = counts.get(p["kind"], 0) + 1
+        return {"enabled": bool(b.url), "available": b.available, "note": b.note, "counts": counts,
+                "posts": [{"id": p.get("id"), "t": p.get("t"), "expires": p.get("expires"), "agent": str(p.get("agent", "?")),
+                           "persona": (agents.get(str(p.get("agent", "?"))) or {}).get("persona"), "kind": p["kind"],
+                           "text": describe_post(p)} for p in rows]}
 
     def _persona_of(self, agent: str) -> str | None:
         if time.time() - self._persona_read > 30:
@@ -458,6 +550,7 @@ class Observatory:
                                "attacks": a["attacks"] if a else None, "net_loot": a["net_loot"] if a else None,
                                "colonies": a["colonies"] if a else None})
             news = build_newspaper(events, self.news_hours, lambda c: owner_at.get(c) if c else None)
+            news["board"] = notices_from(self.board.posts) if self.board.available else []
             feed = [{"t": e["t"], "agent": e["agent"], "kind": e["event"], "persona": agents.get(e["agent"], {}).get("persona"),
                      "text": describe(e)} for e in events[-1500:] if e["event"] not in NOISE][-600:]
             feed.reverse()
@@ -467,7 +560,7 @@ class Observatory:
                     "personas": list(PERSONAS), "agents": agents, "kinds": sorted({f["kind"] for f in feed}),
                     "map": {"available": self.universe.available, "note": self.universe.note, "systems": systems,
                             "scanned": len(self.universe.systems)},
-                    "newspaper": news, "feed": feed,
+                    "newspaper": news, "feed": feed, "board": self._board_state(agents),
                     "leaderboard": {"available": bool(self.universe.highscore), "rows": leader, "agents": counters}}
 
 
@@ -536,11 +629,12 @@ def main() -> int:
     ap.add_argument("--galaxy", type=int, default=1)
     ap.add_argument("--refresh", type=int, default=30, help="seconds between galaxy scans and page updates")
     ap.add_argument("--news-hours", type=float, default=24.0, help="how far back the newspaper looks")
+    ap.add_argument("--board", default=None, metavar="URL", help="the galaxy board (board.py), e.g. http://localhost:8765: adds the Board tab (read only)")
     args = ap.parse_args()
 
     token, _ = token_from_state(args.state)
     client = ReadOnlyClient(args.base_url, token) if token else None
-    obs = Observatory(args.logs, args.state, client, args.galaxy, args.news_hours, args.refresh)
+    obs = Observatory(args.logs, args.state, client, args.galaxy, args.news_hours, args.refresh, BoardReader(args.board))
     stop = threading.Event()
     threading.Thread(target=scan_loop, args=(obs, stop), daemon=True).start()
     try:
@@ -591,12 +685,14 @@ main{padding:16px;max-width:1300px;margin:0 auto}.tab{display:none}.tab.on{displ
 .row{padding:3px 0;border-bottom:1px solid #1c2128}.row .t{color:var(--dim);margin-right:8px;font-variant-numeric:tabular-nums}.row .a{font-weight:600;margin-right:6px}
 table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--line)}th{color:var(--dim);font-weight:600}td.n{text-align:right;font-variant-numeric:tabular-nums}
 .warn{color:#f0b429}
+.paper .notices{border-top:3px double #2b2416;margin-top:10px;padding-top:8px}.paper .notices h3{font-size:18px}.paper .notices p{margin:3px 0}
 </style></head><body>
 <header><h1>Observatory</h1><nav id="nav"></nav><span id="status" class="dim"></span></header>
 <main>
 <section id="map" class="tab on"><div class="legend" id="legend"></div><div id="mapnote" class="warn"></div><div class="systems" id="systems"></div><div id="info" class="dim">Hover a planet.</div></section>
 <section id="news" class="tab"><div class="paper" id="paper"></div></section>
 <section id="feed" class="tab"><div class="filters"><select id="fa"></select><select id="fp"></select><select id="fk"></select><input id="ft" placeholder="search text"></div><div id="rows"></div></section>
+<section id="galaxyboard" class="tab"><div class="filters"><select id="gk"></select><span id="gnote" class="warn"></span></div><div id="gposts"></div></section>
 <section id="board" class="tab"><div class="bar">Sort by <select id="bsort"><option value="general">General</option><option value="economy">Economy</option><option value="research">Research</option><option value="military">Military</option></select> <span class="dim">Alliance stays empty until agents found alliances.</span></div><div id="boardnote" class="warn"></div><div id="boardtable"></div></section>
 </main>
 <script>
@@ -606,7 +702,7 @@ function el(tag,cls,text){const e=document.createElement(tag);if(cls)e.className
 function fmt(n){return n==null?"":Number(n).toLocaleString()}
 function when(t){return new Date(t*1000).toLocaleString([], {day:"2-digit",hour:"2-digit",minute:"2-digit"})}
 let S=null,tab="map";
-const tabs=[["map","Map"],["news","Newspaper"],["feed","Feed"],["board","Leaderboard"]];
+const tabs=[["map","Map"],["news","Newspaper"],["feed","Feed"],["galaxyboard","Board"],["board","Leaderboard"]];
 tabs.forEach(([id,name])=>{const b=el("button",id==="map"?"on":"",name);b.onclick=()=>{tab=id;document.querySelectorAll(".tab").forEach(s=>s.classList.toggle("on",s.id===id));[...$("nav").children].forEach(c=>c.classList.toggle("on",c===b))};$("nav").appendChild(b)});
 Object.entries(COLORS).forEach(([k,c])=>{const s=el("span");const d=el("span","dot");d.style.background=c;s.append(d,k==="other"?"other / human":k);$("legend").appendChild(s)});
 {const s=el("span");s.append("● hole = colony   red ring = battle in the last 6 h");$("legend").appendChild(s)}
@@ -634,7 +730,8 @@ function drawNews(){
   const n=S.newspaper,p=$("paper");p.replaceChildren();
   const mast=el("div","mast");mast.appendChild(el("h2","","The Daily Ogame"));mast.appendChild(el("div","date",`${n.dateline} - last ${n.hours} h, ${n.events_considered} events`));p.appendChild(mast);
   const h=el("div","head");h.appendChild(el("h3","",n.headline.title));h.appendChild(el("p","",n.headline.text));p.appendChild(h);
-  const cols=el("div","cols");n.articles.forEach(a=>{const r=el("article");r.appendChild(el("h3","",a.title));r.appendChild(el("p","",a.text));cols.appendChild(r)});p.appendChild(cols)}
+  const cols=el("div","cols");n.articles.forEach(a=>{const r=el("article");r.appendChild(el("h3","",a.title));r.appendChild(el("p","",a.text));cols.appendChild(r)});p.appendChild(cols);
+  if(n.board&&n.board.length){const b=el("div","notices");b.appendChild(el("h3","","From the galaxy board"));n.board.forEach(x=>{const r=el("p","");r.appendChild(el("b","",x.kind+" "));r.append(`${x.agent}: ${x.text}`);b.appendChild(r)});p.appendChild(b)}}
 function fillSelect(sel,label,values){const cur=sel.value;sel.replaceChildren();sel.appendChild(new Option(label,""));values.forEach(v=>sel.appendChild(new Option(v,v)));sel.value=values.includes(cur)?cur:""}
 function drawFeed(){
   fillSelect($("fa"),"all agents",Object.keys(S.agents));fillSelect($("fp"),"all personalities",S.personas);fillSelect($("fk"),"all kinds",S.kinds);
@@ -642,6 +739,15 @@ function drawFeed(){
   const rows=$("rows");rows.replaceChildren();let shown=0;
   for(const f of S.feed){if(fa&&f.agent!==fa||fp&&f.persona!==fp||fk&&f.kind!==fk||ft&&!(f.agent+" "+f.text).toLowerCase().includes(ft))continue;
     const r=el("div","row");r.appendChild(el("span","t",when(f.t)));const a=el("span","a",f.agent);a.style.color=COLORS[f.persona]||COLORS.other;r.append(a,f.text);rows.appendChild(r);if(++shown>=300)break}}
+function drawGalaxyBoard(){
+  const g=S.board,rows=$("gposts");rows.replaceChildren();
+  $("gnote").textContent=g.available?"":(g.note||"");
+  fillSelect($("gk"),"all kinds",Object.keys(g.counts||{}));
+  const fk=$("gk").value;let shown=0;
+  for(const p of g.posts){if(fk&&p.kind!==fk)continue;
+    const r=el("div","row");r.appendChild(el("span","t",when(p.t)));const a=el("span","a",p.agent);a.style.color=COLORS[p.persona]||COLORS.other;
+    r.append(a,el("b","",p.kind+" "),p.text);rows.appendChild(r);if(++shown>=200)break}
+  if(!shown&&g.available)rows.appendChild(el("div","dim","The board is empty."))}
 function drawBoard(){
   const b=S.leaderboard,box=$("boardtable");box.replaceChildren();
   $("boardnote").textContent=b.available?"":"The game's highscore is unavailable: showing what the logs say.";
@@ -653,11 +759,11 @@ function drawBoard(){
   if(b.available)b.rows.slice().sort((x,y)=>sortRank(x)-sortRank(y)).forEach(r=>add([r.username,r.alliance||"",rk(r,"general"),rk(r,"economy"),rk(r,"research"),rk(r,"military"),r.ships,r.agent?`${r.agent} (${r.persona||"?"})`:"",r.planets,r.attacks,r.net_loot,r.colonies]));
   else b.agents.forEach(a=>add([a.agent,a.persona||"?",a.attacks,a.net_loot,a.colonies]));
   box.appendChild(t)}
-function draw(){drawMap();drawNews();drawFeed();drawBoard();
+function draw(){drawMap();drawNews();drawFeed();drawGalaxyBoard();drawBoard();
   $("status").textContent=`${S.events_in_memory} events - last at ${S.latest_event?when(S.latest_event):"never"} - map ${S.map.available?"ok":"unavailable"}`}
 async function load(){try{const r=await fetch("/api/state");const j=await r.json();if(j.error){$("status").textContent="error: "+j.error}else{S=j;draw()}}catch(e){$("status").textContent="cannot reach the observatory"}
   setTimeout(load,((S&&S.refresh)||30)*1000)}
-$("bsort").onchange=()=>S&&drawBoard();
+$("bsort").onchange=()=>S&&drawBoard();$("gk").onchange=()=>S&&drawGalaxyBoard();
 ["fa","fp","fk"].forEach(i=>$(i).onchange=()=>S&&drawFeed());$("ft").oninput=()=>S&&drawFeed();
 load();
 </script></body></html>

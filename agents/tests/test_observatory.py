@@ -194,6 +194,98 @@ class StateTests(unittest.TestCase):
         self.assertEqual(ob.token_from_state(self.dir / "missing.json"), (None, {}))
 
 
+class BoardTabTests(unittest.TestCase):
+    POSTS = [
+        {"id": 1, "t": T, "expires": T + 3600, "agent": "agent0001", "kind": "WARNING", "text": "raider seen near 1:3", "data": {}},
+        {"id": 2, "t": T + 5, "expires": T + 3600, "agent": "agent0002", "kind": "OFFER", "text": "10k metal for crystal", "data": {}},
+        {"id": 3, "t": T + 9, "expires": T + 3600, "agent": "agent0001", "kind": "TAUNT", "text": "who is next?", "data": {}},
+        {"id": 4, "t": T + 9, "expires": T + 3600, "agent": "agent0003", "kind": "TAUNT", "text": "<script>x</script>", "data": {}},
+    ]
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        make_logs(self.dir)
+
+    def obs(self, board):
+        return ob.Observatory(self.dir, self.dir / "none.json", None, board=board)
+
+    def reader(self, fetch):
+        return ob.BoardReader("http://localhost:1", fetch=fetch, clock=lambda: 10 ** 9, ttl=0)
+
+    def test_state_has_the_board_and_the_newspaper_section(self):
+        paths = []
+
+        def fetch(path):
+            paths.append(path)
+            return {"now": T + 20, "last_id": 4, "posts": self.POSTS}
+        o = self.obs(self.reader(fetch))
+        o.scan()
+        s = o.state()
+        json.dumps(s)
+        self.assertEqual(paths, ["/posts?limit=200"])           # a plain GET, nothing else
+        self.assertTrue(s["board"]["available"])
+        self.assertEqual(s["board"]["counts"], {"WARNING": 1, "OFFER": 1, "TAUNT": 2})
+        self.assertEqual(s["board"]["posts"][0]["t"], T + 9)    # newest first
+        kinds = [x["kind"] for x in s["newspaper"]["board"]]
+        self.assertEqual(kinds[:3], ["WARNING", "OFFER", "TAUNT"])  # most interesting kinds first
+        self.assertEqual(len(kinds), 4)
+
+    def test_without_a_board_the_tab_says_so(self):
+        o = self.obs(None)
+        o.scan()
+        s = o.state()
+        self.assertFalse(s["board"]["enabled"])
+        self.assertEqual(s["board"]["posts"], [])
+        self.assertEqual(s["newspaper"]["board"], [])
+        self.assertIn("--board", s["board"]["note"])
+
+    def test_a_dead_or_garbage_board_does_not_break_anything(self):
+        for fetch in (lambda p: (_ for _ in ()).throw(OSError("refused")), lambda p: {"nope": 1}, lambda p: "text"):
+            o = self.obs(self.reader(fetch))
+            o.scan()
+            s = o.state()
+            self.assertTrue(s["board"]["enabled"])
+            self.assertFalse(s["board"]["available"])
+            self.assertIn("cannot be reached", s["board"]["note"])
+            self.assertIn("colony", s["newspaper"]["headline"]["title"])
+            self.assertTrue(s["feed"])
+
+    def test_the_board_is_not_asked_every_round(self):
+        calls = []
+        now = [0.0]
+        r = ob.BoardReader("http://localhost:1", fetch=lambda p: calls.append(p) or {"posts": []}, clock=lambda: now[0], ttl=20)
+        r.refresh()
+        r.refresh()
+        now[0] = 21
+        r.refresh()
+        self.assertEqual(len(calls), 2)
+
+    def test_reads_a_real_board_and_never_writes(self):
+        import board as B
+        board = B.Board(None)
+        board.post("agent0001", "WARNING", "raider near 1:3", {"at": "1:3:4"})
+        server = B.serve(board, "127.0.0.1", 0)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            o = self.obs(ob.BoardReader(f"http://127.0.0.1:{server.server_address[1]}", ttl=0))
+            o.scan()
+            self.assertEqual([p["kind"] for p in o.state()["board"]["posts"]], ["WARNING"])
+            self.assertEqual(len(board.read()), 1)                 # still just the one post
+            self.assertFalse(hasattr(ob.BoardReader, "post"))
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_new_events_are_described_in_the_feed_and_cheating_is_news(self):
+        e = {"t": T, "agent": "a1", "event": "trade_cheated", "partner": "a2", "owed": 40000}
+        self.assertIn("cheated by a2", ob.describe(e))
+        self.assertIn("a2", ob.build_newspaper([e])["headline"]["title"])
+        for ev in ({"event": "board_post", "kind": "WARNING", "text": "x"}, {"event": "board_read", "posts": 3, "guard": True},
+                   {"event": "trade_offer", "give": {"metal": 5}, "want": {"crystal": 3}}, {"event": "trade_sent", "to": "a2", "resources": {"metal": 5}, "instalment": "1/4"},
+                   {"event": "trade_received", "partner": "a2", "resources": {"crystal": 3}}):
+            self.assertTrue(ob.describe({"t": T, "agent": "a1", **ev}))
+
+
 class ServerTests(unittest.TestCase):
     def test_serves_the_page_and_the_state_and_refuses_writes(self):
         d = Path(tempfile.mkdtemp())
@@ -205,6 +297,7 @@ class ServerTests(unittest.TestCase):
             base = f"http://127.0.0.1:{server.server_address[1]}"
             html = urllib.request.urlopen(base + "/").read().decode()
             self.assertIn("The Daily Ogame", html)
+            self.assertIn("From the galaxy board", html)
             self.assertNotIn("http://", html.replace("http://localhost", ""))     # nothing loaded from outside: works offline
             state = json.load(urllib.request.urlopen(base + "/api/state"))
             self.assertIn("newspaper", state)
