@@ -102,6 +102,61 @@ class NewspaperTests(unittest.TestCase):
         self.assertEqual(ob.build_newspaper(events), ob.build_newspaper(events))
 
 
+class FrontPageTests(unittest.TestCase):
+    def ev(self, k, t=T, agent="a1", **kw):
+        return {"t": t, "agent": agent, "event": k, **kw}
+
+    def test_a_big_bounty_beats_a_colony_and_a_small_raid(self):
+        events = [self.ev("colony_founded", planets=2),
+                  self.ev("battle", role="attacker", at="1:3:4", my_loss=0, their_loss=1000, loot=25000, verdict="good"),
+                  self.ev("bounty_paid", side="poster", to="a2", resources={"metal": 900_000})]
+        paper = ob.build_newspaper(events)
+        self.assertEqual(paper["headline"]["kind"], "bounty")
+        self.assertIn("900,000 metal", paper["headline"]["text"])
+        self.assertEqual(paper["headline"]["kicker"], "BOUNTY")
+
+    def test_the_posted_reward_counts_when_there_is_no_value(self):
+        paper = ob.build_newspaper([self.ev("bounty_post", target="1:2:3", reward={"metal": 700_000}),
+                                    self.ev("colony_founded", planets=2)])
+        self.assertEqual(paper["headline"]["kind"], "bounty")
+
+    def test_fleet_saved_and_completed_trade_are_stories_with_templates(self):
+        events = [self.ev("fleet_saved", ships={"cruiser": 40, "battleship": 2}, value=900_000, attacker="1:9:9"),
+                  self.ev("trade_received", agent="a2", partner="a3", resources={"crystal": 5000}, value=7500)]
+        paper = ob.build_newspaper(events)
+        self.assertEqual(paper["headline"]["kind"], "fleet")
+        self.assertIn("42 ships", paper["headline"]["text"])
+        self.assertIn("1:9:9", paper["headline"]["text"])
+        (second,) = paper["secondary"]
+        self.assertEqual(second["kind"], "trade")
+        self.assertIn("5,000 crystal", second["text"])
+        self.assertIn("a3", second["title"])
+
+    def test_the_largest_robbery_leads(self):
+        events = [self.ev("battle", role="defender", my_loss=10, their_loss=0, loot=5000, rounds=3),
+                  self.ev("battle", agent="a2", role="defender", my_loss=10, their_loss=0, loot=800_000, rounds=3)]
+        head = ob.build_newspaper(events)["headline"]
+        self.assertEqual((head["kind"], head["title"]), ("defence", "a2 is robbed"))
+        self.assertIn("800,000", head["text"])
+
+    def test_secondary_stories_are_at_most_five_and_vary_in_kind(self):
+        events = [self.ev("battle", t=T + i, agent=f"r{i}", role="attacker", at="1:1:1", my_loss=0, their_loss=0, loot=100_000 - i) for i in range(8)]
+        events += [self.ev("colony_founded", planets=2, t=T + 20), self.ev("fleet_saved", ships={"x": 1}, value=1000, attacker="1:1:1", t=T + 21)]
+        paper = ob.build_newspaper(events)
+        kinds = [a["kind"] for a in paper["secondary"]]
+        self.assertEqual(len(kinds), 5)
+        self.assertIn("colony", kinds + [paper["headline"]["kind"]])
+        self.assertIn("fleet", kinds)
+        shown = [paper["headline"]] + paper["secondary"] + paper["articles"]
+        self.assertEqual(len({a["title"] for a in shown}), len(shown))     # nothing is told twice
+
+    def test_front_page_is_stable_and_the_quiet_page_has_no_secondary(self):
+        arts = [dict(t=T, kind="trade", score=5, title="b", text=""), dict(t=T, kind="trade", score=5, title="a", text="")]
+        self.assertEqual(ob.front_page(arts), ob.front_page(list(reversed(arts))))
+        quiet = ob.build_newspaper([])
+        self.assertEqual((quiet["secondary"], quiet["headline"]["kicker"]), ([], "QUIET"))
+
+
 class StateTests(unittest.TestCase):
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp())

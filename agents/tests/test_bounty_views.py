@@ -132,3 +132,26 @@ class ObservatoryBountyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RichBoardStateTests(unittest.TestCase):
+    def test_posts_carry_their_data_and_bounties_their_status(self):
+        d = Path(tempfile.mkdtemp())
+        (d / "a.jsonl").write_text(line(t=T, agent="agent0003", event="registered", player="P", persona="miner"))
+        reader = ob.BoardReader("http://x", fetch=lambda p: {"now": T + 100, "posts": [BOUNTY, CLAIM, YES, post(9, "OFFER", "a", {"give": {"metal": 5}, "want": {"crystal": 2}, "junk": [1]})]},
+                                clock=lambda: 10 ** 9, ttl=0)
+        o = ob.Observatory(d, d / "none.json", None, board=reader)
+        o.scan()
+        b = o.state()["board"]
+        self.assertEqual(b["now"], T + 100)
+        by = {p["id"]: p for p in b["posts"]}
+        self.assertEqual(by[1]["data"]["reward"], {"metal": 4000})
+        self.assertEqual(by[1]["status"], "confirmed, payment due")
+        self.assertEqual(by[9]["data"]["give"], {"metal": 5})
+        self.assertIsNone(by[9]["data"]["junk"])
+        self.assertEqual(by[2]["data"]["bounty_id"], 1)
+        json.dumps(b)
+
+    def test_the_page_only_uses_textcontent(self):
+        self.assertNotIn("innerHTML", ob.PAGE)
+        self.assertIn("prefers-color-scheme", ob.PAGE)

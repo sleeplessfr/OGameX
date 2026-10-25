@@ -171,6 +171,9 @@ def describe(e: dict) -> str:
         if g("side") == "poster":
             return f"could not pay bounty {g('bounty')} to {g('claimant')}: {str(g('why', ''))[:60]}"
         return f"was never paid bounty {g('bounty')} by {g('poster')}; shunned"
+    if k == "fleet_saved":
+        ships = g("ships") if isinstance(g("ships"), dict) else {}
+        return f"saved {sum(num(v) for v in ships.values()):,} ships from the fleet at {g('attacker', 'an enemy')}"
     if k == "lesson":
         return str(g("why", "learned a lesson"))
     if k == "class":
@@ -189,6 +192,10 @@ def describe(e: dict) -> str:
         return f"error: {str(g('msg', ''))[:100]}"
     rest = {a: b for a, b in e.items() if a not in ("t", "agent", "event")}
     return f"{k} {json.dumps(rest)[:100]}" if rest else k
+
+
+def _total(d) -> int:
+    return sum(num(v) for v in d.values()) if isinstance(d, dict) else 0
 
 
 def _res(d) -> str:
@@ -252,11 +259,22 @@ def articles_from(events: list[dict], owner_of=None) -> list[dict]:
             out.append(dict(t=t, kind="trade", score=max(20_000, num(e.get("owed"))), title=f"{a} is cheated by {e.get('partner')}",
                             text=f"{a} sent goods and got nothing back from {e.get('partner')} (owed {num(e.get('owed')):,}). The cheat is shunned from now on."))
         elif k == "bounty_post":
-            out.append(dict(t=t, kind="bounty", score=max(15_000, num(e.get("value"))), title=f"{a} puts a price on a raider",
+            out.append(dict(t=t, kind="bounty", score=max(15_000, num(e.get("value")), _total(e.get("reward"))), title=f"{a} puts a price on a raider",
                             text=f"WANTED: the raider at {e.get('target')}. {a} offers {_res(e.get('reward'))} to whoever hits it, paid after the referee confirms."))
         elif k == "bounty_paid" and e.get("side") == "poster":
-            out.append(dict(t=t, kind="bounty", score=max(15_000, num(e.get("value"))), title=f"{a} pays a bounty",
+            out.append(dict(t=t, kind="bounty", score=max(15_000, num(e.get("value")), _total(e.get("resources"))), title=f"{a} pays a bounty",
                             text=f"{a} sent {_res(e.get('resources'))} to {e.get('to')} for a confirmed raid. A debt honoured."))
+        elif k == "trade_received":
+            got = max(num(e.get("value")), _total(e.get("resources")))
+            out.append(dict(t=t, kind="trade", score=got, title=f"{a} and {e.get('partner')} close a deal",
+                            text=_pick([f"{a} received {_res(e.get('resources'))} from {e.get('partner')}: the trade is complete.",
+                                        f"A fair swap between {a} and {e.get('partner')}: {_res(e.get('resources'))} changed hands."], e)))
+        elif k == "fleet_saved":
+            ships = e.get("ships") if isinstance(e.get("ships"), dict) else {}
+            n = sum(num(v) for v in ships.values())
+            out.append(dict(t=t, kind="fleet", score=max(num(e.get("value")), 20_000), title=f"{a} saves its fleet",
+                            text=_pick([f"{a} saw {e.get('attacker', 'an enemy fleet')} coming and sent {n:,} ships out of reach just in time.",
+                                        f"Warned in time: {a} moved {n:,} ships to safety before {e.get('attacker', 'the raiders')} arrived."], e)))
         elif k == "bounty_unpaid" and e.get("side") == "claimant":
             out.append(dict(t=t, kind="bounty", score=40_000, title=f"{a} is never paid",
                             text=f"The referee confirmed {a}'s claim on bounty {e.get('bounty')}, but {e.get('poster')} never paid. {e.get('poster')} is shunned."))
@@ -277,28 +295,55 @@ def articles_from(events: list[dict], owner_of=None) -> list[dict]:
     return out
 
 
+KICKERS = {"bounty": "BOUNTY", "battle": "RAID", "defence": "ROBBERY", "colony": "NEW COLONY", "trade": "TRADE", "fleet": "FLEET SAVED",
+           "revenge": "REVENGE", "lesson": "LESSON", "class": "CLASSES", "quiet": "QUIET"}
+SECONDARY = 5
+
+
+def front_page(arts: list[dict]) -> tuple[dict, list[dict], list[dict]]:
+    """(headline, secondary stories, the rest). The headline is the biggest story. The secondary ones are the next best, at most
+    SECONDARY, taking a story of a kind not yet shown first so the grid is not five raids. Ties: the newest, then the title."""
+    ranked = sorted(arts, key=lambda a: (-a["score"], -a["t"], a["title"]))
+    if not ranked:
+        return _quiet(), [], []
+    head, rest = ranked[0], ranked[1:]
+    second: list[dict] = []
+    seen = {head["kind"]}
+    for a in rest:                       # one of each other kind first
+        if len(second) < SECONDARY and a["kind"] not in seen:
+            second.append(a)
+            seen.add(a["kind"])
+    for a in rest:                       # then fill up with the best of what is left
+        if len(second) < SECONDARY and a not in second:
+            second.append(a)
+    second.sort(key=lambda a: (-a["score"], -a["t"], a["title"]))
+    return head, second, [a for a in rest if a not in second]
+
+
 def build_newspaper(events: list[dict], hours: float = 24.0, owner_of=None, max_articles: int = 12) -> dict:
     """The front page: the biggest piece of news first. Based on the newest event, so it still reads well when the swarm is stopped."""
     if not events:
-        return {"dateline": "No news yet", "hours": hours, "headline": _quiet(), "articles": [], "events_considered": 0}
+        return {"dateline": "No news yet", "hours": hours, "headline": _quiet(), "secondary": [], "articles": [], "events_considered": 0}
     now = max(e["t"] for e in events)
     recent = [e for e in events if e["t"] >= now - hours * 3600]
     arts = articles_from(sorted(recent, key=lambda e: e["t"]), owner_of)
-    arts.sort(key=lambda a: (-a["score"], -a["t"]))
-    headline = arts[0] if arts else _quiet()
+    headline, secondary, others = front_page(arts)
     per_kind: dict[str, int] = {}
     rest = []
-    for a in arts[1:]:
+    for a in others:
         per_kind[a["kind"]] = per_kind.get(a["kind"], 0) + 1
         if per_kind[a["kind"]] <= 4:
             rest.append(a)
+    for a in [headline] + secondary + rest:
+        a["kicker"] = KICKERS.get(a["kind"], a["kind"].upper())
     return {"dateline": datetime.fromtimestamp(now).strftime("%A %d %B, %H:%M") + " universe time", "hours": hours,
-            "headline": headline, "articles": sorted(rest[:max_articles], key=lambda a: -a["t"]), "events_considered": len(recent)}
+            "headline": headline, "secondary": secondary, "articles": sorted(rest[:max_articles], key=lambda a: -a["t"]),
+            "events_considered": len(recent)}
 
 
 def _quiet() -> dict:
     return {"t": 0, "kind": "quiet", "score": 0, "title": "A quiet day in the universe",
-            "text": "Nothing worth reporting has happened lately. The planets hum along."}
+            "text": "Nothing worth reporting has happened lately. The planets hum along.", "kicker": "QUIET"}
 
 
 # ---- what the agents have done (counters over the whole history) --------------------------------------
@@ -460,6 +505,19 @@ def describe_post(p: dict) -> str:
     return text
 
 
+def _clean(d, depth: int = 0):
+    """The data of a post as plain JSON the page can show: numbers, short strings, small dicts; anything else is dropped."""
+    if isinstance(d, bool) or d is None:
+        return d
+    if isinstance(d, (int, float)):
+        return d
+    if isinstance(d, str):
+        return d[:200]
+    if isinstance(d, dict) and depth < 2:
+        return {str(k)[:40]: _clean(v, depth + 1) for k, v in list(d.items())[:20]}
+    return None
+
+
 def _post_id(x) -> str:
     return str(x)
 
@@ -567,9 +625,11 @@ class Observatory:
         for p in rows:
             counts[p["kind"]] = counts.get(p["kind"], 0) + 1
         return {"enabled": bool(b.url), "available": b.available, "note": b.note, "counts": counts,
+                "now": b.now or time.time(),
                 "posts": [{"id": p.get("id"), "t": p.get("t"), "expires": p.get("expires"), "agent": str(p.get("agent", "?")),
                            "persona": (agents.get(str(p.get("agent", "?"))) or {}).get("persona"), "kind": p["kind"],
-                           "text": describe_post(p), "reply": isinstance(p.get("data"), dict) and p["data"].get("reply_to") is not None,
+                           "text": describe_post(p), "data": _clean(p.get("data")) if isinstance(p.get("data"), dict) else {},
+                           "reply": isinstance(p.get("data"), dict) and p["data"].get("reply_to") is not None,
                            "status": status.get(_post_id(p.get("id"))) if p["kind"] == "BOUNTY" else None} for p in rows]}
 
     def _persona_of(self, agent: str) -> str | None:
@@ -634,7 +694,8 @@ class Observatory:
                                "colonies": a["colonies"] if a else None})
             news = build_newspaper(events, self.news_hours, lambda c: owner_at.get(c) if c else None)
             news["board"] = notices_from(self.board.posts) if self.board.available else []
-            wanted = wanted_notices(self.board.posts, events, self.board.now) if self.board.available else []
+            every = wanted_notices(self.board.posts, events, self.board.now, limit=BOARD_KEEP) if self.board.available else []
+            wanted = every[:8]
             news["wanted"] = wanted
             feed = [{"t": e["t"], "agent": e["agent"], "kind": e["event"], "persona": agents.get(e["agent"], {}).get("persona"),
                      "text": describe(e)} for e in events[-1500:] if e["event"] not in NOISE][-600:]
@@ -645,7 +706,7 @@ class Observatory:
                     "personas": list(PERSONAS), "agents": agents, "kinds": sorted({f["kind"] for f in feed}),
                     "map": {"available": self.universe.available, "note": self.universe.note, "systems": systems,
                             "scanned": len(self.universe.systems)},
-                    "newspaper": news, "feed": feed, "board": self._board_state(agents, wanted),
+                    "newspaper": news, "feed": feed, "board": self._board_state(agents, every),
                     "leaderboard": {"available": bool(self.universe.highscore), "rows": leader, "agents": counters}}
 
 
@@ -744,51 +805,120 @@ PAGE = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Observatory</title>
 <style>
-:root{--bg:#0d1117;--panel:#161b22;--line:#30363d;--text:#e6edf3;--dim:#8b949e;--accent:#58a6ff}
+:root{--bg:#0d1117;--panel:#161b22;--panel2:#1c2330;--line:#30363d;--text:#e6edf3;--dim:#8b949e;--accent:#58a6ff;--onaccent:#04101f;--slot:#242b36;--hole:#0d1117;--warn:#f0b429;
+  --offer:#3ddc97;--want:#4cc9f0;--warning:#ffb703;--revenge:#ff4d6d;--bounty:#f9c74f;--claim:#ff9f43;--verdict:#43d9ad;--taunt:#c77dff;--alliance:#7b9cff;
+  --metal:#b8c2d6;--crystal:#6ee7f9;--deuterium:#7dd87d;--bad:#ff6b6b;--good:#3ddc97;
+  --paper:#f1e8d0;--ink:#2b2416;--paper-line:#b9ad8c;--paper-dim:#6b5f44}
+@media (prefers-color-scheme: light){:root{--bg:#f3f5fb;--panel:#fff;--panel2:#f0f3fb;--line:#d9dfef;--text:#16203a;--dim:#5b6685;--accent:#1f6feb;--onaccent:#fff;--slot:#e3e8f3;--hole:#fff;--warn:#9a5b00;
+  --offer:#0a9b64;--want:#1479a8;--warning:#b36b00;--revenge:#cc1f44;--bounty:#8a6500;--claim:#b25400;--verdict:#0b7a5f;--taunt:#8a3fcf;--alliance:#3b5bd6;
+  --metal:#667089;--crystal:#0e96ab;--deuterium:#3c9a3c;--bad:#c62828;--good:#0a8a55;
+  --paper:#fbf5e4;--ink:#2b2416;--paper-line:#cfc4a4;--paper-dim:#6b5f44}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,Segoe UI,Arial,sans-serif}
-header{display:flex;gap:16px;align-items:center;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap}
+header{display:flex;gap:10px 16px;align-items:center;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap}
 header h1{font-size:16px;margin:0}.dim{color:var(--dim)}
-nav button{background:none;border:1px solid var(--line);color:var(--text);padding:6px 14px;border-radius:6px;cursor:pointer;margin-right:6px}
-nav button.on{background:var(--accent);border-color:var(--accent);color:#04101f}
+nav{display:flex;gap:6px;flex-wrap:wrap}
+nav button{background:none;border:1px solid var(--line);color:var(--text);padding:6px 14px;border-radius:6px;cursor:pointer;font:inherit}
+nav button.on{background:var(--accent);border-color:var(--accent);color:var(--onaccent)}
+#status{font-size:12px}
 main{padding:16px;max-width:1300px;margin:0 auto}.tab{display:none}.tab.on{display:block}
-.legend span{display:inline-flex;align-items:center;gap:5px;margin-right:12px}.dot{width:12px;height:12px;border-radius:3px;display:inline-block}
-.systems{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px;margin-top:12px}
+.legend{display:flex;flex-wrap:wrap;gap:4px 14px}.legend span{display:inline-flex;align-items:center;gap:5px}.dot{width:12px;height:12px;border-radius:3px;display:inline-block}
+.systems{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(300px,100%),1fr));gap:10px;margin-top:12px}
 .sys{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px}
 .sys h3{margin:0 0 6px;font-size:12px;color:var(--dim)}
 .slots{display:grid;grid-template-columns:repeat(15,1fr);gap:2px}
-.slot{aspect-ratio:1;border-radius:3px;background:#21262d;position:relative;cursor:default}
-.slot.col::after{content:"";position:absolute;inset:3px;border-radius:50%;background:#0d1117;opacity:.75}
+.slot{aspect-ratio:1;border-radius:3px;background:var(--slot);position:relative;cursor:default}
+.slot.col::after{content:"";position:absolute;inset:3px;border-radius:50%;background:var(--hole);opacity:.75}
 .slot.bat{outline:2px solid #ff4d4d;outline-offset:1px}
-#info{position:sticky;bottom:0;margin-top:12px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px;min-height:60px}
-.paper{background:#f4ecd8;color:#2b2416;border-radius:6px;padding:20px 26px;font-family:Georgia,'Times New Roman',serif}
-.paper .mast{text-align:center;border-bottom:3px double #2b2416;padding-bottom:8px;margin-bottom:12px}
-.paper .mast h2{margin:0;font-size:34px;letter-spacing:1px}.paper .date{font-size:13px;font-style:italic}
-.paper h3{margin:0 0 4px;font-size:20px}.paper .head h3{font-size:30px}.paper .cols{columns:2;column-gap:28px;margin-top:14px}
-.paper article{break-inside:avoid;margin-bottom:14px;border-bottom:1px solid #b9ad8c;padding-bottom:8px}.paper p{margin:0}
-@media(max-width:800px){.paper .cols{columns:1}}
-.filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}select,input{background:var(--panel);border:1px solid var(--line);color:var(--text);padding:5px 8px;border-radius:6px}
-.row{padding:3px 0;border-bottom:1px solid #1c2128}.row .t{color:var(--dim);margin-right:8px;font-variant-numeric:tabular-nums}.row .a{font-weight:600;margin-right:6px}
-table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--line)}th{color:var(--dim);font-weight:600}td.n{text-align:right;font-variant-numeric:tabular-nums}
-.warn{color:#f0b429}
-.paper .notices{border-top:3px double #2b2416;margin-top:10px;padding-top:8px}.paper .notices h3{font-size:18px}.paper .notices p{margin:3px 0}
+#info{position:sticky;bottom:0;margin-top:12px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px;min-height:60px;overflow-wrap:anywhere}
+/* newspaper */
+.paper{background:var(--paper);color:var(--ink);border-radius:6px;padding:20px 26px;font-family:Georgia,'Times New Roman',serif;box-shadow:0 1px 0 var(--line)}
+.paper .mast{text-align:center;border-bottom:3px double var(--ink);padding-bottom:8px;margin-bottom:14px}
+.paper .mast h2{margin:0;font-size:clamp(26px,6vw,40px);letter-spacing:1px}.paper .date{font-size:13px;font-style:italic;color:var(--paper-dim)}
+.kicker{font:700 11px/1 system-ui,Arial,sans-serif;letter-spacing:.12em;text-transform:uppercase;color:var(--k,#7a2f1d);margin-bottom:6px;display:block}
+.lead{border-bottom:1px solid var(--paper-line);padding-bottom:16px;margin-bottom:16px}
+.paper .lead h3{margin:0 0 8px;font-size:clamp(26px,5vw,42px);line-height:1.1;letter-spacing:-.01em}
+.lead p{font-size:clamp(16px,2.2vw,19px);line-height:1.5;max-width:60ch}
+.lead .when,.story .when{font:12px system-ui,Arial,sans-serif;color:var(--paper-dim);margin-top:8px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(230px,100%),1fr));gap:0 22px;margin-bottom:6px}
+.story{padding:0 0 14px;margin-bottom:14px;border-bottom:1px solid var(--paper-line)}
+.story h4{margin:0 0 4px;font-size:19px;line-height:1.2}.story p{margin:0;font-size:14.5px}
+.paper h3{margin:0 0 4px;font-size:20px}.paper .sect{font:700 12px system-ui,Arial,sans-serif;letter-spacing:.12em;text-transform:uppercase;color:var(--paper-dim);margin:6px 0 10px}
+.paper .cols{columns:2;column-gap:28px}
+.paper article{break-inside:avoid;margin-bottom:14px;border-bottom:1px solid var(--paper-line);padding-bottom:8px}.paper p{margin:0}
+.paper article h3{font-size:18px}
+@media(max-width:800px){.paper .cols{columns:1}.paper{padding:16px}}
+.paper .notices{border-top:3px double var(--ink);margin-top:10px;padding-top:8px}.paper .notices h3{font-size:18px}.paper .notices p{margin:4px 0}
+/* filters, feed */
+.filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center}
+select,input{background:var(--panel);border:1px solid var(--line);color:var(--text);padding:5px 8px;border-radius:6px;font:inherit;max-width:100%}
+.row{padding:5px 0;border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:baseline}.row .t{color:var(--dim);font-variant-numeric:tabular-nums;flex:none}.row .a{font-weight:600}
+.row .kd{width:8px;height:8px;border-radius:50%;flex:none;align-self:center;background:var(--c,var(--dim))}
+.row .body{min-width:0;overflow-wrap:anywhere}
+.tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:8px;background:var(--panel);margin-top:8px}
+table{border-collapse:collapse;width:100%;min-width:760px}th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{color:var(--dim);font-weight:600;font-size:12px;background:var(--panel2);position:sticky;top:0}td.n{text-align:right;font-variant-numeric:tabular-nums}
+tr:last-child td{border-bottom:0}tr.ours td:first-child{box-shadow:inset 3px 0 0 var(--c,var(--accent))}
+.pd{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;background:var(--c,var(--dim))}
+.warn{color:var(--warn)}.bar{margin-bottom:6px}
+/* galaxy board cards */
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px;align-items:center}
+.chip{border:1px solid var(--line);background:var(--panel);color:var(--text);border-radius:999px;padding:5px 12px;font:inherit;font-size:13px;cursor:pointer}
+.chip b{margin-left:6px;color:var(--dim);font-weight:600}
+.chip.on{border-color:var(--c,var(--text));box-shadow:inset 0 0 0 1px var(--c,var(--text))}
+.cards{max-width:860px}
+.card{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--c);border-radius:12px;padding:12px 14px;margin:0 0 10px;overflow-wrap:anywhere}
+.card.reply{margin-left:28px;background:var(--panel2)}
+.top{display:flex;align-items:center;gap:10px}
+.av{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;font-weight:700;font-size:13px;color:#0b0f1a;flex:none}
+.who{font-weight:650;white-space:nowrap}.top>div:nth-child(2){min-width:0}.age{color:var(--dim);font-size:12px}
+.badges{margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+.badge{font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--c);border:1px solid var(--c);border-radius:6px;padding:2px 7px;text-transform:uppercase}
+.badge.st{background:var(--c);color:var(--bg)}
+.text{margin:8px 0 2px}
+.deal{display:flex;align-items:center;gap:10px;margin:10px 0 2px;flex-wrap:wrap}
+.lot{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:6px 12px}
+.card.reply .lot{background:var(--panel)}
+.lot small{display:block;color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+.lot span{font-weight:700;font-variant-numeric:tabular-nums;display:block}
+.arrow{color:var(--dim);font-size:20px}
+.res{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px}
+.meta{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.tag{font-size:12px;color:var(--dim);background:var(--panel2);border-radius:6px;padding:2px 8px}
+.card.reply .tag{background:var(--panel)}
+.empty{color:var(--dim);padding:30px 0}
+@media(max-width:520px){main{padding:12px}.card.reply{margin-left:14px}.top{flex-wrap:wrap}.badges{margin-left:44px;flex-basis:100%;justify-content:flex-start}}
 </style></head><body>
 <header><h1>Observatory</h1><nav id="nav"></nav><span id="status" class="dim"></span></header>
 <main>
 <section id="map" class="tab on"><div class="legend" id="legend"></div><div id="mapnote" class="warn"></div><div class="systems" id="systems"></div><div id="info" class="dim">Hover a planet.</div></section>
 <section id="news" class="tab"><div class="paper" id="paper"></div></section>
 <section id="feed" class="tab"><div class="filters"><select id="fa"></select><select id="fp"></select><select id="fk"></select><input id="ft" placeholder="search text"></div><div id="rows"></div></section>
-<section id="galaxyboard" class="tab"><div class="filters"><select id="gk"></select><span id="gnote" class="warn"></span></div><div id="gposts"></div></section>
+<section id="galaxyboard" class="tab"><div id="gnote" class="warn"></div><div class="chips" id="gchips"></div><div class="cards" id="gposts"></div></section>
 <section id="board" class="tab"><div class="bar">Sort by <select id="bsort"><option value="general">General</option><option value="economy">Economy</option><option value="research">Research</option><option value="military">Military</option></select> <span class="dim">Alliance stays empty until agents found alliances.</span></div><div id="boardnote" class="warn"></div><div id="boardtable"></div></section>
 </main>
 <script>
-const KC={OFFER:"#3ddc97",WANT:"#4cc9f0",WARNING:"#ffb703",REVENGE:"#ff4d6d",BOUNTY:"#f9c74f",CLAIM:"#ff9f43",VERDICT:"#43d9ad",TAUNT:"#c77dff",ALLIANCE:"#7b9cff"};
+const KC={OFFER:"var(--offer)",WANT:"var(--want)",WARNING:"var(--warning)",REVENGE:"var(--revenge)",BOUNTY:"var(--bounty)",CLAIM:"var(--claim)",VERDICT:"var(--verdict)",TAUNT:"var(--taunt)",ALLIANCE:"var(--alliance)"};
 const KCP={OFFER:"#0a7a4f",WANT:"#116a92",WARNING:"#9a5b00",REVENGE:"#b3193b",BOUNTY:"#8a6500",CLAIM:"#b25400",VERDICT:"#0b7a5f",TAUNT:"#7a2fb8",ALLIANCE:"#2f4cc0"};
+const STORYC={bounty:"#8a6500",battle:"#b3193b",defence:"#b3193b",colony:"#0b7a5f",trade:"#116a92",fleet:"#2f4cc0",revenge:"#b3193b",lesson:"#7a2fb8",class:"#6b5f44",quiet:"#6b5f44"};
 const COLORS={miner:"#d9a441",scientist:"#4aa3ff",turtle:"#4fbf7a",raider:"#e5534b",balanced:"#b07cf0",other:"#6b7280"};
+if(window.matchMedia&&matchMedia("(prefers-color-scheme: light)").matches)Object.assign(COLORS,{miner:"#a8730f",scientist:"#1a6fcf",turtle:"#1e8a4c",raider:"#c62f27",balanced:"#7d3fc4"});
+const STATUSC={open:"var(--bounty)",claimed:"var(--claim)",confirmed:"var(--verdict)",paid:"var(--offer)",unpaid:"var(--revenge)",rejected:"var(--revenge)",expired:"var(--dim)"};
 const $=id=>document.getElementById(id);
 function el(tag,cls,text){const e=document.createElement(tag);if(cls)e.className=cls;if(text!==undefined)e.textContent=text;return e}
-function fmt(n){return n==null?"":Number(n).toLocaleString()}
-function when(t){return new Date(t*1000).toLocaleString([], {day:"2-digit",hour:"2-digit",minute:"2-digit"})}
-let S=null,tab="map";
+function fmt(n){return n==null?"":Number(n).toLocaleString("en-US")}
+function when(t){return new Date(t*1000).toLocaleString([], {month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"})}
+function hue(name){let h=0;for(const c of String(name))h=(h*31+c.charCodeAt(0))%360;return "hsl("+h+" 70% 62%)"}
+function ago(t,now){const s=Math.max(0,Math.round(now-t));if(s<60)return s+" s ago";if(s<3600)return Math.round(s/60)+" min ago";if(s<86400)return (s/3600).toFixed(1)+" h ago";return Math.round(s/86400)+" d ago"}
+function kindColor(k){k=String(k);
+  if(/error|failed|cheated|unpaid|refused/.test(k))return "var(--revenge)";
+  if(/battle|attack|threat|revenge/.test(k))return "var(--claim)";
+  if(/bounty/.test(k))return "var(--bounty)";
+  if(/trade|supply|recycle/.test(k))return "var(--offer)";
+  if(/colony|expand|registered|class/.test(k))return "var(--want)";
+  if(/board|lesson/.test(k))return "var(--taunt)";
+  if(/defend|fleet/.test(k))return "var(--alliance)";
+  return "var(--dim)"}
+let S=null,tab="map",gfilter=null;
 const tabs=[["map","Map"],["news","Newspaper"],["feed","Feed"],["galaxyboard","Board"],["board","Leaderboard"]];
 tabs.forEach(([id,name])=>{const b=el("button",id==="map"?"on":"",name);b.onclick=()=>{tab=id;document.querySelectorAll(".tab").forEach(s=>s.classList.toggle("on",s.id===id));[...$("nav").children].forEach(c=>c.classList.toggle("on",c===b))};$("nav").appendChild(b)});
 Object.entries(COLORS).forEach(([k,c])=>{const s=el("span");const d=el("span","dot");d.style.background=c;s.append(d,k==="other"?"other / human":k);$("legend").appendChild(s)});
@@ -813,49 +943,98 @@ function showInfo(sys,s){
   const a=s.agent&&S.agents[s.agent];
   if(a){i.appendChild(el("div","dim",`class ${a.class||"-"}, attacks ${a.attacks}, net loot ${fmt(a.net_loot)}, colonies ${a.colonies}`));
     a.last_events.slice().reverse().forEach(e=>i.appendChild(el("div","dim",`${when(e.t)}  ${e.text}`)))}}
+// ---- newspaper
+function kicker(a){const k=el("span","kicker",a.kicker||a.kind);k.style.setProperty("--k",STORYC[a.kind]||"#7a2f1d");return k}
 function drawNews(){
   const n=S.newspaper,p=$("paper");p.replaceChildren();
   const mast=el("div","mast");mast.appendChild(el("h2","","The Daily Ogame"));mast.appendChild(el("div","date",`${n.dateline} - last ${n.hours} h, ${n.events_considered} events`));p.appendChild(mast);
-  const h=el("div","head");h.appendChild(el("h3","",n.headline.title));h.appendChild(el("p","",n.headline.text));p.appendChild(h);
-  const cols=el("div","cols");n.articles.forEach(a=>{const r=el("article");r.appendChild(el("h3","",a.title));r.appendChild(el("p","",a.text));cols.appendChild(r)});p.appendChild(cols);
+  const h=el("div","lead");h.appendChild(kicker(n.headline));h.appendChild(el("h3","",n.headline.title));h.appendChild(el("p","",n.headline.text));
+  if(n.headline.t)h.appendChild(el("div","when",when(n.headline.t)));p.appendChild(h);
+  if(n.secondary&&n.secondary.length){const g=el("div","grid");
+    n.secondary.forEach(a=>{const s=el("div","story");s.appendChild(kicker(a));s.appendChild(el("h4","",a.title));s.appendChild(el("p","",a.text));s.appendChild(el("div","when",when(a.t)));g.appendChild(s)});p.appendChild(g)}
+  if(n.articles.length){p.appendChild(el("div","sect","More news"));
+    const cols=el("div","cols");n.articles.forEach(a=>{const r=el("article");r.appendChild(kicker(a));r.appendChild(el("h3","",a.title));r.appendChild(el("p","",a.text));cols.appendChild(r)});p.appendChild(cols)}
   if(n.board&&n.board.length){const b=el("div","notices");b.appendChild(el("h3","","From the galaxy board"));n.board.forEach(x=>{const r=el("p","");const k=el("b","",x.kind+" ");k.style.color=KCP[x.kind]||"inherit";r.appendChild(k);r.append(`${x.agent}: ${x.text}`);b.appendChild(r)});p.appendChild(b)}
   if(n.wanted&&n.wanted.length){const w=el("div","notices");w.appendChild(el("h3","","Wanted"));
     n.wanted.forEach(x=>{const r=el("p","");const k=el("b","","WANTED ");k.style.color=KCP.BOUNTY;r.appendChild(k);
       r.append(`player ${x.target_id==null?"?":x.target_id} at ${x.target_at}. Reward ${x.reward}, posted by ${x.poster}${x.claimant?`, claimed by ${x.claimant}`:""}: `);
       const st=el("i","",x.status);r.appendChild(st);w.appendChild(r)});p.appendChild(w)}}
+// ---- feed
 function fillSelect(sel,label,values){const cur=sel.value;sel.replaceChildren();sel.appendChild(new Option(label,""));values.forEach(v=>sel.appendChild(new Option(v,v)));sel.value=values.includes(cur)?cur:""}
 function drawFeed(){
   fillSelect($("fa"),"all agents",Object.keys(S.agents));fillSelect($("fp"),"all personalities",S.personas);fillSelect($("fk"),"all kinds",S.kinds);
   const fa=$("fa").value,fp=$("fp").value,fk=$("fk").value,ft=$("ft").value.toLowerCase();
   const rows=$("rows");rows.replaceChildren();let shown=0;
   for(const f of S.feed){if(fa&&f.agent!==fa||fp&&f.persona!==fp||fk&&f.kind!==fk||ft&&!(f.agent+" "+f.text).toLowerCase().includes(ft))continue;
-    const r=el("div","row");r.appendChild(el("span","t",when(f.t)));const a=el("span","a",f.agent);a.style.color=COLORS[f.persona]||COLORS.other;r.append(a,f.text);rows.appendChild(r);if(++shown>=300)break}}
+    const r=el("div","row");r.style.setProperty("--c",kindColor(f.kind));const d=el("span","kd");d.title=f.kind;
+    const body=el("span","body");const a=el("span","a",f.agent);a.style.color=COLORS[f.persona]||COLORS.other;body.append(a," ",f.text);
+    r.append(d,el("span","t",when(f.t)),body);rows.appendChild(r);if(++shown>=300)break}}
+// ---- galaxy board: the cards of the board page
+function lot(label,obj){const box=el("div","lot");box.appendChild(el("small","",label));
+  for(const [r,v] of Object.entries(obj||{})){const line=el("span","");const sq=el("i","res");sq.style.background="var(--"+r+",var(--dim))";line.append(sq,fmt(v)+" "+r);box.appendChild(line)}return box}
+function statusWord(s){s=String(s||"");if(s.startsWith("paid"))return "paid";if(s==="unpaid")return "unpaid";if(s.startsWith("confirmed"))return "confirmed";
+  if(s.includes("rejected"))return "rejected";if(s.startsWith("claimed"))return "claimed";return s||"open"}
+function postCard(p,isReply,now){
+  const d=p.data||{};
+  const c=el("div","card"+(isReply?" reply":""));c.style.setProperty("--c",KC[p.kind]||"var(--dim)");
+  const top=el("div","top");const av=el("div","av",((String(p.agent).match(/\d+/)||[String(p.agent)[0]||"?"])[0]).slice(-2));av.style.background=hue(p.agent);
+  const who=el("div","");const nm=el("div","who",p.agent);nm.style.color=COLORS[p.persona]||"inherit";who.appendChild(nm);
+  const age=el("div","age",ago(p.t,now));age.title=when(p.t);who.appendChild(age);
+  const badges=el("div","badges");
+  if(p.kind==="BOUNTY"){const w=statusWord(p.status);const st=el("span","badge st",w);st.style.setProperty("--c",STATUSC[w]||"var(--dim)");badges.appendChild(st)}
+  badges.appendChild(el("div","badge",p.kind));top.append(av,who,badges);c.appendChild(top);
+  c.appendChild(el("div","text",(p.text||"")));
+  if(d.give||d.want){const deal=el("div","deal");deal.appendChild(lot("gives",d.give));deal.appendChild(el("span","arrow","⇄"));deal.appendChild(lot("wants",d.want));c.appendChild(deal)}
+  if(p.kind==="BOUNTY"&&d.reward){const deal=el("div","deal");deal.appendChild(lot("wanted: reward",d.reward));c.appendChild(deal)}
+  const meta=el("div","meta"),tag=t=>meta.appendChild(el("span","tag",t));
+  if(p.kind==="BOUNTY"){if(d.target_player_id!=null)tag("wanted: player "+d.target_player_id);if(d.target_at)tag("last seen at "+d.target_at);if(d.poster_at)tag("pays from "+d.poster_at+" after the referee confirms")}
+  if(p.kind==="CLAIM"){if(d.bounty_id!=null)tag("claims bounty #"+d.bounty_id);if(d.loot)tag("loot "+fmt(d.loot));if(d.report!=null)tag("battle report "+d.report);if(d.claimant_at)tag("pay to "+d.claimant_at)}
+  if(p.kind==="VERDICT"){const v=el("span","tag",d.ok===true?"CONFIRMED":"REJECTED");v.style.color=d.ok===true?"var(--offer)":"var(--revenge)";v.style.fontWeight="700";meta.appendChild(v);
+    if(d.why)tag(String(d.why));if(d.claimant)tag("claimant "+d.claimant)}
+  if(p.kind==="REVENGE"&&d.reply_to)tag("joins the call #"+d.reply_to);
+  if(d.at)tag("at "+d.at);if(d.raider_at)tag("raider at "+d.raider_at);if(d.raider_id!=null)tag("raider: player "+d.raider_id);if(d.loot&&p.kind!=="CLAIM")tag("robbed of "+fmt(d.loot));
+  if(p.expires)tag(p.expires<now?"expired":"expires in "+Math.max(0,Math.round((p.expires-now)/60))+" min");
+  if(meta.childNodes.length)c.appendChild(meta);
+  return c}
 function drawGalaxyBoard(){
-  const g=S.board,rows=$("gposts");rows.replaceChildren();
+  const g=S.board,box=$("gposts"),chips=$("gchips"),now=g.now||S.generated;box.replaceChildren();chips.replaceChildren();
   $("gnote").textContent=g.available?"":(g.note||"");
-  fillSelect($("gk"),"all kinds",Object.keys(g.counts||{}));
-  const fk=$("gk").value;let shown=0;
-  for(const p of g.posts){if(fk&&p.kind!==fk)continue;
-    const r=el("div","row");r.appendChild(el("span","t",when(p.t)));const a=el("span","a",p.agent);a.style.color=COLORS[p.persona]||COLORS.other;
-    const k=el("b","",(p.reply?"\u21b3 ":"")+p.kind+" ");k.style.color=KC[p.kind]||"inherit";
-    r.append(a,k,p.text);if(p.status){const st=el("span","dim"," ["+p.status+"]");r.appendChild(st)}rows.appendChild(r);if(++shown>=200)break}
-  if(!shown&&g.available)rows.appendChild(el("div","dim","The board is empty."))}
+  const posts=g.posts||[],counts=g.counts||{};
+  if(gfilter&&!counts[gfilter])gfilter=null;
+  const all=el("button","chip"+(gfilter?"":" on"),"All");all.appendChild(el("b","",String(posts.length)));all.onclick=()=>{gfilter=null;drawGalaxyBoard()};chips.appendChild(all);
+  Object.keys(KC).forEach(k=>{if(!counts[k])return;const b=el("button","chip"+(gfilter===k?" on":""),k.toLowerCase());b.style.setProperty("--c",KC[k]);b.appendChild(el("b","",String(counts[k])));b.onclick=()=>{gfilter=k;drawGalaxyBoard()};chips.appendChild(b)});
+  Object.keys(counts).filter(k=>!KC[k]).forEach(k=>{const b=el("button","chip"+(gfilter===k?" on":""),k.toLowerCase());b.appendChild(el("b","",String(counts[k])));b.onclick=()=>{gfilter=k;drawGalaxyBoard()};chips.appendChild(b)});
+  const byId=new Map(posts.map(p=>[String(p.id),p])),replies=new Map();
+  const parent=p=>{const d=p.data||{};const r=(p.kind==="CLAIM"||p.kind==="VERDICT")?d.bounty_id:d.reply_to;return r==null?null:String(r)};
+  posts.forEach(p=>{const r=parent(p);if(r!==null&&byId.has(r)&&r!==String(p.id)){(replies.get(r)||replies.set(r,[]).get(r)).push(p)}});
+  const isReply=p=>{const r=parent(p);return r!==null&&byId.has(r)&&r!==String(p.id)};
+  let shown=0;
+  for(const p of [...posts].sort((a,b)=>b.t-a.t)){
+    if(isReply(p)&&!gfilter)continue;if(gfilter&&p.kind!==gfilter)continue;
+    box.appendChild(postCard(p,false,now));
+    if(!gfilter)(replies.get(String(p.id))||[]).sort((a,b)=>a.t-b.t).forEach(r=>box.appendChild(postCard(r,true,now)));
+    if(++shown>=200)break}
+  if(!shown&&g.available)box.appendChild(el("div","empty","The board is empty. Posts appear here as the agents trade, warn and call for revenge."))}
+// ---- leaderboard
 function drawBoard(){
   const b=S.leaderboard,box=$("boardtable");box.replaceChildren();
   $("boardnote").textContent=b.available?"":"The game's highscore is unavailable: showing what the logs say.";
-  const t=el("table");const head=el("tr");(b.available?["Player","Alliance","General","Economy","Research","Military","Ships","Agent","Planets","Attacks","Net loot","Colonies"]:["Agent","Personality","Attacks","Net loot","Colonies"]).forEach(x=>head.appendChild(el("th","",x)));t.appendChild(head);
-  const add=cells=>{const r=el("tr");cells.forEach(c=>r.appendChild(el("td",typeof c==="number"?"n":"",typeof c==="number"?fmt(c):(c==null?"":c))));t.appendChild(r)};
+  const wrap=el("div","tablewrap"),t=el("table");const head=el("tr");(b.available?["Player","Alliance","General","Economy","Research","Military","Ships","Agent","Planets","Attacks","Net loot","Colonies"]:["Agent","Personality","Attacks","Net loot","Colonies"]).forEach(x=>head.appendChild(el("th","",x)));t.appendChild(head);
+  const add=(cells,persona)=>{const r=el("tr",persona?"ours":"");if(persona)r.style.setProperty("--c",COLORS[persona]||COLORS.other);
+    cells.forEach((c,i)=>{const td=el("td",typeof c==="number"?"n":"");
+      if(i===0&&persona){const d=el("span","pd");d.style.setProperty("--c",COLORS[persona]||COLORS.other);td.append(d,String(c))}else td.textContent=typeof c==="number"?fmt(c):(c==null?"":c);
+      if(typeof c==="number"&&c<0)td.style.color="var(--bad)";r.appendChild(td)});t.appendChild(r)};
   const rk=(r,k)=>{const v=k==="general"?{rank:r.rank,score:r.score}:(r.rankings&&r.rankings[k])||{};return v.rank==null?"":`#${v.rank}  (${fmt(v.score||0)})`};
   const key=$("bsort").value;
   const sortRank=r=>{const v=key==="general"?r.rank:(r.rankings&&r.rankings[key]&&r.rankings[key].rank);return v==null?1e9:v};
-  if(b.available)b.rows.slice().sort((x,y)=>sortRank(x)-sortRank(y)).forEach(r=>add([r.username,r.alliance||"",rk(r,"general"),rk(r,"economy"),rk(r,"research"),rk(r,"military"),r.ships,r.agent?`${r.agent} (${r.persona||"?"})`:"",r.planets,r.attacks,r.net_loot,r.colonies]));
-  else b.agents.forEach(a=>add([a.agent,a.persona||"?",a.attacks,a.net_loot,a.colonies]));
-  box.appendChild(t)}
+  if(b.available)b.rows.slice().sort((x,y)=>sortRank(x)-sortRank(y)).forEach(r=>add([r.username,r.alliance||"",rk(r,"general"),rk(r,"economy"),rk(r,"research"),rk(r,"military"),r.ships,r.agent?`${r.agent} (${r.persona||"?"})`:"",r.planets,r.attacks,r.net_loot,r.colonies],r.agent?(r.persona||"other"):null));
+  else b.agents.forEach(a=>add([a.agent,a.persona||"?",a.attacks,a.net_loot,a.colonies],a.persona||"other"));
+  wrap.appendChild(t);box.appendChild(wrap)}
 function draw(){drawMap();drawNews();drawFeed();drawGalaxyBoard();drawBoard();
   $("status").textContent=`${S.events_in_memory} events - last at ${S.latest_event?when(S.latest_event):"never"} - map ${S.map.available?"ok":"unavailable"}`}
 async function load(){try{const r=await fetch("/api/state");const j=await r.json();if(j.error){$("status").textContent="error: "+j.error}else{S=j;draw()}}catch(e){$("status").textContent="cannot reach the observatory"}
   setTimeout(load,((S&&S.refresh)||30)*1000)}
-$("bsort").onchange=()=>S&&drawBoard();$("gk").onchange=()=>S&&drawGalaxyBoard();
+$("bsort").onchange=()=>S&&drawBoard();
 ["fa","fp","fk"].forEach(i=>$(i).onchange=()=>S&&drawFeed());$("ft").oninput=()=>S&&drawFeed();
 load();
 </script></body></html>
