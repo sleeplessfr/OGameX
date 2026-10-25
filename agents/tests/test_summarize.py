@@ -78,3 +78,12 @@ class ClassAndColonyReportTests(unittest.TestCase):
     def test_report_without_them_says_none(self):
         text = sl.summarize([{"t": 1000.0, "agent": "agent0001", "event": "build", "what": "metal_mine"}])
         self.assertIn("none in this period", text)
+
+
+class DefencePlanetLineTests(unittest.TestCase):
+    def test_defence_line_names_the_planet_when_logged(self):
+        events = [{"t": 1000.0, "agent": "agent0001", "event": "defend", "planet": 11, "what": "rocket_launcher", "amount": 5, "why": "x"},
+                  {"t": 1001.0, "agent": "agent0002", "event": "defend", "what": "rocket_launcher", "amount": 3, "why": "y"}]
+        text = sl.summarize(events)
+        self.assertIn("built 5 rocket_launcher on planet 11 (x)", text)
+        self.assertIn("built 3 rocket_launcher (y)", text)

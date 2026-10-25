@@ -139,7 +139,8 @@ def summarize(events: list[dict], personas: dict[str, str] | None = None) -> str
         kinds = Counter(e.get("kind") for e in threats)
         out.append(f"  {len(threats)} threats ({', '.join(f'{k} {v}' for k, v in kinds.items())}), {len(defends)} defence orders")
         for e in defends[-5:]:
-            out.append(f"  {clock(e['t'])} {e['agent']} built {e.get('amount')} {e.get('what')} ({e.get('why')})")
+            where = f" on planet {e['planet']}" if e.get("planet") else ""
+            out.append(f"  {clock(e['t'])} {e['agent']} built {e.get('amount')} {e.get('what')}{where} ({e.get('why')})")
     else:
         out.append("  none yet (the defence code may not be installed, or nobody was attacked)")
     out.append("")

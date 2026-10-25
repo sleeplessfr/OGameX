@@ -15,7 +15,7 @@ from .military import (Memory, choose_strike, judge_trade, summarize_battle, cho
 from .client import ApiClient, ApiError
 from .opponents import record_result, record_spy, summary as opp_summary
 from .personas import Persona
-from .defense import AGGRESSOR_MEMORY, GUARD_SECONDS, PEACE_WATCH_SECONDS, RECENT_RAID, ALERT_SECONDS, COOLDOWN_SECONDS as DEFEND_COOLDOWN, WATCH_SECONDS, choose_defense, defence_share, find_threats
+from .defense import AGGRESSOR_MEMORY, GUARD_SECONDS, PEACE_WATCH_SECONDS, RECENT_RAID, ALERT_SECONDS, COOLDOWN_SECONDS as DEFEND_COOLDOWN, WATCH_SECONDS, attribute, choose_defense, defence_share, find_threats
 from .trade import COOLDOWN_SECONDS, choose_sale, plan_deal
 
 
@@ -75,7 +75,11 @@ class Agent:
         self.my_tech = None  # (weapons, shields, armour) levels, from /status
         self.planets_owned = 1
         self.alert_until = 0.0           # server time until which a hostile fleet keeps us alert
-        self.defend_cooldown_until = 0.0
+        self._defend_cooldown: dict[int, float] = {}   # planet id -> no new defence order before this server time
+        self._planet_attacked: dict[int, float] = {}   # colony id -> when an attack on it was last seen coming
+        self._planet_goals: dict[int, dict] = {}       # colony id -> building goals (a shipyard, once it was threatened)
+        self._impossible_logged: set[int] = set()
+        self._home_id = 0
         self._seen_threats: set[int] = set()
         self.dark_matter = 0     # from /status each round
         self.now = 0.0           # server time of the current round
@@ -160,6 +164,7 @@ class Agent:
         research_busy = bool(research_queue)
 
         self.planets_owned = len(planets)
+        self._home_id = home["id"]
         self._choose_class()
         goal_buildings, goal_research = self._colony_goals(status, home)
         threats = self._watch()
@@ -170,12 +175,25 @@ class Agent:
         else:
             hints.append(PEACE_WATCH_SECONDS)
 
+        by_planet = attribute(threats, planets, home)   # a single planet (or no target given) = everything is aimed at home
+        for pid, aimed in by_planet.items():
+            if any(t.is_attack for t in aimed):
+                self._planet_attacked[pid] = self.now
         for planet in planets:
             have = dict(planet["resources"])
+            mine = by_planet[planet["id"]]
+            hit = self.now - self._planet_attacked.get(planet["id"], -1e12) < RECENT_RAID
             if planet is home:
-                self._prepare_defense(home, have, threats)   # before the economy spends the stock the raider is after
+                # Robbed lately (the memory of aggressors also survives a restart). With colonies, only the planets that were
+                # actually hit stay on guard: a raid on a colony is no reason to keep rearming the home planet.
+                colony_hit = any(self.now - self._planet_attacked.get(p["id"], -1e12) < RECENT_RAID for p in planets if p is not home)
+                guard = self._on_guard() and (hit or not colony_hit)
+                self._prepare_defense(home, have, mine, guard)   # before the economy spends the stock the raider is after
+            else:
+                self._prepare_defense(planet, have, mine, hit)
             self._economy_saving = False
-            hints += self._plan_buildings(planet, have, research_busy, goals=goal_buildings if planet is home else None)
+            hints += self._plan_buildings(planet, have, research_busy,
+                                          goals=goal_buildings if planet is home else self._planet_goals.get(planet["id"]))
             if planet is home:
                 hints += self._plan_research(planet, have, research_queue, goals=goal_research)
                 hints += self._plan_military(status, planet, have, self._economy_saving)
@@ -213,7 +231,8 @@ class Agent:
             if t.id not in self._seen_threats:
                 self._seen_threats.add(t.id)
                 self.stats["threats"] += 1
-                self.log("threat", kind=t.kind, mission=t.id, **{"from": ":".join(map(str, t.origin))}, arrives_in=_r(t.arrives_in))
+                self.log("threat", kind=t.kind, mission=t.id, **{"from": ":".join(map(str, t.origin))}, arrives_in=_r(t.arrives_in),
+                         **({"planet": t.planet_id} if t.planet_id else {}))
         for t in threats:
             if t.is_attack:
                 self.memory.aggressors[t.origin] = self.now
@@ -224,19 +243,27 @@ class Agent:
     def _on_guard(self) -> bool:
         return any(self.now - when < RECENT_RAID for when in self.memory.aggressors.values())
 
-    def _prepare_defense(self, home: dict, have: dict, threats: list) -> None:
-        """Turn part of the stock into defence units before the fleet lands: it would be stolen otherwise."""
+    def _prepare_defense(self, home: dict, have: dict, threats: list, on_guard: bool = False) -> None:
+        """Turn part of the stock into defence units before the fleet lands: it would be stolen otherwise.
+
+        `home` is the planet being defended (the home planet or a colony); `threats` are the fleets aimed at it."""
         known = {c for c, when in self.memory.aggressors.items() if self.now - when < AGGRESSOR_MEMORY}
-        share = defence_share(self.persona, threats, known, self._on_guard())
-        if share <= 0 or self.now < self.defend_cooldown_until or home["unit_queue"]:
+        share = defence_share(self.persona, threats, known, on_guard)
+        if share <= 0 or self.now < self._defend_cooldown.get(home["id"], 0.0) or home["unit_queue"]:
             return
         units = self.client.get(f"/planets/{home['id']}/units")["units"]
         coming = [x.arrives_in for x in threats if x.is_attack]
         pick = choose_defense(self.persona, units, have, share, min(coming) if coming else None)
         if pick is None:
+            if threats and home["id"] != self._home_id and not any(u.get("category") == "defense" and u.get("requirements_met") for u in units):
+                # A colony without a shipyard cannot build any defence: say so once, and make the shipyard a goal.
+                if home["id"] not in self._impossible_logged:
+                    self._impossible_logged.add(home["id"])
+                    self.log("defend_impossible", planet=home["id"], why="no shipyard on this colony: building one")
+                self._planet_goals[home["id"]] = {"shipyard": 2}
             return
         name, amount = pick
-        self.defend_cooldown_until = self.now + DEFEND_COOLDOWN
+        self._defend_cooldown[home["id"]] = self.now + DEFEND_COOLDOWN
         try:
             self.client.post(f"/planets/{home['id']}/units", {"machine_name": name, "amount": amount})
         except ApiError as e:
@@ -252,7 +279,7 @@ class Agent:
             why = f"{first.kind} on its way from {':'.join(map(str, first.origin))}, arrives in {_r(first.arrives_in)} s"
         else:
             why = "on guard after a recent raid: rearming"
-        self.log("defend", what=name, amount=amount, why=why)
+        self.log("defend", planet=home["id"], what=name, amount=amount, why=why)
 
     def _maybe_trade(self, planet: dict, choice, have: dict) -> bool:
         """Call the merchant when stuck waiting with a big surplus of something else (see trade.py). True = traded."""

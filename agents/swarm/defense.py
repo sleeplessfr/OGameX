@@ -28,6 +28,8 @@ class Threat:
     kind: str                   # the mission name
     arrives_in: float           # seconds
     origin: tuple[int, int, int]
+    planet_id: int | None = None                  # which of our planets it is heading for (None = the API did not say)
+    target: tuple[int, int, int] | None = None    # its coordinates
 
     @property
     def is_attack(self) -> bool:
@@ -44,8 +46,13 @@ def find_threats(missions: list[dict]) -> list[Threat]:
         if kind not in HOSTILE and kind not in SCOUTS:
             continue
         src = m.get("from") or {}
+        dest = m.get("to") or {}
+        target = None
+        if dest.get("galaxy") and dest.get("system") and dest.get("position"):
+            target = (int(dest["galaxy"]), int(dest["system"]), int(dest["position"]))
         found.append(Threat(int(m["id"]), kind, float(m.get("seconds_remaining") or 0),
-                            (int(src.get("galaxy") or 0), int(src.get("system") or 0), int(src.get("position") or 0))))
+                            (int(src.get("galaxy") or 0), int(src.get("system") or 0), int(src.get("position") or 0)),
+                            int(dest["planet_id"]) if dest.get("planet_id") else None, target))
     return found
 
 
@@ -115,3 +122,18 @@ def defence_share(persona: Persona, threats: list[Threat], aggressors: set[tuple
     if on_guard:
         return persona.caution * STANDING_FACTOR   # recently robbed: rebuild instead of waiting for the next raid
     return 0.0
+
+
+def attribute(threats: list[Threat], planets: list[dict], home: dict) -> dict[int, list[Threat]]:
+    """Group the threats by the planet they are heading for: by planet id, else by coordinates, else the home planet.
+
+    With a single planet (or an API that does not name the target) everything lands on home, as before."""
+    out: dict[int, list[Threat]] = {p["id"]: [] for p in planets}
+    by_coord = {}
+    for p in planets:
+        c = p.get("coordinates") or {}
+        by_coord[(c.get("galaxy"), c.get("system"), c.get("position"))] = p["id"]
+    for t in threats:
+        pid = t.planet_id if t.planet_id in out else by_coord.get(t.target)
+        out[pid if pid in out else home["id"]].append(t)
+    return out

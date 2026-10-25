@@ -98,6 +98,10 @@ stock anyway. One order per 10 minutes. A spy probe alone is ignored unless it c
 before (the agent remembers attackers for 12 hours, saved with its memory), so the first raid still surprises it and
 the next ones do not. Rules are in `swarm/defense.py`.
 
+With colonies, every threat is matched to the planet it is aimed at (the fleet list names the target planet and its coordinates;
+without a target it counts as aimed at home). Each planet then defends itself from its own stock and its own shipyard, and
+stays on guard for 3 hours after an attack on it. A colony without a shipyard logs `defend_impossible` once and builds one.
+
 ## Planet fields
 
 Every building level uses one field of the planet. The agent reads the free fields from the API. With 30 or fewer
