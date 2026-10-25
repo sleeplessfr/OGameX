@@ -26,6 +26,57 @@ def extra_energy_needed(machine_name: str, level: int) -> int:
     return int(base * ((level + 1) * 1.1 ** (level + 1) - level * 1.1 ** level)) + 1
 
 
+# --- payback: how many hours until a mine's extra output has paid for its own upgrade -----------------------
+VALUE = {"metal": 1.0, "crystal": 1.5, "deuterium": 3.0}   # the merchant's usual 3:2:1 exchange rate, per unit
+# OGame: output per hour = base + k * level * 1.1^level (before the universe speed, which cancels out below)
+MINE_OUTPUT = {"metal_mine": ("metal", 30.0, 30.0), "crystal_mine": ("crystal", 15.0, 20.0),
+               "deuterium_synthesizer": ("deuterium", 0.0, 10.0)}   # machine: (resource, free base output, k)
+PAYBACK_MIN, PAYBACK_MAX = 0.5, 2.0
+
+
+def _value(cost: dict) -> float:
+    return sum(VALUE[r] * cost.get(r, 0) for r in RESOURCES)
+
+
+def payback_hours(item: dict, planet: dict, solar: dict | None = None) -> float | None:
+    """Hours until upgrading this mine has paid for itself, including the extra solar power it needs.
+
+    The game does not report each mine's own output, so it is estimated from the planet's total production and the
+    mine formula. The universe speed appears on both sides and cancels out. None = cannot be estimated."""
+    spec = MINE_OUTPUT.get(item["machine_name"])
+    if spec is None:
+        return None
+    resource, base, k = spec
+    level = item["level"]
+    total = planet["production_per_hour"].get(resource, 0)
+    unit_now = k * level * 1.1 ** level
+    unit_next = k * (level + 1) * 1.1 ** (level + 1)
+    if total <= 0 or base + unit_now <= 0:
+        return None
+    gain = VALUE[resource] * total * (unit_next - unit_now) / (base + unit_now)
+    if gain <= 0:
+        return None
+    cost = _value(item["cost"])
+    if solar is not None:  # price the extra energy at what the solar plant charges per unit
+        s_level = solar["level"]
+        energy_per_upgrade = 20.0 * ((s_level + 1) * 1.1 ** (s_level + 1) - s_level * 1.1 ** s_level)
+        if energy_per_upgrade > 0:
+            cost += extra_energy_needed(item["machine_name"], level) * _value(solar["cost"]) / energy_per_upgrade
+    return cost / gain
+
+
+def payback_factors(items: list[dict], planet: dict, solar: dict | None, strength: float) -> dict[str, float]:
+    """Score multiplier per mine: above 1 for a mine that pays back faster than the typical one, below 1 for a slower one.
+    `strength` (0..1) says how much this personality cares (patient planners care more)."""
+    paybacks = {it["machine_name"]: payback_hours(it, planet, solar) for it in items}
+    known = sorted(v for v in paybacks.values() if v)
+    if len(known) < 2:
+        return {}
+    reference = known[len(known) // 2]
+    return {name: min(PAYBACK_MAX, max(PAYBACK_MIN, (reference / pb) ** strength))
+            for name, pb in paybacks.items() if pb}
+
+
 @dataclass
 class Choice:
     machine_name: str | None      # what to start (None = nothing now)
@@ -116,7 +167,9 @@ def choose_building(
             return _forced(by_name[STORE_FOR[r]], have, production, f"{r} storage almost full")
 
     # 3. Otherwise follow the personality.
-    scored = [(_score(b, persona.building_weights, persona, rng), b) for b in usable]
+    solar = by_name.get("solar_plant")
+    factors = payback_factors(usable, planet, solar, 0.3 + 0.6 * persona.patience)
+    scored = [(_score(b, persona.building_weights, persona, rng) * factors.get(b["machine_name"], 1.0), b) for b in usable]
     ranked = [b for s, b in sorted(scored, key=lambda t: -t[0]) if s > 0]
     # Do not pile on energy consumers while the power is already negative.
     if planet["energy"] < 0:
