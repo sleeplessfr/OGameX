@@ -39,6 +39,7 @@ def read_events(log_dir: Path, since: float = 0.0) -> list[dict]:
 
 
 def clock(t: float) -> str:
+    # note: on the night clocks go back (last Sunday of October) the same hour appears twice
     return datetime.fromtimestamp(t).strftime("%d %H:%M")
 
 
@@ -110,6 +111,21 @@ def summarize(events: list[dict], personas: dict[str, str] | None = None) -> str
     out.append("ATTACKS NOT SENT: " + (", ".join(f"{k} {v}" for k, v in skipped.most_common()) or "none"))
     for e in sim_skips[-5:]:
         out.append(f"  {clock(e['t'])} {e['agent']} at {e.get('at')}: {e.get('why')}")
+    out.append("")
+
+    out.append("BAD ATTACKS (what the agent knew when it sent them)")
+    bad = [e for e in events if e["event"] == "battle" and e.get("role") == "attacker" and e.get("verdict") == "bad"]
+    for b in bad[-6:]:
+        sent = [e for e in by_agent[b["agent"]] if e["event"] == "attack" and e.get("at") == b.get("at") and e["t"] <= b["t"]]
+        out.append(f"  {clock(b['t'])} {b['agent']} at {b.get('at')}: lost {b.get('my_loss', 0):,}, destroyed {b.get('their_loss', 0):,}, looted {b.get('loot', 0):,}, {b.get('rounds')} rounds")
+        if sent:
+            a = sent[-1]
+            out.append(f"      sent {clock(a['t'])}: ships {a.get('ships')}")
+            out.append(f"      reason: {a.get('why')}")
+        else:
+            out.append("      (no matching attack line in these logs)")
+    if not bad:
+        out.append("  none")
     out.append("")
 
     out.append("DEFENCE (threat = a foreign fleet seen coming; defend = defence units ordered)")
