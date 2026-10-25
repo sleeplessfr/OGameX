@@ -30,7 +30,7 @@ BUILD_CARGO_MAX = 5        # a miner / turtle without cargo ships may order this
 BUILD_CARGO_SHARE = 0.1    # ...if they cost at most this share of the stock's value
 BUILDERS = ("miner", "turtle", "trader")
 
-MIN_FLEET_VALUE = 8_000    # a fleet worth less than this is not worth a flight (a few probes)
+MIN_FLEET_VALUE = 40_000   # a fleet worth less than this is not worth a flight (a few probes, one or two fighters)
 DANGER_GRACE = 90.0        # seconds after the last landing before the fleet may come home
 AWAY_GIVE_UP = 6 * 3600.0  # forget a fleet that never turned up at its refuge
 ATTACKER_MARGIN = 1.5      # the attacker is assumed to bring this many times the strength last seen

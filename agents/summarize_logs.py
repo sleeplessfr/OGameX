@@ -236,7 +236,7 @@ def summarize(events: list[dict], personas: dict[str, str] | None = None) -> str
     out.append("")
 
     out.append("EXPEDITIONS (sent, what came back, net resources and dark matter found, ships found and lost)")
-    exp_events = [e for e in events if e["event"] in ("expedition_sent", "expedition_result", "expedition_refused")]
+    exp_events = [e for e in events if e["event"] in ("expedition_sent", "expedition_result", "expedition_refused", "expedition_skipped")]
     if exp_events:
         for a in sorted({e["agent"] for e in exp_events}):
             mine = [e for e in exp_events if e["agent"] == a]
@@ -261,6 +261,9 @@ def summarize(events: list[dict], personas: dict[str, str] | None = None) -> str
                 out.append("    ships found: " + ", ".join(f"{n} {k}" for k, n in sorted(ships_found.items())))
             if ships_lost:
                 out.append("    ships lost: " + ", ".join(f"{n} {k}" for k, n in sorted(ships_lost.items())))
+            stayed = Counter(str(e.get("why", "")).split(":")[0] for e in mine if e["event"] == "expedition_skipped")
+            if stayed:
+                out.append("    stayed home: " + ", ".join(f"{k} x{n}" for k, n in stayed.most_common(4)))
     else:
         out.append("  none")
     out.append("")

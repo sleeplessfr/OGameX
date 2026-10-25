@@ -185,3 +185,11 @@ class BoardAndTradeReportTests(unittest.TestCase):
         text = sl.summarize([ev(1000.0, "a1", "build", what="metal_mine")])
         self.assertIn("BOARD AND TRADE", text)
         self.assertRegex(text, r"BOARD AND TRADE[^\n]*\n  none")
+
+
+class ExpeditionStayedHomeTests(unittest.TestCase):
+    def test_report_says_why_agents_stayed_home(self):
+        events = [{"t": 1000.0 + i, "agent": "agent0002", "event": "expedition_skipped",
+                   "why": "astrophysics too low" if i < 2 else "no free expedition slot"} for i in range(3)]
+        text = sl.summarize(events)
+        self.assertIn("stayed home: astrophysics too low x2, no free expedition slot x1", text)

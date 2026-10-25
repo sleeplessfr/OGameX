@@ -322,6 +322,9 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin):
         try:
             result = self.client.post(path, {"machine_name": choice.machine_name})
         except ApiError as e:
+            if e.code == "shipyard_busy":     # ships are being built: not a refusal worth reporting, just try again soon
+                self.log("busy", kind=kind, what=choice.machine_name)
+                return [60.0]
             self.stats["refused"] += 1
             self.log("refused", kind=kind, what=choice.machine_name, code=e.code, msg=e.message)
             return [30.0]
@@ -376,8 +379,10 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin):
             st["last_read"] = self.now
             self._read_expeditions()
         astro = int((status["research"].get("levels") or {}).get("astrophysics", 0))
-        if expedition.can_consider(self.persona, now=self.now, state=st, astro=astro, fleet_slots=status["fleet_slots"],
-                                   on_guard=self._on_guard(), alert=self.now < self.alert_until):
+        stay = expedition.can_consider(self.persona, now=self.now, state=st, astro=astro, fleet_slots=status["fleet_slots"],
+                                       on_guard=self._on_guard(), alert=self.now < self.alert_until)
+        if stay:
+            self._expedition_skipped(stay)
             return []
         units = self.client.get(f"/planets/{home['id']}/units")["units"]
         ships_here = {u["machine_name"]: u["amount"] for u in units if u["amount"] > 0 and u["category"] != "defense"}
@@ -391,6 +396,7 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin):
         d = expedition.decide(self.persona, self.rng, ships_here=ships_here, cargo_of=cargo_of, top_score=top, state=st)
         if not d.ships:
             st["next_at"] = self.now + d.retry_in
+            self._expedition_skipped(d.why or "no fleet to send")
             return []
         c = home["coordinates"]
         try:
@@ -407,6 +413,15 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin):
         self.log("expedition_sent", at=f"{c['galaxy']}:{c['system']}:16", ships=d.ships, hours=d.holding_hours, why=d.why,
                  seconds=result["mission"]["seconds_remaining"])
         return []
+
+    def _expedition_skipped(self, why: str) -> None:
+        """Say why an expedition-minded agent stayed home, but only when the reason changes or after an hour (the report counts them)."""
+        key = why.split(":")[0]
+        last = getattr(self, "_exp_skip", None)
+        if last and last[0] == key and self.now - last[1] < 3600:
+            return
+        self._exp_skip = (key, self.now)
+        self.log("expedition_skipped", why=why)
 
     def _read_expeditions(self) -> None:
         data = self.client.get("/messages?category=expeditions&unread_only=1&per_page=20")
