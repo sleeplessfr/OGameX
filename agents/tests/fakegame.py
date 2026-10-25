@@ -31,6 +31,8 @@ UNITS = {
 }
 
 
+MOON_BASE = {"lunar_base": (20000, 40000, 20000, 2.0), "sensor_phalanx": (20000, 40000, 20000, 2.0),
+             "jump_gate": (2000000, 4000000, 2000000, 2.0)}   # the game's real moon prices
 OWN = {10: (1, 3, 8), 11: (1, 4, 6)}   # the two planets when logistics_stuff is on
 
 
@@ -87,6 +89,15 @@ class FakeGame:
         self.uid = 1
         self.peers: dict[tuple, "FakeGame"] = {}
         self.sent_to_peers: list[dict] = []   # every transport sent to a peer, for the tests
+        # --- moons: a moon (id 12) on the home planet's coordinates; transports reach it with "type": "moon" ---
+        self.moon_stuff = False
+        self.res3 = {"metal": 0.0, "crystal": 0.0, "deuterium": 0.0}
+        self.ships3 = {k: 0 for k, v in UNITS.items() if v[0] == "ship"}
+        self.moon_levels = {k: 0 for k in MOON_BASE}
+        self.mq: dict | None = None
+        self.phalanx_fleets: dict[tuple, list[dict]] = {}   # scanned planet -> the fleets its scan shows (API shape of POST /phalanx)
+        self.scans: list[tuple] = []                        # every scan made, for the tests
+        self.no_moon_endpoints = False                      # an older game: the moon routes answer 404 (not our envelope)
 
     # -- economy --
     def energy_prod(self):
@@ -123,6 +134,9 @@ class FakeGame:
                     store[q["name"]] = q["level"]
                     setattr(self, attr, None)
             self._process_missions()
+            if self.mq and self.now >= self.mq["end"]:
+                self.moon_levels[self.mq["name"]] = self.mq["level"]
+                self.mq = None
 
     # -- helpers --
     def cost(self, name, level_now, table):
@@ -275,10 +289,10 @@ class FakeGame:
         self._add_message(key, None, body)
 
     def _stock(self, pid):
-        return self.res if pid == 10 else self.res2
+        return {10: self.res, 11: self.res2, 12: self.res3}[pid]
 
     def _ship_box(self, pid):
-        return self.ships if pid == 10 else self.ships2
+        return {10: self.ships, 11: self.ships2, 12: self.ships3}[pid]
 
     def _process_own(self, m):
         """A transport or deployment between the two own planets."""
@@ -299,7 +313,10 @@ class FakeGame:
 
     def _own_fleet(self, src, body, check):
         to = (body["galaxy"], body["system"], body["position"])
-        dst = next((pid for pid, c in OWN.items() if c == to and pid != src), None)
+        if body.get("type") == "moon":
+            dst = 12 if (self.moon_stuff and src == 10 and to == self.home) else None
+        else:
+            dst = next((pid for pid, c in OWN.items() if c == to and pid != src), None)
         if dst is None:
             return None
         if check:
@@ -347,10 +364,73 @@ class FakeGame:
                           "character_class_met": True, "max_buildable": min(fits) if (met and fits) else 0})
         return items
 
+    # -- the moon --
+    def _moon_buildings(self):
+        items = []
+        for name in MOON_BASE:
+            lvl = self.moon_levels[name]
+            cost = self.cost(name, lvl, MOON_BASE)
+            items.append({"id": 1, "machine_name": name, "title": name, "level": lvl, "next_level": lvl + 1, "cost": cost,
+                          "duration_seconds": 60, "requirements_met": name == "lunar_base" or self.moon_levels["lunar_base"] >= 1,
+                          "can_afford": all(self.res3[r] >= cost[r] for r in cost)})
+        return {"planet_id": 12, "buildings": items, "queue": self.qdict(self.mq, "b"), "queue_full": self.mq is not None}
+
+    def _moon_status(self):
+        if not self.moon_stuff:
+            return []
+        return [{"id": 12, "name": "Moon", "type": "moon", "coordinates": {"galaxy": self.home[0], "system": self.home[1], "position": self.home[2]},
+                 "resources": {r: int(v) for r, v in self.res3.items()}, "storage": {r: 10 ** 6 for r in self.res3},
+                 "production_per_hour": {"metal": 0, "crystal": 0, "deuterium": 0}, "energy": 0,
+                 "fields": {"used": sum(self.moon_levels.values()), "max": 5},
+                 "building_queue": self.qdict(self.mq, "b"), "unit_queue": []}]
+
+    def _moon_post(self, path, body):
+        if path == "/planets/12/buildings":
+            name = body.get("machine_name")
+            item = next((b for b in self._moon_buildings()["buildings"] if b["machine_name"] == name), None)
+            if item is None:
+                raise ApiError(422, "unknown_object", str(name))
+            if self.mq:
+                raise ApiError(422, "build_rejected", "Maximum number of items already in queue.")
+            if not item["requirements_met"]:
+                raise ApiError(422, "requirements_not_met", name)
+            if not item["can_afford"]:
+                raise ApiError(422, "not_enough_resources", name)
+            for r, v in item["cost"].items():
+                self.res3[r] -= v
+            self.mq = {"name": name, "level": item["next_level"], "end": self.now + 60, "dur": 60}
+            return {"queue": self.qdict(self.mq, "b")}
+        if path == "/planets/12/phalanx":
+            lvl = self.moon_levels["sensor_phalanx"]
+            if lvl < 1:
+                raise ApiError(422, "no_sensor_phalanx", "No Sensor Phalanx built on this moon.")
+            t = (body["galaxy"], body["system"], body["position"])
+            d = abs(t[1] - self.home[1])
+            if t[0] != self.home[0] or min(d, 499 - d) > lvl * lvl - 1:
+                raise ApiError(422, "out_of_range", "Target is out of range.")
+            if self.res3["deuterium"] < 5000:
+                raise ApiError(422, "not_enough_deuterium", "Not enough Deuterium!")
+            other = next((o for o in self.others if o["coord"] == t), None)
+            if t == self.home:
+                raise ApiError(422, "target_is_own", "You cannot scan your own planets.")
+            if other is None:
+                raise ApiError(404, "no_planet_at_target", "No planet found at these coordinates.")
+            self.res3["deuterium"] -= 5000
+            self.scans.append(t)
+            fleets = [dict(f) for f in self.phalanx_fleets.get(t, [])]
+            return {"server_time": int(self.now), "target": {"galaxy": t[0], "system": t[1], "position": t[2],
+                                                              "planet_name": "x", "player_name": other["username"]},
+                    "scan_cost": 5000, "deuterium_left": int(self.res3["deuterium"]), "fleet_count": len(fleets), "fleets": fleets}
+        raise ApiError(404, "not_found", path)
+
     def _handle_new_get(self, path):
         url = urlparse(path)
         q = {k: v[0] for k, v in parse_qs(url.query).items()}
         route = url.path
+        if self.moon_stuff and route == "/planets/12/buildings":
+            if self.no_moon_endpoints:
+                raise ApiError(404, "http_error", "The route could not be found.")
+            return self._moon_buildings()
         if route == "/fleet":
             return {"missions": [dict(m, seconds_remaining=max(0, m["arrive_at"] - self.now)) for m in self.hostile]}
         if route == "/merchant":
@@ -441,12 +521,16 @@ class FakeGame:
         return None
 
     def _handle_new_post(self, path, body):
+        if self.moon_stuff and path.startswith("/planets/12/"):
+            if self.no_moon_endpoints:
+                raise ApiError(404, "http_error", "The route could not be found.")
+            return self._moon_post(path, body)
         m = re.fullmatch(r"/planets/(10|11)/fleet(/check)?", path)
         if self.peers and m and m.group(1) == "10":
             r = self._peer_fleet(body, bool(m.group(2)))
             if r is not None:
                 return r
-        if self.logistics_stuff and m:
+        if (self.logistics_stuff or self.moon_stuff) and m:
             r = self._own_fleet(int(m.group(1)), body, bool(m.group(2)))
             if r is not None:
                 return r
@@ -546,7 +630,7 @@ class FakeGame:
                     "production_per_hour": {r: int(v) for r, v in rate.items()},
                     "energy": int(self.energy_prod() - self.energy_need()),
                     "fields": {"used": sum(self.levels.values()), "max": self.field_max},
-                    "building_queue": self.qdict(self.bq, "b"), "unit_queue": []}] + self._colony_status(),
+                    "building_queue": self.qdict(self.bq, "b"), "unit_queue": []}] + self._colony_status() + self._moon_status(),
                 "research": {"levels": {k: v for k, v in self.tech.items()}, "queue": self.qdict(self.rq, "r")},
                 "fleet_slots": {"used": len(self.missions), "max": self.slots_max,
                                 **({"expedition_used": sum(1 for x in self.missions if x["mission"] == "expedition"),

@@ -299,6 +299,8 @@ def summarize(events: list[dict], personas: dict[str, str] | None = None) -> str
         out.append("  none")
     out.append("")
 
+    out += moons_section(events)
+
     out.append("BOARD AND TRADE (galaxy board posts; deals with other agents, goods go in small instalments, a cheat is shunned)")
     posts = [e for e in events if e["event"] == "board_post"]
     reads = [e for e in events if e["event"] == "board_read"]
@@ -431,6 +433,37 @@ def summarize(events: list[dict], personas: dict[str, str] | None = None) -> str
     if not others:
         out.append("  none")
     return "\n".join(out) + "\n"
+
+
+def moons_section(events: list[dict]) -> list[str]:
+    """MOONS: sensor phalanx building and scans, the warnings they gave, deuterium spent."""
+    out = ["MOONS (sensor phalanx: scans cost 5,000 deuterium each; a warning is an attack seen flying to one of our planets)"]
+    names = ("moon_seen", "moon_fed", "phalanx_built", "phalanx_scan", "phalanx_warning", "phalanx_skipped")
+    ev = [e for e in events if e["event"] in names]
+    if not ev:
+        return out + ["  none", ""]
+    seen = {(e["agent"], e.get("moon")) for e in ev if e["event"] == "moon_seen"}
+    scans = [e for e in ev if e["event"] == "phalanx_scan"]
+    warns = [e for e in ev if e["event"] == "phalanx_warning"]
+    fed = [e for e in ev if e["event"] == "moon_fed"]
+    built = [e for e in ev if e["event"] == "phalanx_built"]
+    skips = [e for e in ev if e["event"] == "phalanx_skipped"]
+    carried: Counter = Counter()
+    for e in fed:
+        for r, v in (e.get("resources") or {}).items():
+            carried[r] += int(v or 0)
+    spent = sum(int(e.get("cost") or 0) for e in scans)
+    out.append(f"  {len(seen)} moons seen, {len(built)} phalanx upgrades finished, {len(fed)} deliveries to moons "
+               f"({', '.join(f'{r} {v:,}' for r, v in carried.items()) or 'nothing'})")
+    out.append(f"  {len(scans)} scans ({spent:,} deuterium; {sum(1 for e in scans if e.get('fleets'))} showed fleets, "
+               f"{sum(1 for e in scans if e.get('away'))} showed a rival fleet away), {len(warns)} warnings")
+    for e in warns[-5:]:
+        out.append(f"    {clock(e['t'])} {e['agent']} attack from {e.get('attacker')} on {e.get('planet')}: {e.get('ships')} ships, "
+                   f"{e.get('lands_in')} s ahead")
+    for why, n in Counter(str(e.get("why", ""))[:70] for e in skips).most_common(3):
+        out.append(f"    skipped {n}x: {why}")
+    out.append("")
+    return out
 
 
 def _fmt_res(d) -> str:

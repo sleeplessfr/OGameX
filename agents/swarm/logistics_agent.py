@@ -136,6 +136,7 @@ class LogisticsMixin:
             attacks = L.incoming_attacks(self.client.get("/fleet").get("missions", []))
         except ApiError:
             return [30.0]
+        attacks += self._phalanx_attacks(planets, attacks)   # raids a sensor phalanx saw coming (moons_agent.py)
         used = [int((status.get("fleet_slots") or {}).get("used", 0))]
         maxed = int((status.get("fleet_slots") or {}).get("max", 1))
         for p in planets:

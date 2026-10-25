@@ -9,6 +9,7 @@ use OGame\Http\Controllers\Api\V1\GalaxyController;
 use OGame\Http\Controllers\Api\V1\HighscoreController;
 use OGame\Http\Controllers\Api\V1\MerchantController;
 use OGame\Http\Controllers\Api\V1\MessageController;
+use OGame\Http\Controllers\Api\V1\MoonController;
 use OGame\Http\Controllers\Api\V1\PlanetController;
 use OGame\Http\Controllers\Api\V1\ResearchController;
 use OGame\Http\Controllers\Api\V1\StatusController;
@@ -75,6 +76,9 @@ Route::middleware(['api.token', 'throttle:ogamex-api', 'globalgame'])->group(fun
     Route::post('/merchant/call', [MerchantController::class, 'call']);
     Route::post('/merchant/dismiss', [MerchantController::class, 'dismiss']);
     Route::post('/planets/{planet}/merchant/trade', [MerchantController::class, 'trade'])->whereNumber('planet');
+
+    Route::post('/planets/{planet}/phalanx', [MoonController::class, 'phalanx'])->whereNumber('planet');
+    Route::post('/planets/{planet}/jump-gate', [MoonController::class, 'jumpGate'])->whereNumber('planet');
 
     Route::get('/character-class', [CharacterClassController::class, 'show']);
     Route::post('/character-class', [CharacterClassController::class, 'select']);
