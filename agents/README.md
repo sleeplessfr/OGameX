@@ -15,6 +15,8 @@ python run_swarm.py --count 5
 - `--personas miner,raider` limit / reorder the personalities (default: all, in rotation).
   Available: `miner`, `scientist`, `turtle`, `raider`, `balanced`. Every agent's weights are randomly nudged,
   so two "miners" are never identical. Same `--seed` = same personalities.
+- `--max-rate 12` most requests per second all agents together send (default 4). Raise it with more agents, together with
+  `OGAMEX_API_RATE_LIMIT` in the game's `.env` (default 300 per minute per account).
 - `--first 6 --count 5` add five more agents later (agent0006 .. agent0010) without touching the old ones.
 - Accounts are remembered in `agents_state.json` (email, password, token). Delete the file to start with new
   accounts. **Keep it private.**
@@ -105,6 +107,32 @@ left it heads for the terraformer (energy technology 12, a nanite factory, then 
 5 fields per level); with 3 or fewer it stops upgrading minor buildings (stores, shipyard, research lab). On a full
 planet it builds nothing, does not count that as "saving", and keeps buying ships and defence.
 
+## Character classes
+
+Each agent takes the free first choice of a character class once, by personality: miner and turtle are Collectors, raider
+and balanced are Generals (+2 fleet slots, faster fleets), scientist is a Discoverer (research 25% faster, bigger
+colonies). It never pays to change. Needs `GET/POST /character-class` in the game; an older game without it is simply
+skipped. Log events: `class`, `class_refused`. Rules are in `_choose_class` (`swarm/agent.py`) and `Persona.character_class`.
+
+## Colonies
+
+When the home planet has 70 or fewer free fields, a personality with an appetite for expansion (`Persona.expansion`; it also
+sets how many planets it is content with: 1 + round(4 x expansion)) sets itself a goal: research lab 3, shipyard 4, impulse
+drive 3, espionage technology 4 and enough astrophysics, then it builds one colony ship, scans the home system and 6 systems
+either side for free positions, picks the one with the best mix of fields and production bonus for that position, and sends
+the ship. The new planet is then built up like any other. Colonies are not defended yet. Log events: `expand`,
+`colony_sent`, `colony_founded`, `colony_failed`. Rules are in `swarm/colonise.py`; `expand_planner.py` prints the same
+tables for a human (terraformer versus colony versus moon).
+
+## Learning
+
+- **Memory per agent** (`memory/<name>.json`): risk scale, avoid list, aggressors, merchant cooldown, colony goal.
+- **Opponent memory** (`swarm/opponents.py`): per target, its last strength and the results of our attacks; the raider ranks
+  targets by loot times a track-record factor (0.25 to 1.5, losses count double, old news fades after 12 hours).
+- **Fight margin bandit** (`swarm/bandit.py`): the attack check can assume the defender is 1.2, 1.5, 2 or 3 times stronger
+  than the spy report says. Each attack tries one of these (Thompson sampling), and the battle report tells whether it paid
+  off, so each raider slowly learns the margin that suits it. Report section: LEARNED FIGHT MARGIN.
+
 ## The merchant
 
 A merchant call costs 3,500 dark matter (accounts start with 8,000), shows random rates and trades once. So an agent
@@ -118,8 +146,9 @@ enough to win, and never risks fighters worth more than 4 times the loot.
 
 ## Not built yet
 
-Colonising, expeditions, the scrap merchant, alliances, recycling debris, fleet-saving, retaliation, and LLM-driven
-decisions. The brain is rule-based; the personas are the knobs; the only learning so far is the risk lesson above.
+Expeditions, the scrap merchant, alliances, recycling debris, fleet-saving, defending colonies, retaliation, and LLM-driven
+decisions. The brain is rule-based; the personas are the knobs; learning so far is the risk lesson, opponent memory and the
+fight margin bandit above.
 
 ## Tests
 
