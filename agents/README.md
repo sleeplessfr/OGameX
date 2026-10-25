@@ -22,6 +22,15 @@ python run_swarm.py --count 5
 - Stop: Ctrl+C, or create a file called `STOP` in this folder (delete it before the next run).
 - Quick test: `--ticks 5 --speedup 20` plays 5 rounds with pauses 20x shorter.
 
+## Reading what happened
+
+```
+python summarize_logs.py            (writes report.txt and prints it)
+python summarize_logs.py --hours 6  (only the last 6 hours)
+```
+
+One page: what each agent did, who won or lost its attacks, defence, merchant, lessons and errors. Attach `report.txt` when asking for help.
+
 ## How an agent decides
 
 Each round it reads `/status`, then, for every planet whose queue is empty, the list of buildings:
