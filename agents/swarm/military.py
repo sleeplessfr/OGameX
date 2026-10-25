@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 
 from .brain import RESOURCES
 from .combat import Estimate, Tech, estimate_battle, tech_from_research, unit_value
+from .opponents import target_factor
 from .personas import Persona
 
 FIGHTERS = ("light_fighter", "heavy_fighter", "cruiser", "battle_ship", "battlecruiser", "bomber", "destroyer")
@@ -40,10 +41,11 @@ class Memory:
     risk_scale: float = 1.0    # learned caution: shrinks after costly defeats, recovers slowly after profitable raids
     battles: list[dict] = field(default_factory=list)  # recent results of own attacks (newest last, capped)
     aggressors: dict[Coord, float] = field(default_factory=dict)  # planets that attacked us (when we last saw one coming)
+    opponents: dict[Coord, dict] = field(default_factory=dict)  # per-target record: strength seen, our wins/losses/net (opponents.py)
     trade_cooldown_until: float = 0.0  # no new merchant call before this server time (dark matter is scarce)
 
     # Saved to disk so a restart does not make the agent forget (JSON cannot have tuple keys, so coordinates become "g:s:p").
-    _COORD_MAPS = ("spied", "attacked", "pending", "intel", "avoid_until", "aggressors")
+    _COORD_MAPS = ("spied", "attacked", "pending", "intel", "avoid_until", "aggressors", "opponents")
 
     def to_dict(self) -> dict:
         out: dict = {"need_cargo": self.need_cargo, "risk_scale": self.risk_scale, "battles": self.battles,
@@ -319,9 +321,10 @@ def pick_attack(persona: Persona, rng: random.Random, memory: Memory, now: float
                       info.get("research"))
         risk = sum(unit_value(n) * int(ships_here.get(n, 0) * persona.strike_fraction) for n in FIGHTERS)
         go, reason = assess_attack(persona, rng, intel, fighters, memory.risk_scale, at_risk=risk)
-        if go and (best is None or intel.loot > best[1].loot):
-            best = (c, intel, reason)
-    return best
+        worth = intel.loot * target_factor(memory.opponents.get(c), now)   # proven easy targets first, ones that beat us last
+        if go and (best is None or worth > best[3]):
+            best = (c, intel, reason, worth)
+    return best[:3] if best else None
 
 
 # ---- what to build --------------------------------------------------------------------------------------------
