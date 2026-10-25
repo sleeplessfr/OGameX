@@ -149,6 +149,22 @@ class BoardAndTradeReportTests(unittest.TestCase):
         self.assertIn("a1: 1 posts, sent 5,000, received 4,500, cheated 1x", text)
         self.assertIn("a1 was cheated by a9: owed 4,800", text)
 
+    def test_prices_learned_subsection(self):
+        t = 1_700_000_000
+        events = [
+            ev(t, "a1", "board_post", kind="OFFER", text="OFFER", id=1),
+            ev(t + 1, "a1", "price_learned", pair="metal>crystal", kind="ask", old=1.03, new=0.9476, why="unanswered", start=1.03, answered=0, unanswered=1),
+            ev(t + 2, "a1", "price_learned", pair="metal>crystal", kind="ask", old=0.9476, new=0.8718, why="unanswered", start=1.03, answered=0, unanswered=2),
+            ev(t + 3, "a1", "price_learned", pair="metal>crystal", kind="ask", old=0.8718, new=0.898, why="answered", start=1.03, answered=1, unanswered=2),
+            ev(t + 4, "a1", "price_learned", pair="metal>crystal", kind="ask", old=0.898, new=0.925, why="completed", start=1.03, answered=1, unanswered=2),
+            ev(t + 5, "a2", "price_learned", pair="crystal>metal", kind="accept", old=1.0526, new=1.0726, why="need", start=1.03, answered=0, unanswered=0),
+        ]
+        text = sl.summarize(events)
+        self.assertIn("PRICES LEARNED", text)
+        self.assertIn("a1 metal>crystal ask: start 1.03 -> now 0.93 (answered 1, unanswered 2, completed 1)", text)
+        self.assertIn("a2 crystal>metal accept: start 1.05 -> now 1.07 (loosened 1x after unmet need, deals completed 0)", text)
+        self.assertNotIn("PRICES LEARNED", sl.summarize([ev(t, "a1", "board_post", kind="OFFER", text="x", id=1)]))
+
     def test_bounties_and_revenge_section(self):
         t = 1_700_000_000
         events = [

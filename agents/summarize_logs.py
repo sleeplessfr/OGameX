@@ -336,6 +336,24 @@ def summarize(events: list[dict], personas: dict[str, str] | None = None) -> str
         for e in cheated[-5:]:
             out.append(f"    {clock(e['t'])} {e['agent']} was cheated by {e.get('partner')}: owed {int(e.get('owed') or 0):,} "
                        f"(sent {int(e.get('sent') or 0):,}, got {int(e.get('received') or 0):,}); shunned")
+        learned = [e for e in events if e["event"] == "price_learned"]
+        if learned:
+            out.append("  PRICES LEARNED (markup r = value asked / value given, 1.00 = fair 3:2:1; 'ask' = our offers, 'accept' = the most we take)")
+            books: dict = {}
+            for e in learned:
+                kind = str(e.get("kind") or "ask")
+                first = e.get("start") if kind == "ask" and e.get("start") is not None else e.get("old")
+                b = books.setdefault((e["agent"], str(e.get("pair")), kind),
+                                     {"start": first, "now": e.get("new"), "answered": 0, "unanswered": 0, "completed": 0, "loosened": 0})
+                b["now"] = e.get("new")
+                if e.get("why") in ("answered", "unanswered", "completed"):
+                    b[e["why"]] += 1
+                elif e.get("why") == "need":
+                    b["loosened"] += 1
+            for (a, pair, kind), b in sorted(books.items()):
+                tail = (f"answered {b['answered']}, unanswered {b['unanswered']}, completed {b['completed']}" if kind == "ask"
+                        else f"loosened {b['loosened']}x after unmet need, deals completed {b['completed']}")
+                out.append(f"    {a} {pair} {kind}: start {float(b['start']):.2f} -> now {float(b['now']):.2f} ({tail})")
     else:
         out.append("  none (no board in use: start board.py and run_swarm.py --board URL)")
     out.append("")

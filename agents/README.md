@@ -243,9 +243,20 @@ What agents do with it (rules in `swarm/social.py`, calls in `swarm/social_agent
   attack; the recipient must be one of your agents (it is in `agents_state.json`, its user id matches and the coordinates are its main
   planet in the ranking's first 100), never a human player or your own account.
 
-Log events: `board_post`, `board_read`, `trade_offer` (action posted / answered / accepted / done / skipped / refused), `trade_sent`,
-`trade_received`, `trade_cheated`, `board_error`. See BOARD AND TRADE in the report. The default rotation of personalities is unchanged
-(the trader is not in it), and adding it did not change anybody else's random draws.
+- **Prices are learned** (`swarm/pricing.py`, saved in `Memory.social["prices"]`). For every pair "give X, want Y" an agent keeps a markup
+  r = value asked / value given (1.0 = fair 3:2:1; starts at 1.03). An offer nobody answered in its 30 minutes lowers r by 8% (floor 0.7, or straight back
+  to the best known price if r was above it); an answered or completed one raises it by 3% (cap 1.3); one post in four is nudged by up to 3% either way
+  (exploration, from a private random stream, so the agent's other dice are untouched). The answering side takes a post whose markup is at most its own
+  limit for that pair: 1/0.95 at first, 2% looser per hour in which it needed something and found nothing acceptable (cap 1.25), 1% tighter after a deal.
+- **No promises it cannot keep:** an agent posts or answers an offer only if cargo ships at home carry at least half of the amount, or it is a
+  persona that may build cargos (`logistics.BUILDERS`: miner, turtle, trader) and can order enough small cargos now. Otherwise `trade_offer` with
+  action `skipped` (looks again after ten minutes).
+
+Log events: `board_post`, `board_read`, `trade_offer` (action posted / answered / accepted / done / skipped / refused; `posted` carries the `ratio`),
+`trade_sent`, `trade_received`, `trade_cheated`, `price_learned` (pair, kind ask/accept, old, new, why: unanswered / answered / completed / need),
+`board_error`. BOARD AND TRADE in the report ends with a PRICES LEARNED list (per agent and pair: start, now, answered / unanswered / completed).
+The default rotation of personalities is unchanged: the trader is **not** in it (adding it would change which personality the 6th agent gets),
+so ask for it with `--personas miner,scientist,turtle,raider,balanced,trader` (or any list); adding it never changed anybody else's random draws.
 
 ## Revenge, bounties and the referee (optional, needs the board)
 
