@@ -176,6 +176,41 @@ Collector (mines, energy, transporters), General (combat, +2 fleet slots, Reaper
 | GET | `/character-class` | `class` (`collector`, `general`, `discoverer` or `null`), `change_cost` (0 while the free choice is unused), `dark_matter`, and `options` with the bonuses of each class |
 | POST | `/character-class` | Body: `class`. Returns the same data as GET. Errors: `class_change_refused` (not enough dark matter, same class, fleets flying), `validation_failed`, `vacation_mode` |
 
+### Moons
+
+A moon is a planet entry with `"type": "moon"` in `GET /planets`, `/status` and `/me`. It takes the normal endpoints with its own ID: `GET/POST /planets/{moon}/buildings` (lunar_base, sensor_phalanx, jump_gate, plus the usual storages and shipyard; the moon's field limit and the lunar base requirements are the game's own), `/planets/{moon}/units` and `/planets/{moon}/fleet`. Only two moon actions need their own endpoints. Both use the same services as the web UI, so range, deuterium cost and cooldowns are the game's rules.
+
+| Method | Path | What it does |
+|---|---|---|
+| POST | `/planets/{moon}/phalanx` | Body: `galaxy`, `system`, `position` of a planet in range of the sensor phalanx. Costs 5,000 deuterium on the moon. Returns `fleets`: every fleet flying to that planet (and the predicted return flights of fleets that left it): `mission`, `hostile` (an enemy attack), `is_return_trip`, `origin`, `destination`, `ships`, `ship_count`, `arrival_time`, `seconds_until_arrival`. Errors: `not_a_moon`, `no_sensor_phalanx`, `out_of_range` (range is level squared minus 1 systems), `not_enough_deuterium`, `no_planet_at_target` (404), `target_is_moon`, `target_is_admin`, `target_is_own`, `validation_failed` |
+| POST | `/planets/{moon}/jump-gate` | Body: `target_moon_id` (another moon of yours with a jump gate) and `ships` (e.g. `{"light_fighter": 20}`). Moves the ships at once and puts both gates on cooldown. Returns `ships` and `cooldown_seconds`. Errors: `not_a_moon`, `no_jump_gate`, `jump_gate_cooldown` and `target_cooldown` (`details.seconds_remaining`), `target_not_found` (404), `target_not_a_moon`, `target_is_source`, `target_no_jump_gate`, `ship_not_transferable`, `not_enough_ships`, `fleet_being_processed`, `vacation_mode`, `validation_failed` |
+
+```bash
+curl -s -X POST http://localhost/api/v1/planets/45/phalanx \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"galaxy":1,"system":42,"position":8}'
+```
+
+```json
+{"success": true, "data": {
+  "server_time": 1760000000,
+  "target": {"galaxy": 1, "system": 42, "position": 8, "planet_name": "Homeworld", "player_name": "Rival"},
+  "scan_cost": 5000, "deuterium_left": 12000, "fleet_count": 1,
+  "fleets": [{"mission_id": 311, "mission_type": 1, "mission": "Attack", "direction": "Enemy fleet", "hostile": true,
+    "is_return_trip": false, "owner_id": 7,
+    "origin": {"galaxy": 1, "system": 40, "position": 3, "planet_name": "Raider"},
+    "destination": {"galaxy": 1, "system": 42, "position": 8, "planet_name": "Homeworld"},
+    "ships": {"light_fighter": 30}, "ship_count": 30, "speed": 12500,
+    "arrival_time": 1760000600, "seconds_until_arrival": 600}]}}
+```
+
+```bash
+curl -s -X POST http://localhost/api/v1/planets/45/jump-gate \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"target_moon_id":52,"ships":{"light_fighter":20,"small_cargo":5}}'
+# {"success":true,"data":{"from_moon_id":45,"to_moon_id":52,"ships":{"light_fighter":20,"small_cargo":5},"cooldown_seconds":3600}}
+```
+
 ### Highscore
 
 | Method | Path | Description |
@@ -208,4 +243,4 @@ curl -s -X POST http://localhost/api/v1/planets/12/buildings \
 ## Not available yet
 
 Battle simulation, ACS/missiles/fleet unions, custom player names, and the other
-parts of the game (alliances, the scrap merchant, moon buildings' special actions, planet management).
+parts of the game (alliances, the scrap merchant, planet management).
