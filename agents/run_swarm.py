@@ -26,6 +26,7 @@ def main() -> int:
     ap.add_argument("--log-dir", default="logs")
     ap.add_argument("--memory-dir", default="memory", help="where each agent saves what it has learned (survives restarts)")
     ap.add_argument("--stagger", type=float, default=2.0, help="seconds between agent starts (registration is rate limited)")
+    ap.add_argument("--max-rate", type=float, default=4.0, help="most requests per second all agents together may send (4 = 240 a minute; raise it together with OGAMEX_API_RATE_LIMIT in the game's .env; 0 = no limit)")
     ap.add_argument("--ticks", type=int, default=0, help="stop each agent after N rounds (0 = run until Ctrl+C)")
     ap.add_argument("--speedup", type=float, default=1.0, help="divide every pause by this (for quick tests)")
     ap.add_argument("--stop-file", default="STOP", help="create this file to stop all agents")
@@ -45,6 +46,7 @@ def main() -> int:
         print(f"Cannot reach the API at {args.base_url}: {e}", file=sys.stderr)
         return 1
 
+    ApiClient.shared_interval = 1.0 / args.max_rate if args.max_rate > 0 else 0.0
     store = TokenStore(args.state)
     stop = threading.Event()
     agents: list[Agent] = []
