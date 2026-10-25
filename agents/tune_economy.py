@@ -11,8 +11,9 @@ function (swarm.brain.choose_building). The score is the value of one hour of pr
 deuterium 3) after the given number of game hours, averaged over several random seeds. A simple evolution strategy then
 nudges the weights and keeps what scores better.
 
-It only touches the economy part of a personality (the weights of mines, solar plant, robot factory, stores, plus
-balance, patience, energy buffer and store alarm). Research, ships and fighting are left alone, so the result is a
+It only touches the means of the economy: the weights of the mines, solar plant and robot factory (never further than
+3 times away from the original) and the spare power it keeps. The stores, balance, patience and store alarm (a turtle's
+character, for example) are left alone unless you add --with-stores or --with-traits. Research, ships and fighting are left alone, so the result is a
 suggestion for those few numbers, not a whole new character. Nothing is written to your files: copy the numbers you like.
 """
 from __future__ import annotations
@@ -33,6 +34,9 @@ PRICE = {
     "metal_store": (1000, 0, 0, 2.0), "crystal_store": (1000, 500, 0, 2.0), "deuterium_store": (1000, 1000, 0, 2.0),
 }
 TUNED = tuple(PRICE)
+# What a personality is FOR (how big its stores are, ...) is left alone; only the means of getting there are tuned.
+MEANS = ("metal_mine", "crystal_mine", "deuterium_synthesizer", "solar_plant", "robot_factory")
+STRETCH = 3.0   # a weight never moves further than this factor away from the original, up or down
 TEMPERATURE = 30.0   # average planet temperature; only changes the deuterium output a little
 
 
@@ -135,19 +139,23 @@ def score(persona: Persona, seeds: range, hours: float, speed: float, start: flo
 
 
 # ---- the search -----------------------------------------------------------------------------------------
-def mutate(base: Persona, rng: random.Random, sigma: float) -> Persona:
+def mutate(base: Persona, rng: random.Random, sigma: float, original: Persona, names: tuple[str, ...] = MEANS,
+           traits: bool = False) -> Persona:
     weights = dict(base.building_weights)
-    for name in TUNED:
+    for name in names:
         w = weights.get(name, 1.0)
         if w <= 0:
             continue
-        weights[name] = round(min(10.0, max(0.05, w * math.exp(rng.gauss(0, sigma)))), 3)
-    return replace(
-        base, building_weights=weights,
-        balance=round(min(2.0, max(0.0, base.balance + rng.gauss(0, 0.15 * sigma / 0.3))), 3),
-        patience=round(min(1.0, max(0.0, base.patience + rng.gauss(0, 0.1 * sigma / 0.3))), 3),
-        energy_buffer=int(min(300, max(0, base.energy_buffer + rng.gauss(0, 15 * sigma / 0.3)))),
-        store_alarm=round(min(0.99, max(0.5, base.store_alarm + rng.gauss(0, 0.04 * sigma / 0.3))), 3))
+        home = original.building_weights.get(name, w)
+        weights[name] = round(min(home * STRETCH, max(home / STRETCH, w * math.exp(rng.gauss(0, sigma)))), 3)
+    out = replace(base, building_weights=weights,
+                  energy_buffer=int(min(300, max(0, base.energy_buffer + rng.gauss(0, 15 * sigma / 0.3)))))
+    if traits:   # balance, patience and the store alarm are part of the character: only with --with-traits
+        out = replace(out,
+                      balance=round(min(2.0, max(0.0, base.balance + rng.gauss(0, 0.15 * sigma / 0.3))), 3),
+                      patience=round(min(1.0, max(0.0, base.patience + rng.gauss(0, 0.1 * sigma / 0.3))), 3),
+                      store_alarm=round(min(0.99, max(0.5, base.store_alarm + rng.gauss(0, 0.04 * sigma / 0.3))), 3))
+    return out
 
 
 def describe(p: Persona) -> str:
@@ -166,6 +174,8 @@ def main() -> int:
     ap.add_argument("--population", type=int, default=8)
     ap.add_argument("--seeds", type=int, default=6, help="random games per candidate")
     ap.add_argument("--check", action="store_true", help="only measure the current weights")
+    ap.add_argument("--with-traits", action="store_true", help="also tune balance, patience and store alarm (they are part of the character: off by default)")
+    ap.add_argument("--with-stores", action="store_true", help="also tune the store weights (they usually define the character: off by default)")
     ap.add_argument("--seed", type=int, default=1)
     args = ap.parse_args()
 
@@ -183,7 +193,7 @@ def main() -> int:
     for gen in range(1, args.generations + 1):
         improved = False
         for _ in range(args.population):
-            cand = mutate(best, rng, sigma)
+            cand = mutate(best, rng, sigma, base, TUNED if args.with_stores else MEANS, args.with_traits)
             s = score(cand, train, args.hours, args.speed, args.start)
             if s > best_score:
                 best, best_score, improved = cand, s, True
