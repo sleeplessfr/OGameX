@@ -8,7 +8,7 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass, field
 
-from . import expedition
+from . import expedition, social
 from .bandit import Bandit
 from .brain import RESOURCES
 from .combat import Estimate, Tech, estimate_battle, tech_from_research, unit_value
@@ -56,6 +56,7 @@ class Memory:
     expedition: dict = field(default_factory=expedition.new_state)  # expedition.py: cooldown, launches in flight, outcome counts, fleet-size scale
     supply_next_at: float = 0.0        # no new supply trip between own planets before this server time (logistics.py)
     away: list = field(default_factory=list)  # fleets sent to another own planet to dodge a raid, still to be brought home
+    social: dict = field(default_factory=social.new_state)  # galaxy board: cursor, post budget, trade offers and deals, reputation (social.py)
 
     # Saved to disk so a restart does not make the agent forget (JSON cannot have tuple keys, so coordinates become "g:s:p").
     _COORD_MAPS = ("spied", "attacked", "pending", "intel", "avoid_until", "aggressors", "opponents", "arm_for", "debris")
@@ -66,7 +67,7 @@ class Memory:
                      "colony_sent_at": self.colony_sent_at, "colony_planets_before": self.colony_planets_before,
                      "colony_until": self.colony_until, "bandit": self.bandit.to_dict(),
                      "expedition": self.expedition,
-                     "supply_next_at": self.supply_next_at, "away": self.away}
+                     "supply_next_at": self.supply_next_at, "away": self.away, "social": self.social}
         for name in self._COORD_MAPS:
             out[name] = {":".join(map(str, c)): v for c, v in getattr(self, name).items()}
         return out
@@ -110,6 +111,7 @@ class Memory:
         m.away = [a for a in away if isinstance(a, dict)] if isinstance(away, list) else []
         m.bandit = Bandit.from_dict(data.get("bandit"))
         m.expedition = expedition.clean_state(data.get("expedition"))
+        m.social = social.clean_state(data.get("social"))
         battles = data.get("battles")
         m.battles = battles if isinstance(battles, list) else []
         return m
@@ -264,7 +266,7 @@ def summarize_battle(report: dict, my_user_id: int | None) -> dict | None:
         "loot": sum(int(loot.get(r) or 0) for r in RESOURCES),
         "debris": sum(int(debris.get(r) or 0) for r in RESOURCES),
         "sent_units": _sum_values(units), "rounds": report.get("rounds"),
-        "my_units": mine.get("units"), "their_units": theirs.get("units"),
+        "my_units": mine.get("units"), "their_units": theirs.get("units"), "their_id": theirs.get("player_id"),
     }
 
 

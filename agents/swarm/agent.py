@@ -20,6 +20,7 @@ from .personas import Persona
 from .defense import AGGRESSOR_MEMORY, GUARD_SECONDS, PEACE_WATCH_SECONDS, RECENT_RAID, ALERT_SECONDS, COOLDOWN_SECONDS as DEFEND_COOLDOWN, WATCH_SECONDS, choose_defense, defence_share, find_threats
 from .trade import COOLDOWN_SECONDS, choose_sale, plan_deal
 from .logistics_agent import LogisticsMixin
+from .social_agent import SocialMixin
 
 
 # When an agent is stuck with nothing to do and no idea how long it will take, look again after this long.
@@ -51,7 +52,7 @@ class TokenStore:
             tmp.replace(self.path)
 
 
-class Agent(LogisticsMixin):
+class Agent(LogisticsMixin, SocialMixin):
     def __init__(
         self, name: str, persona: Persona, base_url: str, store: TokenStore, rng: random.Random,
         *, log_dir: str | None = None, email_domain: str = "example.com", client: ApiClient | None = None,
@@ -166,6 +167,7 @@ class Agent(LogisticsMixin):
         self._choose_class()
         goal_buildings, goal_research = self._colony_goals(status, home)
         threats = self._watch()
+        hints += self._plan_social(status, planets)   # galaxy board (off without --board): warnings raise the guard, traders swap goods
         if self.now < self.alert_until:
             hints.append(WATCH_SECONDS)   # someone hostile is about: look often
         elif self._on_guard():
@@ -620,6 +622,7 @@ class Agent(LogisticsMixin):
                 self.log("probes_lost", at=b["at"], lost=b["my_loss"])  # shot down while spying
                 continue
             self.stats["battles"] += 1
+            self._social_battle(b)   # galaxy board: tell the others when we were robbed
             verdict = judge_trade(b) if b["role"] == "attacker" else None
             margin = outcome = None
             if b["role"] == "attacker" and b["coord"] and None not in b["coord"]:

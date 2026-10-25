@@ -28,7 +28,7 @@ MAX_FUEL_SHARE = 0.05      # skip the trip when the deuterium costs more than th
 SUPPLY_COOLDOWN = 900.0    # server seconds between two supply trips (also waits until the last one has arrived)
 BUILD_CARGO_MAX = 5        # a miner / turtle without cargo ships may order this many small cargos for supplies...
 BUILD_CARGO_SHARE = 0.1    # ...if they cost at most this share of the stock's value
-BUILDERS = ("miner", "turtle")
+BUILDERS = ("miner", "turtle", "trader")
 
 MIN_FLEET_VALUE = 8_000    # a fleet worth less than this is not worth a flight (a few probes)
 DANGER_GRACE = 90.0        # seconds after the last landing before the fleet may come home

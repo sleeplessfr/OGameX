@@ -10,8 +10,9 @@ import threading
 import time
 
 from swarm.agent import Agent, TokenStore
+from swarm.boardclient import is_local_url, make_board
 from swarm.client import ApiClient, ApiError
-from swarm.personas import PRESETS, make_persona
+from swarm.personas import PRESETS, ROTATION, make_persona
 
 
 def main() -> int:
@@ -20,7 +21,7 @@ def main() -> int:
     ap.add_argument("--count", type=int, default=3, help="number of agents (any number)")
     ap.add_argument("--prefix", default="agent", help="agent names are <prefix>0001, <prefix>0002, ...")
     ap.add_argument("--first", type=int, default=1, help="number of the first agent (to add more agents later)")
-    ap.add_argument("--personas", default="", help=f"comma list to rotate through; default all of: {','.join(PRESETS)}")
+    ap.add_argument("--personas", default="", help=f"comma list to rotate through; default: {','.join(ROTATION)} (also available: {','.join(p for p in PRESETS if p not in ROTATION)})")
     ap.add_argument("--seed", type=int, default=1, help="same seed = same personalities")
     ap.add_argument("--state", default="agents_state.json", help="where accounts/tokens are remembered")
     ap.add_argument("--log-dir", default="logs")
@@ -33,7 +34,12 @@ def main() -> int:
     ap.add_argument("--email-domain", default="example.com")
     ap.add_argument("--attack-humans", action="store_true",
                     help="allow agents to spy on / attack players that are not agents (default: agents only)")
+    ap.add_argument("--board", default=None, metavar="URL",
+                    help="the galaxy board (start board.py first), e.g. http://localhost:8765. Default: none = agents do not use a board. "
+                         "If the board is not running the agents just play without it")
     args = ap.parse_args()
+    if args.board and not is_local_url(args.board):
+        ap.error("--board must be an http://localhost:PORT or http://127.0.0.1:PORT address: the board is for this computer only")
 
     names = [n.strip() for n in args.personas.split(",") if n.strip()] or None
     for n in names or []:
@@ -58,6 +64,11 @@ def main() -> int:
                             log_dir=args.log_dir, email_domain=args.email_domain,
                             attack_humans=args.attack_humans, memory_dir=args.memory_dir))
 
+    if args.board:
+        for a in agents:
+            a.board = make_board(args.board, a.name)
+        up = agents[0].board.read(limit=1)["ok"] if agents else True
+        print(f"Galaxy board: {args.board} ({'reachable' if up else 'NOT reachable yet: agents play without it until it is'})")
     threads = []
     print(f"Starting {len(agents)} agents on {args.base_url}. Ctrl+C or create a file named {args.stop_file} to stop.")
     for agent in agents:

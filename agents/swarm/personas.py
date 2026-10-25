@@ -42,6 +42,7 @@ class Persona:
     character_class: str | None = None  # "collector", "general" or "discoverer": chosen once, free (None = leaves it)
     expansion: float = 0.0       # 0..1 appetite for colonies (0 = never settles; also sets how many planets it is content with)
     expedition_interest: float = 0.0  # 0..1 chance to go on an expedition when one is possible (a Discoverer always goes)
+    trade_interest: float = 0.0  # 0..1 how keen it is to swap resources with other agents through the galaxy board (0 = never)
 
 
 ECONOMY = {"metal_mine": 3.0, "crystal_mine": 2.5, "deuterium_synthesizer": 1.5, "solar_plant": 2.0,
@@ -96,12 +97,24 @@ PRESETS: dict[str, Persona] = {
         aggression=0.3, scout_interest=0.4, army_share=0.2,
         unit_weights={"light_fighter": 1.0, "small_cargo": 1.0, "espionage_probe": 1.0, "rocket_launcher": 1.0},
         probes_wanted=2, risk_ratio=0.6, min_loot=800, expansion=0.5, expedition_interest=0.25, character_class="general"),
+    "trader": Persona(
+        "trader", "A merchant: builds a steady economy, then swaps its surplus for what it lacks with other agents (needs the galaxy board).",
+        {**ECONOMY, "metal_mine": 3.5, "crystal_mine": 3.0, "deuterium_synthesizer": 2.0, "shipyard": 0.9, "research_lab": 0.8},
+        {"energy_technology": 1.5, "combustion_drive": 1.5, "computer_technology": 1.0, "espionage_technology": 0.3},
+        balance=1.0, patience=0.75, research_share=0.5, tick_seconds=50, max_save_seconds=3600, caution=0.5,
+        scout_interest=0.05, probes_wanted=1,   # one probe: it reads its battle reports, so it can tell the board when it is robbed
+        expansion=0.3, expedition_interest=0.1, character_class="collector", trade_interest=1.0),
 }
+
+# The personalities handed out in turn when --personas is not given. The trader is left out on purpose: it only does anything
+# with the galaxy board running, and adding it here would change which personality the 6th, 7th... agent gets. Ask for it with
+# --personas ...,trader.
+ROTATION = ("miner", "scientist", "turtle", "raider", "balanced")
 
 
 def make_persona(index: int, rng: random.Random, names: list[str] | None = None) -> Persona:
     """Persona for the index-th agent: presets in rotation, each one slightly perturbed so no two agents are twins."""
-    order = names or list(PRESETS)
+    order = names or list(ROTATION)
     base = PRESETS[order[index % len(order)]]
 
     def jitter(weights: dict[str, float]) -> dict[str, float]:
@@ -122,4 +135,6 @@ def make_persona(index: int, rng: random.Random, names: list[str] | None = None)
         caution=min(1.0, max(0.0, base.caution + rng.uniform(-0.15, 0.15))) if base.caution > 0 else 0.0,
         expansion=min(1.0, max(0.0, base.expansion + rng.uniform(-0.15, 0.15))) if base.expansion > 0 else 0.0,
         expedition_interest=min(1.0, max(0.0, base.expedition_interest + rng.uniform(-0.05, 0.05))) if 0 < base.expedition_interest < 1 else base.expedition_interest,
+        # drawn after everything else, and only for personalities that trade: no other agent's draws change
+        trade_interest=min(1.0, max(0.2, base.trade_interest + rng.uniform(-0.2, 0.0))) if base.trade_interest > 0 else 0.0,
     )

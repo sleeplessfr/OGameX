@@ -82,6 +82,11 @@ class FakeGame:
         self.fuel_cost = 10                # deuterium every own-planet flight burns
         self.storage2 = 10 ** 6
         self.own_log: list[dict] = []     # every own-planet mission ever sent, for the tests
+        # --- other agents: a transport to the home planet of another FakeGame in `peers` (coordinates -> game) delivers there ---
+        self.home = (1, 3, 8)
+        self.uid = 1
+        self.peers: dict[tuple, "FakeGame"] = {}
+        self.sent_to_peers: list[dict] = []   # every transport sent to a peer, for the tests
 
     # -- economy --
     def energy_prod(self):
@@ -143,6 +148,9 @@ class FakeGame:
                 continue
             if not m["arrived"] and self.now >= m["arrive"]:
                 m["arrived"] = True
+                if m.get("peer") is not None:
+                    self._deliver_to_peer(m)
+                    continue
                 if m["mission"] == "recycle":
                     cap = m["ships"].get("recycler", 0) * UNITS["recycler"][4]
                     took = min(cap, self.debris.get(m["to"], 0))
@@ -197,6 +205,46 @@ class FakeGame:
                     self.ships[name] += n
                 for r, v in (m.get("bring") or {}).items():
                     self.res[r] += v
+
+    def _deliver_to_peer(self, m):
+        peer, cargo = m["peer"], m.get("cargo_out") or {}
+        for r, v in cargo.items():
+            peer.res[r] += v
+        text = "\n".join(f"{r.capitalize()}: {v:,}" for r, v in cargo.items())
+        peer._add_message("transport_received", None, f"An incoming fleet from [{self.home[0]}:{self.home[1]}:{self.home[2]}] has reached "
+                                                      f"your planet [{peer.home[0]}:{peer.home[1]}:{peer.home[2]}] and delivered its goods:\n{text}")
+
+    def _peer_fleet(self, body, check):
+        to = (body["galaxy"], body["system"], body["position"])
+        peer = self.peers.get(to)
+        if peer is None or body.get("mission", "transport") != "transport":
+            return None
+        cap = sum(UNITS[n][4] * k for n, k in body["ships"].items())
+        if check:
+            ok = {"possible": True, "reason": None}
+            return {"missions": {"transport": ok}, "duration_seconds": 60, "deuterium_consumption": self.fuel_cost,
+                    "cargo_capacity": cap, "fuel_capacity": 10 ** 6, "distance": 1000}
+        if len(self.missions) >= self.slots_max:
+            raise ApiError(422, "mission_rejected", "Maximum number of fleets reached.")
+        for n, v in body["ships"].items():
+            if self.ships.get(n, 0) < v:
+                raise ApiError(422, "mission_rejected", "Not enough units on the planet to send the fleet.")
+        cargo = {r: int(v) for r, v in (body.get("resources") or {}).items() if v}
+        if sum(cargo.values()) > cap:
+            raise ApiError(422, "mission_rejected", "Cargo too small.")
+        need = dict(cargo)
+        need["deuterium"] = need.get("deuterium", 0) + self.fuel_cost
+        if any(self.res[r] < v for r, v in need.items()):
+            raise ApiError(422, "mission_rejected", "Not enough resources or fuel.")
+        for r, v in need.items():
+            self.res[r] -= v
+        for n, v in body["ships"].items():
+            self.ships[n] -= v
+        m = {"mission": "transport", "to": to, "ships": dict(body["ships"]), "arrived": False, "arrive": self.now + 60,
+             "back": self.now + 120, "peer": peer, "cargo_out": cargo}
+        self.missions.append(m)
+        self.sent_to_peers.append({"to": to, "resources": cargo, "at": self.now})
+        return {"mission": {"id": 900 + len(self.sent_to_peers), "mission": "transport", "seconds_remaining": 60}}
 
     def _add_message(self, key, report, body=""):
         self.messages.append({"id": self.next_message_id, "key": key, "viewed": False, "report": report, "body": body})
@@ -328,15 +376,16 @@ class FakeGame:
             rows = [{"rank": 1, "user_id": o["user_id"], "username": o["username"], "score": o["score"], "is_me": False,
                      "main_planet": {"galaxy": o["coord"][0], "system": o["coord"][1], "position": o["coord"][2]},
                      "alliance_tag": None, "total_ships": None} for o in self.others]
-            rows.append({"rank": 2, "user_id": 1, "username": "Fake", "score": 0, "is_me": True,
-                         "main_planet": {"galaxy": 1, "system": 3, "position": 8}, "alliance_tag": None, "total_ships": None})
+            rows.append({"rank": 2, "user_id": self.uid, "username": "Fake", "score": 0, "is_me": True,
+                         "main_planet": {"galaxy": self.home[0], "system": self.home[1], "position": self.home[2]}, "alliance_tag": None, "total_ships": None})
             return {"type": "general", "players": rows, "total_players": len(rows),
                     "me": {"general": {"rank": 2, "score": 0}}}
         if route == "/messages":
             rows = [m for m in self.messages if not (q.get("unread_only") == "1" and m["viewed"])
                     and (q.get("category") != "espionage" or m["key"] == "espionage_report")
                     and (q.get("category") != "combat" or m["key"] == "combat_report")
-                    and (q.get("category") != "expeditions" or m["key"].startswith("expedition_"))]
+                    and (q.get("category") != "expeditions" or m["key"].startswith("expedition_"))
+                    and (q.get("category") != "fleet_other" or m["key"] == "transport_received")]
             return {"messages": [{"id": m["id"], "key": m["key"], "viewed": m["viewed"], "body": m.get("body", ""),
                                   "has_espionage_report": m["key"] == "espionage_report",
                                   "has_battle_report": m["key"] == "combat_report"} for m in rows]}
@@ -393,6 +442,10 @@ class FakeGame:
 
     def _handle_new_post(self, path, body):
         m = re.fullmatch(r"/planets/(10|11)/fleet(/check)?", path)
+        if self.peers and m and m.group(1) == "10":
+            r = self._peer_fleet(body, bool(m.group(2)))
+            if r is not None:
+                return r
         if self.logistics_stuff and m:
             r = self._own_fleet(int(m.group(1)), body, bool(m.group(2)))
             if r is not None:
@@ -481,14 +534,14 @@ class FakeGame:
         if path == "/universe":
             return {"name": "fake"}
         if path == "/me":
-            return {"id": 1}
+            return {"id": self.uid}
         if path == "/status":
             rate = self.rate()
             return {
                 "server_time": int(self.now),
-                "player": {"id": 1, "username": "Fake", "current_planet_id": 10, "dark_matter": self.dark_matter},
+                "player": {"id": self.uid, "username": "Fake", "current_planet_id": 10, "dark_matter": self.dark_matter},
                 "planets": [{
-                    "id": 10, "name": "Home", "type": "planet", "coordinates": {"galaxy": 1, "system": 3, "position": 8},
+                    "id": 10, "name": "Home", "type": "planet", "coordinates": {"galaxy": self.home[0], "system": self.home[1], "position": self.home[2]},
                     "resources": {r: int(v) for r, v in self.res.items()}, "storage": self.storage(),
                     "production_per_hour": {r: int(v) for r, v in rate.items()},
                     "energy": int(self.energy_prod() - self.energy_need()),

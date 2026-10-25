@@ -296,6 +296,47 @@ def summarize(events: list[dict], personas: dict[str, str] | None = None) -> str
         out.append("  none")
     out.append("")
 
+    out.append("BOARD AND TRADE (galaxy board posts; deals with other agents, goods go in small instalments, a cheat is shunned)")
+    posts = [e for e in events if e["event"] == "board_post"]
+    reads = [e for e in events if e["event"] == "board_read"]
+    offers = [e for e in events if e["event"] == "trade_offer"]
+    tsent = [e for e in events if e["event"] == "trade_sent"]
+    trecv = [e for e in events if e["event"] == "trade_received"]
+    cheated = [e for e in events if e["event"] == "trade_cheated"]
+    if posts or reads or offers or tsent or trecv or cheated:
+        kinds = Counter(str(e.get("kind")) for e in posts)
+        out.append(f"  {len(posts)} posts ({', '.join(f'{k} {n}' for k, n in kinds.most_common()) or 'none'}), "
+                   f"{len(reads)} reads with news ({sum(int(e.get('warnings') or 0) for e in reads)} warnings, "
+                   f"{sum(int(e.get('revenge') or 0) for e in reads)} revenge calls, guard raised {sum(1 for e in reads if e.get('guard'))}x)")
+        acts = Counter(str(e.get("action")) for e in offers)
+        out.append(f"  deals: {acts['posted']} offers posted, {acts['answered']} answered, {acts['accepted']} accepted, {acts['done']} completed, "
+                   f"{acts['skipped'] + acts['refused']} instalments skipped or refused")
+        moved: Counter = Counter()
+        for e in tsent:
+            for r, v in (e.get("resources") or {}).items():
+                moved[r] += int(v or 0)
+        out.append(f"  goods: {len(tsent)} instalments sent (worth {sum(int(e.get('value') or 0) for e in tsent):,}: "
+                   f"{', '.join(f'{r} {v:,}' for r, v in moved.items()) or 'nothing'}), {len(trecv)} deliveries received "
+                   f"(worth {sum(int(e.get('value') or 0) for e in trecv):,}), {len(cheated)} cheats")
+        per: dict[str, list] = defaultdict(lambda: [0, 0, 0, 0])
+        for e in posts:
+            per[e["agent"]][0] += 1
+        for e in tsent:
+            per[e["agent"]][1] += int(e.get("value") or 0)
+        for e in trecv:
+            per[e["agent"]][2] += int(e.get("value") or 0)
+        for e in cheated:
+            per[e["agent"]][3] += 1
+        for a in sorted(per):
+            n, out_v, in_v, bad = per[a]
+            out.append(f"    {a}: {n} posts, sent {out_v:,}, received {in_v:,}{f', cheated {bad}x' if bad else ''}")
+        for e in cheated[-5:]:
+            out.append(f"    {clock(e['t'])} {e['agent']} was cheated by {e.get('partner')}: owed {int(e.get('owed') or 0):,} "
+                       f"(sent {int(e.get('sent') or 0):,}, got {int(e.get('received') or 0):,}); shunned")
+    else:
+        out.append("  none (no board in use: start board.py and run_swarm.py --board URL)")
+    out.append("")
+
     out.append("FULL PLANETS (no free building fields)")
     full = Counter(e["agent"] for e in events if e["event"] == "wait" and "no free fields" in str(e.get("why", "")))
     heading = Counter(e["agent"] for e in events if e["event"] == "wait" and "free fields left" in str(e.get("why", "")))

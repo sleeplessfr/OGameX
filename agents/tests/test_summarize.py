@@ -123,3 +123,33 @@ class ExpeditionReportTests(unittest.TestCase):
     def test_no_expeditions_says_none(self):
         text = sl.summarize([{"t": 1000.0, "agent": "a", "event": "build", "what": "metal_mine"}])
         self.assertIn("EXPEDITIONS", text)
+
+
+class BoardAndTradeReportTests(unittest.TestCase):
+    def test_report_counts_posts_deals_goods_and_cheats(self):
+        t = 1_700_000_000
+        events = [
+            ev(t, "a1", "board_post", kind="OFFER", text="OFFER 20,000 metal for 13,733 crystal", id=1),
+            ev(t + 1, "a1", "trade_offer", action="posted", give={"metal": 20000}, want={"crystal": 13733}, post=1),
+            ev(t + 2, "a2", "board_post", kind="WARNING", text="Robbed", id=2),
+            ev(t + 3, "a2", "board_post", kind="REVENGE", text="Revenge", id=3),
+            ev(t + 4, "a3", "board_read", posts=2, warnings=1, revenge=1, guard=["1:1:5"]),
+            ev(t + 5, "a2", "trade_offer", action="answered", **{"with": "a1"}, give={"crystal": 13733}, want={"metal": 20000}),
+            ev(t + 6, "a2", "trade_sent", to="a1", at="1:3:8", resources={"crystal": 3000}, value=4500, instalment="1/4", fuel=10, seconds=60),
+            ev(t + 7, "a1", "trade_received", partner="a2", resources={"crystal": 3000}, value=4500),
+            ev(t + 8, "a1", "trade_sent", to="a2", at="1:5:2", resources={"metal": 5000}, value=5000, instalment="1/4", fuel=10, seconds=60),
+            ev(t + 9, "a1", "trade_offer", action="done", **{"with": "a2"}, sent=20000, received=19400, instalments=4),
+            ev(t + 10, "a1", "trade_cheated", partner="a9", owed=4800, sent=5000, received=0, why="no payment in time; shunned"),
+        ]
+        text = sl.summarize(events)
+        self.assertIn("BOARD AND TRADE", text)
+        self.assertIn("3 posts (OFFER 1, WARNING 1, REVENGE 1), 1 reads with news (1 warnings, 1 revenge calls, guard raised 1x)", text)
+        self.assertIn("1 offers posted, 1 answered, 0 accepted, 1 completed", text)
+        self.assertIn("2 instalments sent (worth 9,500: crystal 3,000, metal 5,000), 1 deliveries received (worth 4,500), 1 cheats", text)
+        self.assertIn("a1: 1 posts, sent 5,000, received 4,500, cheated 1x", text)
+        self.assertIn("a1 was cheated by a9: owed 4,800", text)
+
+    def test_report_without_a_board_says_none(self):
+        text = sl.summarize([ev(1000.0, "a1", "build", what="metal_mine")])
+        self.assertIn("BOARD AND TRADE", text)
+        self.assertRegex(text, r"BOARD AND TRADE[^\n]*\n  none")

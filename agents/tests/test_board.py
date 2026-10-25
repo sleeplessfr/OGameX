@@ -128,10 +128,14 @@ class PersistenceTests(unittest.TestCase):
         self.assertEqual(len(path.read_text().splitlines()), 1)
 
     def test_unwritable_file_does_not_stop_the_board(self):
+        import contextlib
+        import io
         d = Path(tempfile.mkdtemp())
-        b = B.Board(d, clock=Clock())          # a folder, not a file
-        b.post("a", "TAUNT", "still works")
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            b = B.Board(d, clock=Clock())          # a folder, not a file
+            b.post("a", "TAUNT", "still works")
         self.assertEqual(len(b.read()), 1)
+        self.assertIn("cannot write", err.getvalue())
 
 
 class ServerTests(unittest.TestCase):
