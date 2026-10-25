@@ -167,6 +167,16 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.raw("PUT", "/post", b"{}")[0], 405)
         self.assertEqual(self.raw("DELETE", "/posts")[0], 405)
 
+    def test_the_front_page_is_html_and_never_needs_the_internet(self):
+        with urllib.request.urlopen(self.url + "/", timeout=5) as r:
+            page = r.read().decode("utf-8")
+            self.assertEqual(r.status, 200)
+            self.assertIn("text/html", r.headers["Content-Type"])
+        self.assertIn("Galaxy Board", page)
+        self.assertNotIn("http://", page.replace("http://localhost", ""))
+        self.assertNotIn("https://", page)
+        self.assertNotIn("innerHTML", page)    # posts are text, never markup
+
     def test_post_and_read_over_http(self):
         status, body = self.raw("POST", "/post", json.dumps({"agent": "h1", "kind": "BOUNTY", "text": "kill X", "data": {"at": "1:2:3"}}).encode())
         self.assertEqual(status, 201)

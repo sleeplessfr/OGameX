@@ -35,6 +35,8 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+from board_page import PAGE
 from urllib.parse import parse_qs, urlparse
 
 KINDS = ("OFFER", "WANT", "BOUNTY", "WARNING", "REVENGE", "TAUNT", "ALLIANCE")
@@ -217,7 +219,15 @@ def make_handler(board: Board):
                 return
             url = urlparse(self.path)
             q = {k: v[0] for k, v in parse_qs(url.query).items()}
-            if url.path == "/health":
+            if url.path in ("/", "/index.html"):
+                body = PAGE.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+            elif url.path == "/health":
                 self._send(200, board.health())
             elif url.path == "/posts":
                 try:
@@ -229,7 +239,7 @@ def make_handler(board: Board):
                 posts = board.read(since, [k.strip() for k in kinds] if kinds else None, q.get("agent") or None, limit)
                 self._send(200, {"now": board.clock(), "last_id": board.last_id, "posts": posts})
             else:
-                self._send(404, {"error": "not_found", "message": "GET /posts, GET /health or POST /post"})
+                self._send(404, {"error": "not_found", "message": "GET /, GET /posts, GET /health or POST /post"})
 
         def do_POST(self):
             if not self._local_only():
