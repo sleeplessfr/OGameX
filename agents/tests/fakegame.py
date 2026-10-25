@@ -53,6 +53,7 @@ class FakeGame:
         self.merchant_quality = 0.9         # share of the fair value the merchant pays
         self.trades_done = 0
         self.battle_losses = 0
+        self.field_max = 10 ** 6           # building fields on the planet; every building level uses one
 
     # -- economy --
     def energy_prod(self):
@@ -299,6 +300,7 @@ class FakeGame:
                     "resources": {r: int(v) for r, v in self.res.items()}, "storage": self.storage(),
                     "production_per_hour": {r: int(v) for r, v in rate.items()},
                     "energy": int(self.energy_prod() - self.energy_need()),
+                    "fields": {"used": sum(self.levels.values()), "max": self.field_max},
                     "building_queue": self.qdict(self.bq, "b"), "unit_queue": []}],
                 "research": {"levels": {k: v for k, v in self.tech.items()}, "queue": self.qdict(self.rq, "r")},
                 "fleet_slots": {"used": len(self.missions), "max": self.slots_max}, "unread_messages": 0}
@@ -338,6 +340,9 @@ class FakeGame:
             if self.bq:
                 raise ApiError(422, "queue_full", name)
             cost = self.cost(name, self.levels[name], BASE)
+            if sum(self.levels.values()) >= self.field_max:
+                self.field_refusals = getattr(self, "field_refusals", 0) + 1
+                raise ApiError(422, "not_enough_fields", name)
             if not self.paid(cost):
                 raise ApiError(422, "not_enough_resources", name)
             for r, v in cost.items():

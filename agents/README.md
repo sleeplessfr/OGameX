@@ -98,6 +98,13 @@ stock anyway. One order per 10 minutes. A spy probe alone is ignored unless it c
 before (the agent remembers attackers for 12 hours, saved with its memory), so the first raid still surprises it and
 the next ones do not. Rules are in `swarm/defense.py`.
 
+## Planet fields
+
+Every building level uses one field of the planet. The agent reads the free fields from the API. With 12 or fewer
+left it heads for the terraformer (energy technology 12, a nanite factory, then the terraformer itself, which adds
+5 fields per level); with 3 or fewer it stops upgrading minor buildings (stores, shipyard, research lab). On a full
+planet it builds nothing, does not count that as "saving", and keeps buying ships and defence.
+
 ## The merchant
 
 A merchant call costs 3,500 dark matter (accounts start with 8,000), shows random rates and trades once. So an agent

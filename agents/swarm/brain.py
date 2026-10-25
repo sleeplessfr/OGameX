@@ -77,12 +77,27 @@ def payback_factors(items: list[dict], planet: dict, solar: dict | None, strengt
             for name, pb in paybacks.items() if pb}
 
 
+# --- planet fields: every building level uses one field; the terraformer (5+ fields per level) is the way out --------------
+FIELD_ALARM = 12        # fewer free fields than this: head for the terraformer
+FIELDS_LOW = 3          # fewer than this: do not spend a field on an upgrade of something minor
+MINOR = {"metal_store", "crystal_store", "deuterium_store", "shipyard", "research_lab", "fusion_plant"}
+
+
+def fields_left(planet: dict) -> int | None:
+    """Free building fields on the planet; None when the game did not say."""
+    f = planet.get("fields")
+    if not isinstance(f, dict) or f.get("max") is None or f.get("used") is None:
+        return None
+    return int(f["max"]) - int(f["used"])
+
+
 @dataclass
 class Choice:
     machine_name: str | None      # what to start (None = nothing now)
     wait_seconds: float | None    # when it would make sense to look again (None = no idea)
     reason: str
     goal_cost: dict | None = None  # when waiting: what the item we are waiting for costs (the merchant logic uses it)
+    full: bool = False             # nothing to build because the planet has no free fields (ships and defence still work)
 
 
 def seconds_to_afford(cost: dict, have: dict, production_per_hour: dict) -> float | None:
@@ -157,6 +172,10 @@ def choose_building(
         usable = [b for b in usable if b["machine_name"] not in ("shipyard", "nano_factory")]
     by_name = {b["machine_name"]: b for b in usable}
 
+    left = fields_left(planet)
+    if left is not None and left <= 0:
+        return Choice(None, None, "no free fields on this planet (a terraformer adds some)", full=True)
+
     # 1. Energy: mines starve without it. Nothing else matters until the power is back.
     if planet["energy"] <= persona.energy_buffer and "solar_plant" in by_name:
         return _forced(by_name["solar_plant"], have, production, "low energy")
@@ -167,10 +186,21 @@ def choose_building(
         if storage > 0 and have.get(r, 0) >= persona.store_alarm * storage and STORE_FOR[r] in by_name:
             return _forced(by_name[STORE_FOR[r]], have, production, f"{r} storage almost full")
 
+    # 2b. Running out of fields: the terraformer gives new ones, and its prerequisites become important.
+    weights = persona.building_weights
+    if left is not None and left <= FIELD_ALARM:
+        if "terraformer" in by_name and by_name["terraformer"]["level"] < 30:
+            return _forced(by_name["terraformer"], have, production, f"only {left} free fields left")
+        weights = {**weights, "nano_factory": max(weights.get("nano_factory", 0.0), 6.0),
+                   "robot_factory": max(weights.get("robot_factory", 0.0), 3.0)}
+        if left <= FIELDS_LOW:
+            usable = [b for b in usable if not (b["machine_name"] in MINOR and b["level"] >= 1)]
+            by_name = {b["machine_name"]: b for b in usable}
+
     # 3. Otherwise follow the personality.
     solar = by_name.get("solar_plant")
     factors = payback_factors(usable, planet, solar, 0.3 + 0.6 * persona.patience)
-    scored = [(_score(b, persona.building_weights, persona, rng) * factors.get(b["machine_name"], 1.0), b) for b in usable]
+    scored = [(_score(b, weights, persona, rng) * factors.get(b["machine_name"], 1.0), b) for b in usable]
     ranked = [b for s, b in sorted(scored, key=lambda t: -t[0]) if s > 0]
     # Do not pile on energy consumers while the power is already negative.
     if planet["energy"] < 0:
@@ -202,7 +232,15 @@ def choose_research(
 ) -> Choice:
     production = planet["production_per_hour"]
     usable = [t for t in research if t["requirements_met"]]
-    scored = [(_score(t, persona.research_weights, persona, rng), t) for t in usable]
+    left = fields_left(planet)
+    if left is not None and left <= FIELD_ALARM:
+        # The terraformer needs energy technology 12 and a nanite factory (computer technology 10, robot factory 10).
+        by_name = {t["machine_name"]: t for t in usable}
+        for name, target in (("energy_technology", 12), ("computer_technology", 10)):
+            if name in by_name and by_name[name]["level"] < target:
+                return _forced(by_name[name], have, production, f"only {left} free fields left, {name} leads to the terraformer")
+    weights = persona.research_weights
+    scored = [(_score(t, weights, persona, rng), t) for t in usable]
     ranked = [t for s, t in sorted(scored, key=lambda x: -x[0]) if s > 0]
     return _pick(ranked, persona, rng, have, production, "research")
 

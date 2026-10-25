@@ -187,7 +187,7 @@ class Agent:
         choice = choose_building(self.persona, self.rng, planet, data["buildings"],
                                  research_busy=research_busy, units_busy=bool(planet["unit_queue"]), have=have)
         if choice.machine_name is None:
-            self._economy_saving = True  # do not spend the savings on ships
+            self._economy_saving = not choice.full   # a full planet is not saving for anything: ships and defence still work
             self.log("wait", planet=planet["id"], why=choice.reason, hint=_r(choice.wait_seconds))
             if self._maybe_trade(planet, choice, have):
                 return [5.0]  # we just got what was missing: look again at once
