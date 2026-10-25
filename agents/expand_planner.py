@@ -43,6 +43,25 @@ FIELD_RANGE = {1: (96, 172), 2: (104, 176), 3: (112, 182), 4: (118, 208), 5: (13
                14: (100, 168), 15: (90, 164)}
 
 
+# Production bonus by position (app/Services/PlanetService.php, getProductionForPositionBonuses): metal, crystal
+POSITION_BONUS = {1: (1, 1.4), 2: (1, 1.3), 3: (1, 1.2), 6: (1.17, 1), 7: (1.23, 1), 8: (1.35, 1), 9: (1.23, 1), 10: (1.17, 1)}
+# average temperature at each position (middle of the game's range); deuterium output is 10 * L * 1.1^L * (1.44 - 0.004 * temperature)
+TEMPERATURE = {1: (220, 260), 2: (170, 210), 3: (120, 160), 4: (70, 110), 5: (60, 100), 6: (50, 90), 7: (40, 80), 8: (30, 70),
+               9: (20, 60), 10: (10, 50), 11: (0, 40), 12: (-10, 30), 13: (-50, -10), 14: (-90, -50), 15: (-130, -90)}
+ASTRO_FOR_POSITION = {1: 8, 15: 8, 2: 6, 14: 6, 3: 4, 13: 4}
+
+
+def position_income(position: int, levels=(25, 22, 20)) -> float:
+    """Hourly production value (x1 speed, power not limiting) of the same mines at this position."""
+    mm, cm, dm = levels
+    bm, bc = POSITION_BONUS.get(position, (1, 1))
+    t = sum(TEMPERATURE[position]) / 2
+    metal = (30 + 30 * mm * 1.1 ** mm) * bm
+    crystal = (15 + 20 * cm * 1.1 ** cm) * bc
+    deut = 10 * dm * 1.1 ** dm * (1.44 - 0.004 * t)
+    return metal * VALUE["metal"] + crystal * VALUE["crystal"] + deut * VALUE["deuterium"]
+
+
 def level_cost(name: str, level: int) -> tuple[float, float, float]:
     m, c, d, f = PRICES[name]
     k = f ** (level - 1)
@@ -140,6 +159,17 @@ def main() -> int:
     print(f"  the new planet starts empty: its own mines/solar plant up to {lm}/{lc}/{ld}/{ls} cost {fmt(value(ladder))} "
           f"({value(ladder) / hourly:,.1f} hours of the home planet's income)")
     print(f"  best position for fields: {best} (average {sum(FIELD_RANGE[best]) // 2}); positions 1-3 and 13-15 need more astrophysics\n")
+
+    # ---- where ----
+    print("WHERE TO COLONISE (same mines 25/22/20 everywhere; the number is the position in the system)")
+    print("  pos  fields(avg)  metal  crystal  temp  deuterium  astro  income index")
+    base = position_income(8)
+    for pos in range(1, 16):
+        lo, hi = FIELD_RANGE[pos]
+        bm, bc = POSITION_BONUS.get(pos, (1, 1))
+        t = sum(TEMPERATURE[pos]) / 2
+        print(f"  {pos:>3}  {(lo + hi) // 2:>10}  x{bm:<5} x{bc:<6} {t:>4.0f}   x{1.44 - 0.004 * t:<7.2f}  {ASTRO_FOR_POSITION.get(pos, 0):>5}  {position_income(pos) / base:>6.0%}")
+    print("  (income index: 100% = position 8. Solar plants do not depend on the position; only solar satellites do, with the temperature.)\n")
 
     # ---- moon ----
     print("MOON (lunar base: +3 fields per level, on the moon only)")

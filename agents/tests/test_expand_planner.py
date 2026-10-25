@@ -27,3 +27,12 @@ class ExpandPlannerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PositionTests(unittest.TestCase):
+    def test_position_8_beats_the_hot_edge_and_cold_positions_make_more_deuterium(self):
+        self.assertGreater(ep.position_income(8), ep.position_income(1))
+        self.assertGreater(ep.position_income(8), ep.position_income(4))
+        d = lambda pos: 1.44 - 0.004 * sum(ep.TEMPERATURE[pos]) / 2
+        self.assertGreater(d(15), d(8))
+        self.assertGreater(d(8), d(1))
