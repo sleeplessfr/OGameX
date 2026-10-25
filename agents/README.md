@@ -95,6 +95,9 @@ owns a spare resource that can pay for the whole shortfall even at the worst rat
 6-hour cooldown. Patient personalities keep one call in reserve. If the rates turn out too poor it sends him away
 (`merchant_dismissed`); otherwise it trades (`trade`). Rules are in `swarm/trade.py`.
 
+The attack check assumes the defender has 1.5 times the units the spy report showed, sends the smallest fleet that is sure
+enough to win, and never risks fighters worth more than 4 times the loot.
+
 ## Not built yet
 
 Colonising, expeditions, the scrap merchant, alliances, recycling debris, fleet-saving, retaliation, and LLM-driven

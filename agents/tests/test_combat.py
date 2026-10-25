@@ -77,3 +77,37 @@ class FightJudgementTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StrikeChoiceTests(unittest.TestCase):
+    STATS = {"light_fighter": {"cargo_capacity": 50}, "small_cargo": {"cargo_capacity": 5000}}
+
+    def test_does_not_send_a_huge_fleet_for_a_small_loot(self):
+        # the 11:14 disaster: 475 fighters (1.9M) sent for a loot of 98k against a defence it believed weak
+        from swarm.military import choose_strike
+        intel = Intel(98_532, 155, 3, ships={}, defense={"rocket_launcher": 155})
+        strike, go, why, kind = choose_strike(RAIDER, random.Random(1), {"light_fighter": 530, "small_cargo": 40}, self.STATS, intel, (0, 0, 0))
+        if go:
+            self.assertLessEqual(strike["light_fighter"] * 4000, 4 * 98_532)
+            self.assertLess(strike["light_fighter"], 100)
+        self.assertEqual(kind, "fight")
+
+    def test_sends_the_smallest_fleet_that_is_sure_to_win(self):
+        from swarm.military import choose_strike
+        intel = Intel(40_000, 4, 3, ships={}, defense={"rocket_launcher": 4})
+        strike, go, why, kind = choose_strike(RAIDER, random.Random(1), {"light_fighter": 100, "small_cargo": 20}, self.STATS, intel, (0, 0, 0))
+        self.assertTrue(go, why)
+        self.assertLess(strike["light_fighter"], 60)
+
+    def test_wants_cargo_when_nothing_can_carry_the_loot(self):
+        from swarm.military import choose_strike
+        intel = Intel(500_000, 1, 3, ships={}, defense={"rocket_launcher": 1})
+        _, go, _, kind = choose_strike(RAIDER, random.Random(1), {"light_fighter": 10}, self.STATS, intel, (0, 0, 0))
+        self.assertFalse(go)
+        self.assertEqual(kind, "cargo")
+
+    def test_assumes_the_defender_kept_building(self):
+        # exactly as many launchers as the report showed would be a coin flip for 60 fighters: with the margin it is not sent
+        intel = Intel(20_000, 40, 3, ships={}, defense={"rocket_launcher": 40})
+        go, why, _ = judge_fight(RAIDER, random.Random(1), {"light_fighter": 45}, intel, (0, 0, 0), 20_000)
+        self.assertFalse(go, why)

@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .brain import choose_building, choose_research, pay
 from .combat import tech_from_research
-from .military import (Memory, build_strike, can_carry_enough, carrying_capacity, judge_fight, judge_trade, summarize_battle, choose_units, coord_of, pick_attack, pick_target, summarize_report)
+from .military import (Memory, choose_strike, judge_trade, summarize_battle, choose_units, coord_of, pick_attack, pick_target, summarize_report)
 from .client import ApiClient, ApiError
 from .personas import Persona
 from .defense import AGGRESSOR_MEMORY, ALERT_SECONDS, COOLDOWN_SECONDS as DEFEND_COOLDOWN, WATCH_SECONDS, choose_defense, defence_share, find_threats
@@ -422,7 +422,8 @@ class Agent:
             self.stats["battles"] += 1
             verdict = judge_trade(b) if b["role"] == "attacker" else None
             self.log("battle", at=b["at"], role=b["role"], my_loss=b["my_loss"], their_loss=b["their_loss"],
-                     loot=b["loot"], debris=b["debris"], rounds=b["rounds"], verdict=verdict)
+                     loot=b["loot"], debris=b["debris"], rounds=b["rounds"], verdict=verdict,
+                     mine=b["my_units"], theirs=b["their_units"])
             if b["role"] != "attacker":
                 continue
             self.memory.battles = (self.memory.battles + [{"at": now, **{k: b[k] for k in ("at", "my_loss", "their_loss", "loot")}, "verdict": verdict}])[-30:]
@@ -443,22 +444,21 @@ class Agent:
         coord, intel, reason = pick
         if not self.ship_stats:
             self.ship_stats = {s["machine_name"]: s for s in self.client.get("/ships")["ships"]}
-        strike = build_strike(self.persona, ships_here, self.ship_stats, intel.loot)
+        strike, go, sim_reason, kind = choose_strike(self.persona, self.rng, ships_here, self.ship_stats, intel,
+                                                     self.my_tech, self.memory.risk_scale)
+        where = f"{coord[0]}:{coord[1]}:{coord[2]}"
         if strike is None:
             return False
-        if not can_carry_enough(self.persona, strike, self.ship_stats, intel.loot):
+        if kind == "cargo":
             # Winning is pointless if the loot stays behind: ask for cargo ships and look again later.
             self.memory.need_cargo = True
             self.memory.intel[coord]["skip_until"] = now + 600
-            self.log("attack_skipped", at=f"{coord[0]}:{coord[1]}:{coord[2]}", loot=intel.loot,
-                     why="fleet cannot carry enough of the loot, wants cargo ships")
+            self.log("attack_skipped", at=where, loot=intel.loot, why=sim_reason)
             return False
         self.memory.need_cargo = False
-        haul = min(intel.loot, carrying_capacity(strike, self.ship_stats))
-        go, sim_reason, _ = judge_fight(self.persona, self.rng, strike, intel, self.my_tech, haul, self.memory.risk_scale)
         if not go:
             self.memory.intel[coord]["skip_until"] = now + 1800
-            self.log("attack_skipped", at=f"{coord[0]}:{coord[1]}:{coord[2]}", loot=intel.loot, why=sim_reason)
+            self.log("attack_skipped", at=where, loot=intel.loot, why=sim_reason)
             return False
         if sim_reason:
             reason = f"{reason}; {sim_reason}"
@@ -475,7 +475,8 @@ class Agent:
         self.memory.intel.pop(coord, None)
         self.stats["attacks"] += 1
         self.log("attack", at=f"{coord[0]}:{coord[1]}:{coord[2]}", why=reason, ships=strike,
-                 seconds=result["mission"]["seconds_remaining"])
+                 seconds=result["mission"]["seconds_remaining"], saw_ships=intel.ships, saw_defense=intel.defense,
+                 saw_research=intel.research)
         return True
 
     def _build_units(self, home: dict, units: list[dict], have: dict, ships_here: dict) -> list[float]:

@@ -122,6 +122,10 @@ def summarize(events: list[dict], personas: dict[str, str] | None = None) -> str
             a = sent[-1]
             out.append(f"      sent {clock(a['t'])}: ships {a.get('ships')}")
             out.append(f"      reason: {a.get('why')}")
+            if a.get("saw_defense") is not None or a.get("saw_ships") is not None:
+                out.append(f"      the spy report showed: ships {a.get('saw_ships')}, defense {a.get('saw_defense')}, research {a.get('saw_research')}")
+        if b.get("theirs") is not None:
+            out.append(f"      in the real battle: mine {b.get('mine')}, theirs {b.get('theirs')}")
         else:
             out.append("      (no matching attack line in these logs)")
     if not bad:

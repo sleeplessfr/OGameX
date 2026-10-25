@@ -18,6 +18,9 @@ CARGO_SHARE = 0.5         # when loot is lying around that the fleet cannot carr
 SYSTEMS_PER_GALAXY = 500  # distance weight of one galaxy jump, in "systems"
 INTEL_MAX_AGE = 1500.0    # seconds: a spy report older than this is not trusted (targets keep building ships; at high game speed fast)
 GAMBLE_MAX_RISK = 2.0     # gamble on an unknown defence only if the fleet at risk is worth at most this many times the loot
+DEFENDER_MARGIN = 1.5     # the estimate assumes the defender has this many times the units the spy report showed (it keeps building)
+MAX_EXPOSURE = 4.0        # never put fighters worth more than this many times the loot at risk, however sure the estimate is
+STRIKE_FRACTIONS = (0.15, 0.25, 0.4, 0.6, 0.8, 1.0)   # try the smallest share of the fighters first
 LOOT_SHARE = 0.5          # an attack can take at most half of the resources on a planet
 SCORE_SLACK = 200         # new players have ~0 points: allow some room around the own score
 
@@ -221,6 +224,7 @@ def summarize_battle(report: dict, my_user_id: int | None) -> dict | None:
         "loot": sum(int(loot.get(r) or 0) for r in RESOURCES),
         "debris": sum(int(debris.get(r) or 0) for r in RESOURCES),
         "sent_units": _sum_values(units), "rounds": report.get("rounds"),
+        "my_units": mine.get("units"), "their_units": theirs.get("units"),
     }
 
 
@@ -246,7 +250,8 @@ def judge_fight(persona: Persona, rng: random.Random, strike: dict[str, int], in
     show the defenders' composition there is nothing to simulate: (True, '', None) and the old rules decide."""
     if not intel.composition_known:
         return True, "", None
-    est = estimate_battle(strike, intel.all_defenders(), rng, my_tech or (0, 0, 0), tech_from_research(intel.research))
+    defenders = {n: int(-(-v * DEFENDER_MARGIN // 1)) for n, v in intel.all_defenders().items()}
+    est = estimate_battle(strike, defenders, rng, my_tech or (0, 0, 0), tech_from_research(intel.research))
     gain = est.win_chance * haul + 0.5 * est.their_loss_value - est.my_loss_value
     facts = f"win chance {est.win_chance:.0%}, expected loss {est.my_loss_value:,.0f} for loot {haul:,}"
     need = required_win_chance(persona, risk_scale)
@@ -255,6 +260,36 @@ def judge_fight(persona: Persona, rng: random.Random, strike: dict[str, int], in
     if gain <= 0:
         return False, f"simulated fight: {facts}; not worth it", est
     return True, f"simulated fight: {facts}", est
+
+
+def choose_strike(persona: Persona, rng: random.Random, ships_here: dict[str, int], ship_stats: dict[str, dict],
+                  intel: Intel, my_tech: Tech | None, risk_scale: float = 1.0
+                  ) -> tuple[dict[str, int] | None, bool, str, str]:
+    """The smallest fleet that is sure enough to win and not worth too much compared to the loot.
+    Returns (strike, go, reason, kind) where kind is 'nofleet', 'cargo' (cannot carry the loot) or 'fight'.
+    Sending everything every time loses whole fleets for small loot when the estimate is wrong."""
+    last = (None, False, "no fighters", "nofleet")
+    for f in STRIKE_FRACTIONS:
+        part = dict(ships_here)
+        for n in FIGHTERS:
+            if n in part:
+                part[n] = int(part[n] * f)
+        strike = build_strike(persona, part, ship_stats, intel.loot)
+        if strike is None:
+            continue
+        if not can_carry_enough(persona, strike, ship_stats, intel.loot):
+            last = (strike, False, "fleet cannot carry enough of the loot, wants cargo ships", "cargo")
+            continue
+        haul = min(intel.loot, carrying_capacity(strike, ship_stats))
+        exposed = sum(unit_value(n) * v for n, v in strike.items() if n in FIGHTERS)
+        if exposed > MAX_EXPOSURE * haul:
+            last = (strike, False, f"fleet worth {exposed:,} for a loot of {haul:,}: too much to risk", "fight")
+            break   # bigger fleets only get more exposed
+        go, why, _ = judge_fight(persona, rng, strike, intel, my_tech, haul, risk_scale)
+        if go:
+            return strike, True, why, "fight"
+        last = (strike, False, why, "fight")
+    return last
 
 
 def carrying_capacity(fleet: dict[str, int], ship_stats: dict[str, dict]) -> int:
