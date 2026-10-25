@@ -71,6 +71,7 @@ class Agent:
         self.ship_stats: dict[str, dict] = {}
         self._players: tuple[float, list[dict], int] | None = None  # (fetched at, highscore rows, own score)
         self._economy_saving = False
+        self._economy_strict = False   # saving for power: nothing else may eat the stock (see _plan_military)
         self._last_battle_check = -1e12
         self.my_tech = None  # (weapons, shields, armour) levels, from /status
         self.planets_owned = 1
@@ -175,6 +176,7 @@ class Agent:
             if planet is home:
                 self._prepare_defense(home, have, threats)   # before the economy spends the stock the raider is after
             self._economy_saving = False
+            self._economy_strict = False
             hints += self._plan_buildings(planet, have, research_busy, goals=goal_buildings if planet is home else None)
             if planet is home:
                 hints += self._plan_research(planet, have, research_queue, goals=goal_research)
@@ -194,6 +196,7 @@ class Agent:
         choice = choose_building(self.persona, self.rng, planet, data["buildings"],
                                  research_busy=research_busy, units_busy=bool(planet["unit_queue"]), have=have, goals=goals)
         if choice.machine_name is None:
+            self._economy_strict = choice.reason.startswith(("low energy", "power for"))
             self._economy_saving = not choice.full   # a full planet is not saving for anything: ships and defence still work
             self.log("wait", planet=planet["id"], why=choice.reason, hint=_r(choice.wait_seconds))
             if self._maybe_trade(planet, choice, have):
@@ -350,7 +353,9 @@ class Agent:
 
         # Ships are bought from what is spare. While the economy is saving up for something, a militarily minded
         # agent still spends on its army some of the time (army_share), otherwise it would never get to it.
-        may_buy = (not saving) or self.rng.random() < p.army_share
+        # ... except while the mines are starved of power: the solar plant is cheap, and a raider that keeps buying ships
+        # never gets it (seen live: half an hour of "low energy: waiting for solar_plant").
+        may_buy = (not saving) or (not self._economy_strict and self.rng.random() < p.army_share)
         if may_buy and not home["unit_queue"]:
             hints += self._build_units(home, units, have, ships_here)
         return hints
