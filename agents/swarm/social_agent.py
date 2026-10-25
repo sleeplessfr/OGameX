@@ -8,7 +8,10 @@ trade_sent, trade_received, trade_cheated, board_error.
 """
 from __future__ import annotations
 
+import random
+
 from . import logistics as L
+from . import pricing as P
 from . import social as S
 from .brain import VALUE
 from .client import ApiError
@@ -127,6 +130,7 @@ class SocialMixin:
                 if len(busy) >= S.MAX_OPEN_TRADES or terms["id"] in st["answered"]:
                     continue
                 st["answered"].append(terms["id"])
+                self._price_answered(offer)
                 give, get = next(iter(offer["data"]["give"])), next(iter(offer["data"]["want"]))
                 if terms["give"] != get or terms["want"] != give or not self._partner_ok(terms["agent"], terms["player_id"], terms["at"]):
                     continue
@@ -140,8 +144,12 @@ class SocialMixin:
                 busy.add(terms["agent"])
                 self.log("trade_offer", action="accepted", **{"with": terms["agent"]}, give={give: terms["want_amt"]}, want={get: terms["give_amt"]})
         if len(busy) < S.MAX_OPEN_TRADES and self.now >= self.alert_until and self.rng.random() < self.persona.trade_interest:
-            match = S.pick_match(stock, posts, self.name, board_now, st["rep"], self.now, busy, st["answered"])
-            if match is not None:
+            match = S.pick_match(stock, posts, self.name, board_now, st["rep"], self.now, busy, st["answered"], st["prices"])
+            pair = S.pick_pair(stock)
+            if match is None and pair is not None:       # we need something and nothing acceptable is on offer: slowly be less picky
+                self._price_log("accept", pair[1], pair[0], P.on_need_unmet(st["prices"], pair[1], pair[0], self.now), "need")
+            elif match is not None:
+                P.on_need_met(st["prices"], pair[1], pair[0])
                 self._trade_answer(home, match)
 
     def _trade_answer(self, home: dict, match: dict) -> None:
@@ -151,6 +159,9 @@ class SocialMixin:
         if not self._partner_ok(terms["agent"], terms["player_id"], terms["at"]):
             return
         reply = S.reply_post(terms, match, self._soc_coord, self.user_id, home["resources"])
+        if not self._can_deliver(home, next(iter(reply["data"]["give"].values()))):
+            self.log("trade_offer", action="skipped", **{"with": terms["agent"]}, why="no cargo ships to carry half of it")
+            return
         if self._board_post(reply["kind"], reply["text"], reply["data"]) is None:
             return          # the poster must know we are coming: no public answer, no deal
         st["trades"][terms["agent"]] = S.new_trade(terms["agent"], terms["player_id"], terms["at"], terms["want"], terms["give"],
@@ -176,17 +187,54 @@ class SocialMixin:
         st = self.memory.social
         if len(self._open_trades()) >= S.MAX_OPEN_TRADES or self.now < self.alert_until:
             return
-        if st["offer"] and self.now - st["offer_at"] < S.OFFER_REFRESH:
+        if (st["offer"] or st["offer_at"]) and self.now - st["offer_at"] < S.OFFER_REFRESH:
             return
-        new = S.make_offer(home["resources"], self._soc_coord, self.user_id)
+        old = st["offer"]
+        if old and old.get("pair") and not old.get("answered"):      # it ran its time and nobody took it: ask less next time
+            self._price_log("ask", *old["pair"], P.on_unanswered(st["prices"], *old["pair"]), "unanswered")
+        new = S.make_offer(home["resources"], self._soc_coord, self.user_id, st["prices"], self._price_rng())
         if new is None:
             st["offer"] = None
+            return
+        if not self._can_deliver(home, next(iter(new["data"]["give"].values()))):
+            st["offer"], st["offer_at"] = None, self.now - S.OFFER_REFRESH + 600      # look again in ten minutes
+            self.log("trade_offer", action="skipped", why="no cargo ships to carry half of it", give=new["data"]["give"])
             return
         post = self._board_post(new["kind"], new["text"], new["data"], ttl=3600)
         if post is None:
             return
-        st["offer"], st["offer_at"] = {"id": post["id"], "data": new["data"]}, self.now
-        self.log("trade_offer", action="posted", give=new["data"]["give"], want=new["data"]["want"], post=post["id"])
+        st["offer"], st["offer_at"] = {"id": post["id"], "data": new["data"], "pair": new["pair"], "r": new["ratio"]}, self.now
+        self.log("trade_offer", action="posted", give=new["data"]["give"], want=new["data"]["want"], post=post["id"], ratio=round(new["ratio"], 4))
+
+    # ---- learned prices and the ability to deliver (pricing.py) -------------------------------------------------------
+    def _price_rng(self):
+        """Private random stream for price exploration: the agent's own dice are left alone."""
+        if getattr(self, "_price_rng_", None) is None:
+            self._price_rng_ = random.Random(f"prices-{self.name}")
+        return self._price_rng_
+
+    def _price_log(self, kind: str, give: str, want: str, change, why: str) -> None:
+        if change is None:
+            return
+        e = self.memory.social["prices"].get(P.pair_key(give, want)) or {}
+        self.log("price_learned", pair=P.pair_key(give, want), kind=kind, old=round(change[0], 4), new=round(change[1], 4), why=why,
+                 start=round(e.get("start", P.START_RATIO), 4), answered=e.get("answered", 0), unanswered=e.get("unanswered", 0))
+
+    def _price_answered(self, offer: dict) -> None:
+        if offer.get("answered") or not offer.get("pair"):
+            return
+        offer["answered"] = True
+        give, want = offer["pair"]
+        self._price_log("ask", give, want, P.on_answered(self.memory.social["prices"], give, want, offer.get("r")), "answered")
+
+    def _can_deliver(self, home: dict, amount: int) -> bool:
+        """Cargo ships at home for at least half of `amount`, or a builder persona that can order them (never raises)."""
+        try:
+            units = self._logi_units(home["id"])
+            here = {u["machine_name"]: int(u["amount"]) for u in units if u.get("category") != "defense" and int(u.get("amount") or 0) > 0}
+            return P.deliverable(self.persona, units, home["resources"], here, self._logi_stats(), amount)
+        except ApiError:
+            return False
 
     def _trade_inbox(self) -> None:
         trades = self.memory.social["trades"]
@@ -215,6 +263,10 @@ class SocialMixin:
                          why="no payment in time; shunned")
             elif verdict == "done":
                 S.record_done(st["rep"], t, self.now)
+                if t["role"] == "poster":
+                    self._price_log("ask", t["give"], t["get"], P.on_done(st["prices"], t["give"], t["get"]), "completed")
+                else:
+                    self._price_log("accept", t["get"], t["give"], P.on_accept_done(st["prices"], t["get"], t["give"]), "completed")
                 self.log("trade_offer", action="done", **{"with": name}, sent=int(t["sent_value"]), received=int(t["recv_value"]),
                          instalments=t["instalments"])
 

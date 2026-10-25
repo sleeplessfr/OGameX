@@ -573,7 +573,9 @@ class TradeTests(World):
         b_gave = sum(s["resources"].get("crystal", 0) for s in gb.sent_to_peers)
         self.assertAlmostEqual(a_gave, 20_000, delta=10)
         self.assertEqual(self.events(b, "trade_offer")[-1]["action"], "accepted")
-        self.assertAlmostEqual(b_gave * 1.5, a_gave / 1.03, delta=a_gave * 0.02)
+        ratio = self.events(b, "trade_offer")[0]["ratio"]               # the posted markup: 1.03 learned start, nudged by up to 3% (exploration)
+        self.assertTrue(1.03 * 0.97 - 1e-9 <= ratio <= 1.03 * 1.03 + 1e-9)
+        self.assertAlmostEqual(b_gave * 1.5, a_gave / ratio, delta=a_gave * 0.02)
         self.assertGreater(ga.res["crystal"], self.A_STOCK["crystal"] + 12_000)
         self.assertGreater(gb.res["metal"], self.B_STOCK["metal"] + 19_000)
         # the log and the reputation say what happened

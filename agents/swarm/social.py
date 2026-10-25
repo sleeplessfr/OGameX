@@ -23,6 +23,7 @@ import re
 
 from .brain import RESOURCES, VALUE
 from .defense import RECENT_RAID
+from . import pricing as P
 
 # ---- the board in general ------------------------------------------------------------------------------------
 POSTS_PER_HOUR = 6          # an agent posts at most this many times per hour (the board has its own, looser, limit)
@@ -70,7 +71,9 @@ def new_state() -> dict:
             "trades": {}, "rep": {}, "answered": [], "mail_at": 0.0, "seen_mail": [],
             # revenge and bounties (bounty.py): the revenge we joined, bounties we know / posted / claimed / owe / are owed
             "revenge": None, "friends": [], "bounties": {}, "bounty_out": {}, "claims": {}, "owed": {}, "pay": {},
-            "bounty_done": [], "pay_mail_at": 0.0}
+            "bounty_done": [], "pay_mail_at": 0.0,
+            # learned prices per resource pair (pricing.py)
+            "prices": {}}
 
 
 def clean_state(raw) -> dict:
@@ -95,6 +98,7 @@ def clean_state(raw) -> dict:
     for key in ("trades", "rep", "bounties", "bounty_out", "claims", "owed", "pay"):
         if isinstance(raw.get(key), dict):
             out[key] = {str(k): v for k, v in raw[key].items() if isinstance(v, dict)}
+    out["prices"] = P.clean_prices(raw.get("prices"))
     return out
 
 
@@ -228,8 +232,9 @@ def deal_cap(stock: dict, give: str) -> int:
     return int(max(0, int(stock.get(give, 0) or 0)) * MAX_TRADE_SHARE)
 
 
-def make_offer(stock: dict, at, player_id) -> dict | None:
-    """The standing offer to post: {'kind', 'text', 'data'}. data = give {res: amount}, want {res: amount}, at, player_id."""
+def make_offer(stock: dict, at, player_id, prices: dict | None = None, rng=None) -> dict | None:
+    """The standing offer to post: {'kind', 'text', 'data', 'pair', 'ratio'}. data = give {res: amount}, want {res: amount}, at, player_id.
+    With a price book (pricing.py) the markup is the learned one for this pair; without, the fixed ASK_MARGIN."""
     pair = pick_pair(stock)
     if pair is None:
         return None
@@ -238,14 +243,15 @@ def make_offer(stock: dict, at, player_id) -> dict | None:
     value = amount * VALUE[give]
     if value < MIN_TRADE_VALUE:
         return None
-    ask = int(value * (1 + ASK_MARGIN) / VALUE[want])
+    ratio = P.ask_ratio(prices, give, want, rng) if prices is not None else 1 + ASK_MARGIN
+    ask = int(value * ratio / VALUE[want])
     kind = "OFFER" if surplus_led else "WANT"
     text = (f"OFFER {amount:,} {give} for {ask:,} {want}" if surplus_led
             else f"WANT {ask:,} {want}, paying {amount:,} {give}")
     data = {"give": {give: amount}, "want": {want: ask}, "at": fmt_coord(at)}
     if player_id is not None:
         data["player_id"] = player_id
-    return {"kind": kind, "text": text, "data": data}
+    return {"kind": kind, "text": text, "data": data, "pair": [give, want], "ratio": ratio}
 
 
 def parse_trade_post(post: dict) -> dict | None:
@@ -270,7 +276,7 @@ def parse_trade_post(post: dict) -> dict | None:
 
 
 def pick_match(stock: dict, posts: list[dict], my_name: str, board_now: float, rep: dict, now: float,
-               busy: set[str], answered: list) -> dict | None:
+               busy: set[str], answered: list, prices: dict | None = None) -> dict | None:
     """The best standing offer of another agent that gives what we miss for what we have too much of, at a fair price.
     Returns {'terms': parse_trade_post(...), 'total_value': value we would give in total, 'r': value we send per value received}."""
     pair = pick_pair(stock)
@@ -289,7 +295,10 @@ def pick_match(stock: dict, posts: list[dict], my_name: str, board_now: float, r
         if t["give"] != need or t["want"] != surplus:
             continue
         they_give, they_want = t["give_amt"] * VALUE[t["give"]], t["want_amt"] * VALUE[t["want"]]
-        if they_give < ACCEPT_FLOOR * they_want:
+        if prices is None:
+            if they_give < ACCEPT_FLOOR * they_want:
+                continue
+        elif they_want > P.accept_ratio(prices, need, surplus) * they_give:    # their markup is above what we accept (pricing.py)
             continue
         total = min(they_want, deal_cap(stock, surplus) * VALUE[surplus])
         if total < MIN_TRADE_VALUE:
