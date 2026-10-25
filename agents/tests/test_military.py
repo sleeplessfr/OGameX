@@ -261,7 +261,7 @@ class SwarmBehaviourTests(unittest.TestCase):
 
     def test_raider_reads_battle_results_and_gets_more_careful_after_a_defeat(self):
         lessons = 0
-        for seed in (1, 2, 3, 4):
+        for seed in range(1, 13):   # the agent is careful now, so a defeat needs more tries to turn up in the fake game
             game, agent = self.play("raider", seed, hours=80)
             if game.battle_losses > 0 and agent.stats["battles"] > 0:
                 self.assertTrue(any(b["verdict"] == "bad" for b in agent.memory.battles), f"seed {seed}")

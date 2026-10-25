@@ -96,6 +96,21 @@ PRESETS: dict[str, Persona] = {
 }
 
 
+# Economy weights found by tune_economy.py (offline search with the game's formulas; see README). Only the means of the
+# economy were tuned (mines, solar plant, robot factory, spare power); stores, balance, patience and the rest are the
+# personality's own. Measured gain in hourly production after 24 game hours at x100: miner +3.7%, scientist +20.9%,
+# turtle +116.7%, raider +30.3%, balanced +19.0%.
+TUNED_ECONOMY = {
+    "miner": ({'metal_mine': 7.356, 'crystal_mine': 4.254, 'deuterium_synthesizer': 2.195, 'solar_plant': 1.397, 'robot_factory': 1.523}, 0),
+    "scientist": ({'metal_mine': 6.0, 'crystal_mine': 3.153, 'deuterium_synthesizer': 1.284, 'solar_plant': 0.684, 'robot_factory': 1.289}, 18),
+    "turtle": ({'metal_mine': 9.0, 'crystal_mine': 7.5, 'deuterium_synthesizer': 2.299, 'solar_plant': 1.857, 'robot_factory': 1.503}, 0),
+    "raider": ({'metal_mine': 9.0, 'crystal_mine': 4.188, 'deuterium_synthesizer': 2.63, 'solar_plant': 1.936, 'robot_factory': 1.084}, 24),
+    "balanced": ({'metal_mine': 7.651, 'crystal_mine': 3.929, 'deuterium_synthesizer': 1.422, 'solar_plant': 1.36, 'robot_factory': 0.987}, 14),
+}
+PRESETS = {name: replace(p, building_weights={**p.building_weights, **TUNED_ECONOMY[name][0]},
+                         energy_buffer=TUNED_ECONOMY[name][1]) for name, p in PRESETS.items()}
+
+
 def make_persona(index: int, rng: random.Random, names: list[str] | None = None) -> Persona:
     """Persona for the index-th agent: presets in rotation, each one slightly perturbed so no two agents are twins."""
     order = names or list(PRESETS)

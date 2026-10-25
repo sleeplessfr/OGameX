@@ -35,7 +35,7 @@ One page: what each agent did, who won or lost its attacks, defence, merchant, l
 
 ```
 python tune_economy.py --persona balanced --generations 25
-python tune_economy.py --persona miner --check
+python tune_economy.py --persona miner --check   (the presets already contain the tuned numbers)
 ```
 
 Plays thousands of planets in minutes without a server (the game's own formulas plus the agent's real building decisions)
