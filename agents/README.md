@@ -31,6 +31,17 @@ python summarize_logs.py --hours 6  (only the last 6 hours)
 
 One page: what each agent did, who won or lost its attacks, defence, merchant, lessons and errors. Attach `report.txt` when asking for help.
 
+## Tuning the economy offline
+
+```
+python tune_economy.py --persona balanced --generations 25
+python tune_economy.py --persona miner --check
+```
+
+Plays thousands of planets in minutes without a server (the game's own formulas plus the agent's real building decisions)
+and searches for better weights for mines, solar plant, robot factory and stores. It only prints suggestions; nothing is
+changed. It optimises income only, so use it as a hint for the economy part of a personality, not as a new character.
+
 ## How an agent decides
 
 Each round it reads `/status`, then, for every planet whose queue is empty, the list of buildings:
