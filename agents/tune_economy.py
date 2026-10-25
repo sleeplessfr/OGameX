@@ -7,8 +7,8 @@
 
 How it works: the planet below uses the game's own formulas (costs, production, energy, storage, build times; taken from
 app/GameObjects/BuildingObjects.php and PlanetService::getBuildingConstructionTime) and the agent's REAL decision
-function (swarm.brain.choose_building). The score is the value of one hour of production (metal 1, crystal 1.5,
-deuterium 3) after the given number of game hours, averaged over several random seeds. A simple evolution strategy then
+function (swarm.brain.choose_building). The score is the value of one hour of production after the given number of
+game hours, valued the way that personality would spend it (a scientist counts crystal and deuterium, a turtle metal), averaged over several random seeds. A simple evolution strategy then
 nudges the weights and keeps what scores better.
 
 It only touches the means of the economy: the weights of the mines, solar plant and robot factory (never further than
@@ -25,7 +25,7 @@ import sys
 from dataclasses import replace
 
 from swarm.brain import VALUE, choose_building
-from swarm.personas import PRESETS, Persona
+from swarm.personas import HAND_MADE, PRESETS, Persona
 
 # name: (metal, crystal, deuterium, growth per level)   (app/GameObjects/BuildingObjects.php)
 PRICE = {
@@ -37,6 +37,15 @@ TUNED = tuple(PRICE)
 # What a personality is FOR (how big its stores are, ...) is left alone; only the means of getting there are tuned.
 MEANS = ("metal_mine", "crystal_mine", "deuterium_synthesizer", "solar_plant", "robot_factory")
 STRETCH = 3.0   # a weight never moves further than this factor away from the original, up or down
+# What each personality turns its income into decides what an hour of production is worth to it. The weights follow the
+# mix of resources that things cost: research is mostly crystal and deuterium, defence units mostly metal, fighters and
+# cargo ships metal and crystal. (The standard 1 : 1.5 : 3 is the merchant's usual exchange rate.)
+GOAL_VALUES = {
+    "miner": VALUE, "balanced": VALUE,
+    "scientist": {"metal": 0.3, "crystal": 1.5, "deuterium": 2.0},
+    "turtle": {"metal": 1.5, "crystal": 1.0, "deuterium": 0.4},
+    "raider": {"metal": 1.5, "crystal": 1.2, "deuterium": 1.0},
+}
 TEMPERATURE = 30.0   # average planet temperature; only changes the deuterium output a little
 
 
@@ -94,11 +103,11 @@ class Planet:
             self.res[r] = max(self.res[r], min(cap[r], self.res[r] + per_hour * seconds / 3600))   # full stores waste, never destroy stock
 
 
-def income_value(planet: Planet) -> float:
-    return sum(VALUE[r] * v for r, v in planet.production().items())
+def income_value(planet: Planet, values: dict = VALUE) -> float:
+    return sum(values[r] * v for r, v in planet.production().items())
 
 
-def play(persona: Persona, seed: int, hours: float, speed: float, start: float) -> float:
+def play(persona: Persona, seed: int, hours: float, speed: float, start: float, values: dict = VALUE) -> float:
     """Average of the production value at half time and at the end (so a late sprint does not win by itself)."""
     rng = random.Random(seed)
     planet = Planet(speed, start)
@@ -109,7 +118,7 @@ def play(persona: Persona, seed: int, hours: float, speed: float, start: float) 
             planet.levels[queue[1]] += 1
             queue = None
         if not half_seen and t >= end / 2:
-            half_seen, half_value = True, income_value(planet)
+            half_seen, half_value = True, income_value(planet, values)
         if queue:
             dt = max(20.0, queue[0] - t + 2.0)
         else:
@@ -130,12 +139,12 @@ def play(persona: Persona, seed: int, hours: float, speed: float, start: float) 
     if queue and t >= queue[0]:
         planet.levels[queue[1]] += 1
     if not half_seen:
-        half_value = income_value(planet)
-    return (half_value + income_value(planet)) / 2
+        half_value = income_value(planet, values)
+    return (half_value + income_value(planet, values)) / 2
 
 
-def score(persona: Persona, seeds: range, hours: float, speed: float, start: float) -> float:
-    return sum(play(persona, s, hours, speed, start) for s in seeds) / len(seeds)
+def score(persona: Persona, seeds: range, hours: float, speed: float, start: float, values: dict = VALUE) -> float:
+    return sum(play(persona, s, hours, speed, start, values) for s in seeds) / len(seeds)
 
 
 # ---- the search -----------------------------------------------------------------------------------------
@@ -173,34 +182,36 @@ def main() -> int:
     ap.add_argument("--generations", type=int, default=15)
     ap.add_argument("--population", type=int, default=8)
     ap.add_argument("--seeds", type=int, default=6, help="random games per candidate")
+    ap.add_argument("--goal", choices=sorted(GOAL_VALUES), help="whose goal to score for (default: the persona's own)")
     ap.add_argument("--check", action="store_true", help="only measure the current weights")
     ap.add_argument("--with-traits", action="store_true", help="also tune balance, patience and store alarm (they are part of the character: off by default)")
     ap.add_argument("--with-stores", action="store_true", help="also tune the store weights (they usually define the character: off by default)")
     ap.add_argument("--seed", type=int, default=1)
     args = ap.parse_args()
 
-    base = PRESETS[args.persona]
+    base = HAND_MADE[args.persona]   # always start from the hand-made personality, so reruns do not stack
+    values = GOAL_VALUES[args.goal or args.persona]
     train, test = range(100, 100 + args.seeds), range(900, 900 + 3 * args.seeds)   # test games are never used to choose
-    start_score = score(base, test, args.hours, args.speed, args.start)
-    print(f"{args.persona}: current weights give an hourly production worth {start_score:,.0f} after {args.hours:g} game hours "
+    start_score = score(base, test, args.hours, args.speed, args.start, values)
+    print(f"{args.persona}: current weights give an hourly production worth {start_score:,.0f} to a {args.goal or args.persona} after {args.hours:g} game hours "
           f"(speed x{args.speed:g}, average of {len(test)} games)")
     if args.check:
         return 0
 
     rng = random.Random(args.seed)
-    best, best_score = base, score(base, train, args.hours, args.speed, args.start)
+    best, best_score = base, score(base, train, args.hours, args.speed, args.start, values)
     sigma = 0.3
     for gen in range(1, args.generations + 1):
         improved = False
         for _ in range(args.population):
             cand = mutate(best, rng, sigma, base, TUNED if args.with_stores else MEANS, args.with_traits)
-            s = score(cand, train, args.hours, args.speed, args.start)
+            s = score(cand, train, args.hours, args.speed, args.start, values)
             if s > best_score:
                 best, best_score, improved = cand, s, True
         sigma = max(0.08, sigma * (0.9 if improved else 0.8))
         print(f"  generation {gen}/{args.generations}: best training score {best_score:,.0f}", flush=True)
 
-    final = score(best, test, args.hours, args.speed, args.start)
+    final = score(best, test, args.hours, args.speed, args.start, values)
     gain = (final / start_score - 1) * 100
     print(f"\nOn fresh games the tuned weights give {final:,.0f} against {start_score:,.0f} ({gain:+.1f}%).")
     print(describe(base).replace("(economy part)", "(now)"))

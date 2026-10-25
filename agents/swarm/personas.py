@@ -98,13 +98,15 @@ PRESETS: dict[str, Persona] = {
 
 # Economy weights found by tune_economy.py (offline search with the game's formulas; see README). Only the means of the
 # economy were tuned (mines, solar plant, robot factory, spare power); stores, balance, patience and the rest are the
-# personality's own. Measured gain in hourly production after 24 game hours at x100: miner +3.7%, scientist +20.9%,
-# turtle +116.7%, raider +30.3%, balanced +19.0%.
+# personality's own. Each personality was scored on the production mix it would spend: standard values for miner and
+# balanced, crystal and deuterium for the scientist, metal for the turtle, metal and crystal for the raider. Measured
+# gain after 24 game hours at x100: miner +3.7%, scientist +15.0%, turtle +153.7%, raider +29.5%, balanced +19.0%.
+HAND_MADE = dict(PRESETS)   # the personalities as first written, before the tuned economy weights below
 TUNED_ECONOMY = {
     "miner": ({'metal_mine': 7.356, 'crystal_mine': 4.254, 'deuterium_synthesizer': 2.195, 'solar_plant': 1.397, 'robot_factory': 1.523}, 0),
-    "scientist": ({'metal_mine': 6.0, 'crystal_mine': 3.153, 'deuterium_synthesizer': 1.284, 'solar_plant': 0.684, 'robot_factory': 1.289}, 18),
-    "turtle": ({'metal_mine': 9.0, 'crystal_mine': 7.5, 'deuterium_synthesizer': 2.299, 'solar_plant': 1.857, 'robot_factory': 1.503}, 0),
-    "raider": ({'metal_mine': 9.0, 'crystal_mine': 4.188, 'deuterium_synthesizer': 2.63, 'solar_plant': 1.936, 'robot_factory': 1.084}, 24),
+    "scientist": ({'metal_mine': 6.0, 'crystal_mine': 3.648, 'deuterium_synthesizer': 1.895, 'solar_plant': 0.79, 'robot_factory': 1.042}, 10),
+    "turtle": ({'metal_mine': 9.0, 'crystal_mine': 5.505, 'deuterium_synthesizer': 1.154, 'solar_plant': 0.667, 'robot_factory': 1.002}, 46),
+    "raider": ({'metal_mine': 6.219, 'crystal_mine': 2.826, 'deuterium_synthesizer': 2.288, 'solar_plant': 2.527, 'robot_factory': 2.135}, 7),
     "balanced": ({'metal_mine': 7.651, 'crystal_mine': 3.929, 'deuterium_synthesizer': 1.422, 'solar_plant': 1.36, 'robot_factory': 0.987}, 14),
 }
 PRESETS = {name: replace(p, building_weights={**p.building_weights, **TUNED_ECONOMY[name][0]},

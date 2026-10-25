@@ -30,3 +30,20 @@ class PlanetFormulaTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GoalTests(unittest.TestCase):
+    def test_each_personality_values_its_own_resource_mix(self):
+        p = te.Planet(speed=1, start=0)
+        p.levels.update(metal_mine=5, crystal_mine=5, solar_plant=20)
+        miner = te.income_value(p, te.GOAL_VALUES["miner"])
+        scientist = te.income_value(p, te.GOAL_VALUES["scientist"])
+        turtle = te.income_value(p, te.GOAL_VALUES["turtle"])
+        self.assertNotEqual(miner, scientist)
+        self.assertGreater(turtle, scientist)   # a metal-heavy planet suits a turtle better than a scientist
+        for name in ("miner", "scientist", "turtle", "raider", "balanced"):
+            self.assertIn(name, te.GOAL_VALUES)
+
+    def test_tuning_starts_from_the_hand_made_personality(self):
+        from swarm.personas import HAND_MADE, PRESETS
+        self.assertNotEqual(HAND_MADE["turtle"].building_weights["metal_mine"], PRESETS["turtle"].building_weights["metal_mine"])
