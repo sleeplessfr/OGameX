@@ -156,6 +156,17 @@ A message has `id`, `key`, `subject`, `body` (plain text), `viewed`, `created_at
 probes you sent and your espionage level, as in the game. `battle_report`: `target`, `general`, `attacker`,
 `defender`, `rounds` (the number of rounds, not the log), `loot`, `debris`, `repaired_defenses`, `wreckage`.
 
+### Merchant
+
+The resource merchant buys one resource and pays in the other two at random rates (the rates are relative to the 3:2:1 base values of metal, crystal and deuterium; about 90% of fair value on average, 70% at worst). Calling one costs dark matter (3,500) and he stays until you trade with him once or dismiss him. Same rules and code as the web UI.
+
+| Method | Path | What it does |
+|---|---|---|
+| GET | `/merchant` | `dark_matter` (your balance), `call_cost`, and `merchant`: `null`, or `type` (the resource he buys) with `receive` = for each resource he pays in `rate`, `per_unit_given` (how much you get for one unit you give) and `display` |
+| POST | `/merchant/call` | Body: `type` (`metal`, `crystal` or `deuterium`: what you want to sell). Costs dark matter. Returns the same data as GET, status 201. Errors: `insufficient_dark_matter`, `merchant_already_active` (trade or dismiss first), `vacation_mode` |
+| POST | `/planets/{planet}/merchant/trade` | Body: `receive` (object, e.g. `{"crystal": 5000}`; only resources other than the one he buys) and `give_amount` (most you will give him). Paid from and delivered to that planet. Wishes are scaled down to fit `give_amount`, the planet's stock and free storage. One trade only, then he leaves. Returns `gave`, `received`, `dark_matter`. Errors: `no_active_merchant`, `trade_failed`, `validation_failed` |
+| POST | `/merchant/dismiss` | Sends him away without trading; the dark matter is not refunded |
+
 ### Highscore
 
 | Method | Path | Description |
@@ -188,4 +199,4 @@ curl -s -X POST http://localhost/api/v1/planets/12/buildings \
 ## Not available yet
 
 Battle simulation, ACS/missiles/fleet unions, custom player names, and the other
-parts of the game (alliances, merchant, moon buildings' special actions, planet management).
+parts of the game (alliances, the scrap merchant, moon buildings' special actions, planet management).

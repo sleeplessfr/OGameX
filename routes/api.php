@@ -6,6 +6,7 @@ use OGame\Http\Controllers\Api\V1\BuildingController;
 use OGame\Http\Controllers\Api\V1\FleetController;
 use OGame\Http\Controllers\Api\V1\GalaxyController;
 use OGame\Http\Controllers\Api\V1\HighscoreController;
+use OGame\Http\Controllers\Api\V1\MerchantController;
 use OGame\Http\Controllers\Api\V1\MessageController;
 use OGame\Http\Controllers\Api\V1\PlanetController;
 use OGame\Http\Controllers\Api\V1\ResearchController;
@@ -68,6 +69,11 @@ Route::middleware(['api.token', 'throttle:ogamex-api', 'globalgame'])->group(fun
     Route::get('/messages', [MessageController::class, 'index']);
     Route::get('/messages/{message}', [MessageController::class, 'show'])->whereNumber('message');
     Route::post('/messages/{message}/read', [MessageController::class, 'markRead'])->whereNumber('message');
+
+    Route::get('/merchant', [MerchantController::class, 'show']);
+    Route::post('/merchant/call', [MerchantController::class, 'call']);
+    Route::post('/merchant/dismiss', [MerchantController::class, 'dismiss']);
+    Route::post('/planets/{planet}/merchant/trade', [MerchantController::class, 'trade'])->whereNumber('planet');
 
     Route::get('/highscore', [HighscoreController::class, 'index']);
 });
