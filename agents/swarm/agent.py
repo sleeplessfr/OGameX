@@ -224,7 +224,8 @@ class Agent:
         if share <= 0 or self.now < self.defend_cooldown_until or home["unit_queue"]:
             return
         units = self.client.get(f"/planets/{home['id']}/units")["units"]
-        pick = choose_defense(self.persona, units, have, share)
+        coming = [x.arrives_in for x in threats if x.is_attack]
+        pick = choose_defense(self.persona, units, have, share, min(coming) if coming else None)
         if pick is None:
             return
         name, amount = pick

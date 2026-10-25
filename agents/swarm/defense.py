@@ -56,8 +56,19 @@ def _worth(name: str) -> float:
     return (hull / HULL_DIVISOR + shield + attack) / max(1.0, cost)   # fighting power per resource spent
 
 
-def choose_defense(persona: Persona, units: list[dict], have: dict, share: float) -> tuple[str, int] | None:
-    """The defence unit to order and how many, spending at most `share` of each resource in stock."""
+def _power(name: str) -> float:
+    stats = STATS[name]
+    return stats[3] / HULL_DIVISOR + stats[4] + stats[5]
+
+
+def choose_defense(persona: Persona, units: list[dict], have: dict, share: float,
+                   seconds_available: float | None = None) -> tuple[str, int] | None:
+    """The defence unit to order and how many, spending at most `share` of each resource in stock.
+
+    Whatever is ordered is paid at once, so even an unfinished order keeps that stock out of the raider's hands.
+    But only units that are finished when the fleet lands can fight. With `seconds_available` (the warning time)
+    the choice therefore favours the unit that gets the most fighting power done in time; without it, the best
+    power per resource spent."""
     if share <= 0:
         return None
     best = None
@@ -67,16 +78,21 @@ def choose_defense(persona: Persona, units: list[dict], have: dict, share: float
             continue
         if not u.get("requirements_met") or not u.get("character_class_met", True) or u.get("max_buildable", 0) < 1:
             continue
-        score = _worth(name) * persona.unit_weights.get(name, 1.0)
+        cost = u["cost_per_unit"]
+        limits = [int(have.get(r, 0) * share // cost[r]) for r in RESOURCES if cost.get(r, 0) > 0]
+        amount = min([u["max_buildable"], MAX_ORDER, *limits]) if limits else 0
+        if amount < 1:
+            continue
+        weight = persona.unit_weights.get(name, 1.0)
+        spu = float(u.get("seconds_per_unit") or 0)
+        if seconds_available is not None and spu > 0:
+            done = min(amount, int(max(0.0, seconds_available) // spu))
+            score = (done * _power(name) + 0.001 * amount * _power(name)) * weight   # unfinished units still protect the stock
+        else:
+            score = _worth(name) * weight
         if score > 0 and (best is None or score > best[0]):
-            best = (score, u)
-    if best is None:
-        return None
-    u = best[1]
-    cost = u["cost_per_unit"]
-    limits = [int(have.get(r, 0) * share // cost[r]) for r in RESOURCES if cost.get(r, 0) > 0]
-    amount = min([u["max_buildable"], MAX_ORDER, *limits]) if limits else 0
-    return (u["machine_name"], amount) if amount >= 1 else None
+            best = (score, name, amount)
+    return (best[1], best[2]) if best else None
 
 
 AGGRESSOR_MEMORY = 12 * 3600.0   # a planet that attacked us is treated as dangerous for this long

@@ -159,3 +159,18 @@ class GuardTests(unittest.TestCase):
         self.assertAlmostEqual(defence_share(MINER, [], set(), on_guard=True), MINER.caution * 0.25)
         attack = Threat(1, "attack", 30, (1, 3, 7))
         self.assertEqual(defence_share(MINER, [attack], set(), on_guard=True), MINER.caution)   # a real attack still counts fully
+
+
+class WarningTimeTests(unittest.TestCase):
+    HAVE = {"metal": 400_000, "crystal": 600_000, "deuterium": 50_000}
+
+    def test_short_warning_prefers_what_can_be_finished_in_time(self):
+        fast = {**unit("rocket_launcher", (2000, 0, 0)), "seconds_per_unit": 2}
+        slow = {**unit("ion_cannon", (2000, 6000, 0)), "seconds_per_unit": 60}
+        # plenty of time: the strong, slow unit; 30 seconds: only the fast one gets anything done
+        self.assertEqual(choose_defense(MINER, [fast, slow], self.HAVE, 0.5, 3600)[0], "ion_cannon")
+        self.assertEqual(choose_defense(MINER, [fast, slow], self.HAVE, 0.5, 30)[0], "rocket_launcher")
+
+    def test_without_a_warning_time_nothing_changes(self):
+        fast = {**unit("rocket_launcher", (2000, 0, 0)), "seconds_per_unit": 2}
+        self.assertEqual(choose_defense(MINER, [fast], self.HAVE, 0.5), choose_defense(MINER, [fast], self.HAVE, 0.5, None))
