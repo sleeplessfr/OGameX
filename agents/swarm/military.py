@@ -112,7 +112,9 @@ class Intel:
 
     @property
     def composition_known(self) -> bool:
-        return self.ships is not None or self.defense is not None
+        # A spy report only shows the defence when the spy is good enough (defense None = not revealed). Ships alone say
+        # nothing about rocket launchers and lasers: that was how two raiders attacked "empty" planets at 1:5:6.
+        return self.defense is not None
 
     def all_defenders(self) -> dict[str, int]:
         merged: dict[str, int] = {}
@@ -168,7 +170,7 @@ def summarize_report(report: dict) -> Intel:
     total = sum(int(res.get(r, 0) or 0) for r in RESOURCES)
     ships, defense = report.get("ships"), report.get("defense")
     defenders = None
-    if ships is not None or defense is not None:
+    if defense is not None:   # ships without the defence is not a known garrison (see Intel.composition_known)
         defenders = sum(int(v or 0) for v in (ships or {}).values()) + sum(int(v or 0) for v in (defense or {}).values())
     return Intel(loot=int(total * LOOT_SHARE), defenders=defenders, owner_id=(report.get("target") or {}).get("owner_id"),
                  ships=ships, defense=defense, research=report.get("research") or None)
