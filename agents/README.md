@@ -144,9 +144,19 @@ owns a spare resource that can pay for the whole shortfall even at the worst rat
 The attack check assumes the defender has 1.5 times the units the spy report showed, sends the smallest fleet that is sure
 enough to win, and never risks fighters worth more than 4 times the loot.
 
+## Recycling debris
+
+Fights leave metal and crystal floating at the target's coordinates. The API does not show debris fields in the galaxy view,
+so agents learn about them from reports they read anyway: `debris` in their own battle reports (as attacker or defender) and in
+spy reports. Fields are remembered in `memory/<name>.json` for 24 hours. Fighting personalities (raider, balanced, general class)
+buy recyclers once 15,000 debris is remembered; peaceful ones only for 60,000 or more (needs shipyard 4, combustion drive 6,
+shielding 2; the agent just waits until the game allows it). It dry-runs the trip (`/fleet/check`), goes only if the haul is
+worth at least twice the fuel, sends `recycle` to the `debris_field`, and the ships unload the haul when they come home.
+Log events: `recycle_sent`, `recycle_skipped`, `units` (what=recycler); see RECYCLING in the report. Rules: `swarm/recycle.py`.
+
 ## Not built yet
 
-Expeditions, the scrap merchant, alliances, recycling debris, fleet-saving, defending colonies, retaliation, and LLM-driven
+Expeditions, the scrap merchant, alliances, fleet-saving, defending colonies, retaliation, and LLM-driven
 decisions. The brain is rule-based; the personas are the knobs; learning so far is the risk lesson, opponent memory and the
 fight margin bandit above.
 

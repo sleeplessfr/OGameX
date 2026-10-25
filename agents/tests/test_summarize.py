@@ -55,6 +55,24 @@ class SummarizeTests(unittest.TestCase):
         self.assertEqual(len(sl.read_events(d, since=80)), 1)          # --hours filter
         self.assertEqual(sl.personas_from_state(d / "missing.json"), {})
 
+class RecyclingReportTests(unittest.TestCase):
+    def test_report_counts_trips_haul_and_skips(self):
+        t = 1_700_000_000
+        events = [
+            ev(t, "a1", "units", what="recycler", amount=3, why="60,000 debris remembered"),
+            ev(t + 1, "a1", "recycle_sent", at="1:1:5", ships=3, debris=60000, haul=40000, fuel=120, seconds=60),
+            ev(t + 2, "a1", "recycle_sent", at="1:2:5", ships=1, debris=20000, haul=20000, fuel=30, seconds=60),
+            ev(t + 3, "a1", "recycle_skipped", at="1:9:5", debris=5000, why="haul 5,000 not worth 900 deuterium"),
+        ]
+        text = sl.summarize(events)
+        self.assertIn("a1: 2 trips, about 60,000 metal+crystal expected, 150 deuterium burned, 3 recyclers built, 1 skipped", text)
+        self.assertIn("skipped 1:9:5: haul 5,000 not worth 900 deuterium", text)
+
+    def test_report_without_recycling_says_none(self):
+        text = sl.summarize([ev(1000.0, "a1", "build", what="metal_mine")])
+        self.assertIn("RECYCLING", text)
+        self.assertRegex(text, r"RECYCLING[^\n]*\n  none")
+
 
 if __name__ == "__main__":
     unittest.main()

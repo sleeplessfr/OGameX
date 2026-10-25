@@ -216,6 +216,25 @@ def summarize(events: list[dict], personas: dict[str, str] | None = None) -> str
         out.append("  none")
     out.append("")
 
+    out.append("RECYCLING (recycle_sent = recyclers sent to a debris field, recycle_skipped = not worth it or no such field)")
+    sent = [e for e in events if e["event"] == "recycle_sent"]
+    skipped_r = [e for e in events if e["event"] == "recycle_skipped"]
+    bought = [e for e in events if e["event"] == "units" and e.get("what") == "recycler"]
+    if sent or skipped_r or bought:
+        for agent in sorted({e["agent"] for e in sent + skipped_r + bought}):
+            mine = [e for e in sent if e["agent"] == agent]
+            haul = sum(int(e.get("haul") or 0) for e in mine)
+            fuel = sum(int(e.get("fuel") or 0) for e in mine)
+            n_bought = sum(int(e.get("amount") or 0) for e in bought if e["agent"] == agent)
+            n_skipped = sum(1 for e in skipped_r if e["agent"] == agent)
+            out.append(f"  {agent}: {len(mine)} trips, about {haul:,} metal+crystal expected, {fuel:,} deuterium burned, "
+                       f"{n_bought} recyclers built, {n_skipped} skipped")
+        for e in skipped_r[-3:]:
+            out.append(f"  {clock(e['t'])} {e['agent']} skipped {e.get('at')}: {e.get('why')}")
+    else:
+        out.append("  none")
+    out.append("")
+
     out.append("FULL PLANETS (no free building fields)")
     full = Counter(e["agent"] for e in events if e["event"] == "wait" and "no free fields" in str(e.get("why", "")))
     heading = Counter(e["agent"] for e in events if e["event"] == "wait" and "free fields left" in str(e.get("why", "")))

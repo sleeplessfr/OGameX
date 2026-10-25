@@ -51,9 +51,10 @@ class Memory:
     colony_sent_at: float = 0.0        # server time a colony ship left (0 = none on its way)
     colony_planets_before: int = 0     # planets owned when it left, to see whether it worked
     colony_until: float = 0.0          # no new colony attempt before this server time
+    debris: dict[Coord, dict] = field(default_factory=dict)  # known debris fields: {'at', 'amount' (metal+crystal), 'sent_until'} (recycle.py)
 
     # Saved to disk so a restart does not make the agent forget (JSON cannot have tuple keys, so coordinates become "g:s:p").
-    _COORD_MAPS = ("spied", "attacked", "pending", "intel", "avoid_until", "aggressors", "opponents", "arm_for")
+    _COORD_MAPS = ("spied", "attacked", "pending", "intel", "avoid_until", "aggressors", "opponents", "arm_for", "debris")
 
     def to_dict(self) -> dict:
         out: dict = {"need_cargo": self.need_cargo, "risk_scale": self.risk_scale, "battles": self.battles,

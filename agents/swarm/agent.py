@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 from .brain import choose_building, choose_research, fields_left, pay
-from . import colonise
+from . import colonise, recycle
 from .combat import tech_from_research
 import random as _random
 from .bandit import outcome_of
@@ -181,6 +181,7 @@ class Agent:
             if planet is home:
                 hints += self._plan_research(planet, have, research_queue, goals=goal_research)
                 hints += self._plan_military(status, planet, have, self._economy_saving)
+                hints += self._plan_recycle(status, planet, have)
                 hints += self._plan_colony(status, planet, have, goal_research)
 
         return self._sleep_time(hints)
@@ -530,6 +531,8 @@ class Agent:
             self.memory.intel[c] = {"at": now, "loot": intel.loot, "defenders": intel.defenders, "owner_id": intel.owner_id,
                                     "ships": intel.ships, "defense": intel.defense, "research": intel.research}
             self.memory.pending.pop(c, None)
+            if "debris" in report:
+                recycle.remember(self.memory.debris, c, recycle.total_of(report["debris"]), now, add=False)
             record_spy(self.memory.opponents, c, now, intel.loot, intel.ships, intel.defense)
             if intel.loot < self.persona.min_loot:  # not worth a visit: do not spy on it again for a while
                 self.memory.avoid_until[c] = now + 4 * self.persona.spy_cooldown_s
@@ -566,6 +569,7 @@ class Agent:
             self.log("battle", at=b["at"], role=b["role"], margin=margin, outcome=outcome, my_loss=b["my_loss"], their_loss=b["their_loss"],
                      loot=b["loot"], debris=b["debris"], rounds=b["rounds"], verdict=verdict,
                      mine=b["my_units"], theirs=b["their_units"])
+            recycle.remember(self.memory.debris, b["coord"], b["debris"], now, add=True)   # a new debris field to harvest
             if b["role"] != "attacker":
                 continue
             self.memory.battles = (self.memory.battles + [{"at": now, **{k: b[k] for k in ("at", "my_loss", "their_loss", "loot")}, "verdict": verdict}])[-30:]
@@ -644,6 +648,80 @@ class Agent:
         self.stats["units"] += amount
         self.log("units", what=name, amount=amount)
         return []
+
+    # ---- recycling -----------------------------------------------------------------------------------
+    _recycle_at = 0.0   # server time before which the recycling code does not look again (it costs requests)
+
+    def _plan_recycle(self, status: dict, home: dict, have: dict) -> list[float]:
+        """Debris remembered from battle and spy reports (swarm/recycle.py): buy recyclers when it is big enough, send them."""
+        m = self.memory
+        recycle.forget_old(m.debris, self.now)
+        if not m.debris or self.now < self._recycle_at:
+            return []
+        self._recycle_at = self.now + 60.0
+        units = self.client.get(f"/planets/{home['id']}/units")["units"]
+        item = next((u for u in units if u["machine_name"] == recycle.RECYCLER), None)
+        if item is None:       # a game without recyclers
+            return []
+        if not self.ship_stats:
+            self.ship_stats = {s["machine_name"]: s for s in self.client.get("/ships")["ships"]}
+        cargo = int(self.ship_stats.get(recycle.RECYCLER, {}).get("cargo_capacity") or recycle.DEFAULT_CARGO)
+        owned = int(item.get("amount", 0))
+        c = home["coordinates"]
+        slots = status["fleet_slots"]
+        pick = recycle.pick_field(m.debris, self.now, coord_of(c["galaxy"], c["system"], c["position"]))
+        if owned >= 1 and pick and slots["used"] < slots["max"]:
+            return self._send_recyclers(home, have, pick[0], pick[1], recycle.fleet_for(pick[1], owned, cargo), cargo)
+        if home["unit_queue"]:
+            return []
+        n, why = recycle.recyclers_to_buy(self.persona, item, have, recycle.remembered_total(m.debris, self.now), owned, cargo)
+        if n < 1:
+            return []
+        try:
+            self.client.post(f"/planets/{home['id']}/units", {"machine_name": recycle.RECYCLER, "amount": n})
+        except ApiError as e:
+            self.stats["refused"] += 1
+            self.log("units_refused", what=recycle.RECYCLER, code=e.code, msg=e.message[:100])
+            return [60.0]
+        for r in ("metal", "crystal", "deuterium"):
+            have[r] = have.get(r, 0) - item["cost_per_unit"].get(r, 0) * n
+        self.stats["units"] += n
+        self.log("units", what=recycle.RECYCLER, amount=n, why=why)
+        return []
+
+    def _send_recyclers(self, home: dict, have: dict, coord: tuple, amount: int, n: int, cargo: int) -> list[float]:
+        m, where = self.memory, f"{coord[0]}:{coord[1]}:{coord[2]}"
+        body = {"mission": "recycle", "galaxy": coord[0], "system": coord[1], "position": coord[2], "type": "debris_field",
+                "ships": {recycle.RECYCLER: n}}
+
+        def skip(why: str, **extra) -> list[float]:
+            m.debris[coord]["sent_until"] = self.now + 1800     # do not ask again every round
+            self.log("recycle_skipped", at=where, debris=amount, why=why, **extra)
+            return []
+        try:
+            check = self.client.post(f"/planets/{home['id']}/fleet/check", body)
+        except ApiError as e:
+            return skip(e.message[:120], code=e.code)
+        possible = (check.get("missions") or {}).get("recycle") or {}
+        if not possible.get("possible", True):
+            m.debris.pop(coord, None)       # the game says no such field (any more)
+            self.log("recycle_skipped", at=where, debris=amount, why=str(possible.get("reason"))[:120])
+            return []
+        haul = min(amount, int(check.get("cargo_capacity") or n * cargo))
+        fuel = int(check.get("deuterium_consumption") or 0)
+        ok, why = recycle.worth_trip(haul, fuel, int(have.get("deuterium", 0)))
+        if not ok:
+            return skip(why)
+        try:
+            result = self.client.post(f"/planets/{home['id']}/fleet", body)
+        except ApiError as e:
+            self.stats["refused"] += 1
+            return skip(e.message[:120], code=e.code)
+        seconds = int(result["mission"]["seconds_remaining"])
+        recycle.after_sending(m.debris, coord, haul, self.now, 2.0 * seconds)
+        have["deuterium"] = have.get("deuterium", 0) - fuel
+        self.log("recycle_sent", at=where, ships=n, debris=amount, haul=haul, fuel=fuel, seconds=seconds, why=why)
+        return [2.0 * seconds + 5]
 
     def _remember_lab(self, planet: dict, buildings: list[dict]) -> None:
         lab = next((b for b in buildings if b["machine_name"] == "research_lab"), None)

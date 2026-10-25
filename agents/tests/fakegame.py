@@ -25,6 +25,7 @@ UNITS = {
     "large_cargo": ("ship", 1500, 1500, 0, 25000),
     "light_fighter": ("ship", 600, 200, 0, 50),
     "colony_ship": ("ship", 1000, 2000, 1000, 7500),
+    "recycler": ("ship", 1000, 500, 0, 20000),
     "rocket_launcher": ("defense", 500, 0, 0, 0),
 }
 
@@ -59,6 +60,10 @@ class FakeGame:
         self.class_stuff = False            # the /character-class endpoint exists
         self.char_class = None
         self.colony_stuff = False           # show astrophysics, colony ships... (off so older tests are unchanged)
+        self.recycle_stuff = False          # recyclers, debris fields and the fleet check exist (off so older tests are unchanged)
+        self.debris: dict[tuple, int] = {}  # debris fields: coordinates -> metal+crystal lying there
+        self.recycle_fuel = 50              # deuterium a recycle trip burns
+        self.recycled = 0                   # total picked up and brought home
         self.colonies: list[tuple] = []     # positions where a colony ship settled
         self.field_max = 10 ** 6           # building fields on the planet; every building level uses one
 
@@ -119,6 +124,12 @@ class FakeGame:
         for m in list(self.missions):
             if not m["arrived"] and self.now >= m["arrive"]:
                 m["arrived"] = True
+                if m["mission"] == "recycle":
+                    cap = m["ships"].get("recycler", 0) * UNITS["recycler"][4]
+                    took = min(cap, self.debris.get(m["to"], 0))
+                    self.debris[m["to"]] = self.debris.get(m["to"], 0) - took
+                    m["cargo"] = took
+                    continue
                 if m["mission"] == "colonisation":
                     self.colonies.append(m["to"])
                     self.missions.remove(m)   # the ship is used up
@@ -148,6 +159,8 @@ class FakeGame:
                         target["resources"][r] -= v
                         self.res[r] += v
                     self.battle_losses += my_loss
+                    if self.recycle_stuff:
+                        self.debris[m["to"]] = self.debris.get(m["to"], 0) + my_loss // 2
                     self._add_message("combat_report", {
                         "target": {"galaxy": m["to"][0], "system": m["to"][1], "position": m["to"][2], "type": 1,
                                    "owner_id": target["user_id"]},
@@ -156,6 +169,8 @@ class FakeGame:
                         "loot": loot, "debris": {"metal": my_loss // 2, "crystal": 0, "deuterium": 0}, "rounds": 5})
             if self.now >= m["back"]:
                 self.missions.remove(m)
+                self.res["metal"] += m.get("cargo", 0)
+                self.recycled += m.get("cargo", 0)
                 for name, n in m["ships"].items():
                     self.ships[name] += n
 
@@ -168,10 +183,12 @@ class FakeGame:
         for name, (cat, mc, cc, dc, cap) in UNITS.items():
             if name == "colony_ship" and not self.colony_stuff:
                 continue
+            if name == "recycler" and not self.recycle_stuff:
+                continue
             cost = {"metal": mc, "crystal": cc, "deuterium": dc}
             fits = [int(self.res[r] // v) for r, v in cost.items() if v > 0]
             amount = self.ships.get(name, 0) if cat == "ship" else self.defense.get(name, 0)
-            met = self.levels["shipyard"] >= (4 if name == "colony_ship" else 1)
+            met = self.levels["shipyard"] >= (4 if name in ("colony_ship", "recycler") else 1)
             items.append({"id": 1, "machine_name": name, "title": name, "category": cat, "amount": amount,
                           "cost_per_unit": {**cost, "energy": 0}, "seconds_per_unit": 10, "requirements_met": met,
                           "character_class_met": True, "max_buildable": min(fits) if (met and fits) else 0})
@@ -287,11 +304,22 @@ class FakeGame:
             else:
                 self.defense[name] += amount
             return {"requested": amount, "ordered": amount, "queue": []}
+        if path == "/planets/10/fleet/check":
+            ok = body["mission"] == "recycle" and (body["galaxy"], body["system"], body["position"]) in self.debris
+            return {"missions": {"recycle": {"possible": ok, "reason": None if ok else "No debris field there."}},
+                    "duration_seconds": 60, "deuterium_consumption": self.recycle_fuel,
+                    "cargo_capacity": sum(n * UNITS[k][4] for k, n in body["ships"].items()), "fuel_capacity": 1000, "distance": 10}
         if path == "/planets/10/fleet":
             if len(self.missions) >= self.slots_max:
                 raise ApiError(422, "mission_rejected", "Maximum number of fleets reached.")
             to = (body["galaxy"], body["system"], body["position"])
-            if body["mission"] != "colonisation" and not any(o["coord"] == to for o in self.others):
+            if body["mission"] == "recycle":
+                if body.get("type") != "debris_field" or to not in self.debris:
+                    raise ApiError(422, "mission_rejected", "No debris field there.")
+                if self.res["deuterium"] < self.recycle_fuel:
+                    raise ApiError(422, "mission_rejected", "Not enough deuterium.")
+                self.res["deuterium"] -= self.recycle_fuel
+            elif body["mission"] != "colonisation" and not any(o["coord"] == to for o in self.others):
                 raise ApiError(422, "mission_rejected", "No planet there.")
             for n, v in body["ships"].items():
                 if self.ships.get(n, 0) < v:
