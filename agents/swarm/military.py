@@ -9,12 +9,15 @@ import random
 from dataclasses import dataclass, field
 
 from .brain import RESOURCES
-from .combat import Estimate, Tech, estimate_battle, tech_from_research
+from .combat import Estimate, Tech, estimate_battle, tech_from_research, unit_value
 from .personas import Persona
 
 FIGHTERS = ("light_fighter", "heavy_fighter", "cruiser", "battle_ship", "battlecruiser", "bomber", "destroyer")
 CARGOS = ("small_cargo", "large_cargo")
+CARGO_SHARE = 0.5         # when loot is lying around that the fleet cannot carry, up to this share of the stock may go on cargo ships
 SYSTEMS_PER_GALAXY = 500  # distance weight of one galaxy jump, in "systems"
+INTEL_MAX_AGE = 1500.0    # seconds: a spy report older than this is not trusted (targets keep building ships; at high game speed fast)
+GAMBLE_MAX_RISK = 2.0     # gamble on an unknown defence only if the fleet at risk is worth at most this many times the loot
 LOOT_SHARE = 0.5          # an attack can take at most half of the resources on a planet
 SCORE_SLACK = 200         # new players have ~0 points: allow some room around the own score
 
@@ -144,13 +147,15 @@ def summarize_report(report: dict) -> Intel:
 
 
 def assess_attack(persona: Persona, rng: random.Random, intel: Intel, my_fighters: int,
-                  risk_scale: float = 1.0) -> tuple[bool, str]:
+                  risk_scale: float = 1.0, at_risk: float | None = None) -> tuple[bool, str]:
     """Decide whether this target is worth attacking with `my_fighters` fighters. Returns (go, reason)."""
     if my_fighters < 1:
         return False, "no fighters"
     if intel.loot < persona.min_loot:
         return False, f"loot {intel.loot} below minimum {persona.min_loot}"
     if intel.defenders is None:
+        if at_risk is not None and at_risk > GAMBLE_MAX_RISK * intel.loot:
+            return False, f"defenses unknown and my fleet (worth {at_risk:,.0f}) is worth too much to gamble for {intel.loot:,}"
         if rng.random() < persona.gamble:
             return True, "defenses unknown, gambling"
         return False, "defenses unknown"
@@ -270,13 +275,14 @@ def pick_attack(persona: Persona, rng: random.Random, memory: Memory, now: float
     fighters = count_fighters(ships_here)
     best = None
     for c, info in memory.intel.items():
-        if now - info["at"] > 2 * 3600 or now - memory.attacked.get(c, -1e12) < persona.attack_cooldown_s:
+        if now - info["at"] > INTEL_MAX_AGE or now - memory.attacked.get(c, -1e12) < persona.attack_cooldown_s:
             continue
         if info.get("skip_until", 0) > now:  # skipped a moment ago (cannot carry the loot): do not retry every round
             continue
         intel = Intel(info["loot"], info["defenders"], info.get("owner_id"), info.get("ships"), info.get("defense"),
                       info.get("research"))
-        go, reason = assess_attack(persona, rng, intel, fighters, memory.risk_scale)
+        risk = sum(unit_value(n) * int(ships_here.get(n, 0) * persona.strike_fraction) for n in FIGHTERS)
+        go, reason = assess_attack(persona, rng, intel, fighters, memory.risk_scale, at_risk=risk)
         if go and (best is None or intel.loot > best[1].loot):
             best = (c, intel, reason)
     return best
@@ -310,6 +316,9 @@ def choose_units(
     weighted.sort(reverse=True)
     name = weighted[0][1]
     cost = usable[name]["cost_per_unit"]
-    limits = [int(have.get(r, 0) * persona.army_share // cost[r]) for r in RESOURCES if cost.get(r, 0) > 0]
+    share = max(persona.army_share, CARGO_SHARE) if want_cargo and name in CARGOS else persona.army_share
+    limits = [int(have.get(r, 0) * share // cost[r]) for r in RESOURCES if cost.get(r, 0) > 0]
     amount = min([usable[name]["max_buildable"], *limits]) if limits else 0
+    if want_cargo and name in CARGOS:
+        amount = min(amount, 10)
     return (name, amount) if amount >= 1 else None

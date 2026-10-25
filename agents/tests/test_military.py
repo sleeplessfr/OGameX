@@ -169,6 +169,30 @@ class FleetAndShopTests(unittest.TestCase):
         self.assertIsNone(pick_attack(replace(RAIDER, aggression=1.0), random.Random(1), memory, 100, {"light_fighter": 5}))
         self.assertIsNotNone(pick_attack(replace(RAIDER, aggression=1.0), random.Random(1), memory, 600, {"light_fighter": 5}))
 
+    def test_a_stock_poor_agent_can_still_afford_cargo_ships_when_it_needs_them(self):
+        # real server case: the balanced agent kept its stock low and wanted cargo ships for hours without ever
+        # affording one under its 20% army share (a small cargo costs 2000 metal + 2000 crystal)
+        persona = replace(PRESETS["balanced"], probes_wanted=0)
+        units = [self.unit("small_cargo", (2000, 2000, 0)), self.unit("light_fighter", (3000, 1000, 0))]
+        have = {"metal": 9000, "crystal": 9000, "deuterium": 0}
+        name, amount = choose_units(persona, random.Random(1), units, have, {}, want_cargo=True)
+        self.assertEqual((name, amount), ("small_cargo", 2))   # half of the stock, 2 ships
+        rich = {"metal": 10_000_000, "crystal": 10_000_000, "deuterium": 0}
+        self.assertEqual(choose_units(persona, random.Random(1), units, rich, {}, want_cargo=True)[1], 10)   # never a huge order
+
+    def test_old_spy_reports_are_not_trusted(self):
+        persona = replace(RAIDER, aggression=1.0)
+        memory = Memory(intel={(1, 1, 1): {"at": 0, "loot": 9000, "defenders": 0, "owner_id": 2}})
+        self.assertIsNotNone(pick_attack(persona, random.Random(1), memory, 600, {"light_fighter": 5}))
+        self.assertIsNone(pick_attack(persona, random.Random(1), memory, 3600, {"light_fighter": 5}))   # an hour old
+
+    def test_no_gambling_with_an_expensive_fleet_but_a_cheap_one_may(self):
+        always = replace(RAIDER, gamble=1.0, min_loot=10)
+        unknown = Intel(30_000, None, None)
+        self.assertFalse(assess_attack(always, random.Random(0), unknown, 20, at_risk=80_000)[0])   # real case: 68,000 lost for nothing
+        self.assertTrue(assess_attack(always, random.Random(0), unknown, 3, at_risk=12_000)[0])
+        self.assertTrue(assess_attack(always, random.Random(0), unknown, 20)[0])   # no value given = old behaviour
+
     def test_strike_needs_fighters(self):
         self.assertIsNone(build_strike(RAIDER, {"small_cargo": 5}, self.STATS, 1000))
         self.assertEqual(count_fighters({"light_fighter": 3, "cruiser": 2, "small_cargo": 9}), 5)
