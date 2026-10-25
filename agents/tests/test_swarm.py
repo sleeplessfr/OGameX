@@ -112,6 +112,22 @@ class BrainTests(unittest.TestCase):
         c = choose_building(agent, self.rng, pl, bs, research_busy=False, units_busy=False, have=dict(pl["resources"]))
         self.assertEqual(c.machine_name, "solar_plant")
 
+    def test_builds_solar_one_step_ahead_when_it_is_affordable_but_not_when_it_is_not(self):
+        # enough power for the next mine level, not for the one after it
+        from swarm.brain import extra_energy_needed
+        need = extra_energy_needed("metal_mine", 3)
+        agent = PRESETS["miner"].__class__(**{**PRESETS["miner"].__dict__, "randomness": 0.0, "energy_buffer": 0})
+        bs = [building("metal_mine", 3), building("solar_plant", 1)]
+        pl = planet(energy=need + need // 2)
+        c = choose_building(agent, self.rng, pl, bs, research_busy=False, units_busy=False, have=dict(pl["resources"]))
+        self.assertEqual((c.machine_name, c.reason), ("solar_plant", "power ahead of metal_mine"))
+        poor = [building("metal_mine", 3), building("solar_plant", 1, afford=False)]
+        c = choose_building(agent, self.rng, pl, poor, research_busy=False, units_busy=False, have=dict(pl["resources"]))
+        self.assertEqual(c.machine_name, "metal_mine")   # no stall: the mine is still fine, the solar plant is just not affordable yet
+        plenty = planet(energy=need * 5)
+        c = choose_building(agent, self.rng, plenty, bs, research_busy=False, units_busy=False, have=dict(plenty["resources"]))
+        self.assertEqual(c.machine_name, "metal_mine")
+
     def test_extra_energy_estimate(self):
         from swarm.brain import extra_energy_needed
         self.assertEqual(extra_energy_needed("solar_plant", 3), 0)

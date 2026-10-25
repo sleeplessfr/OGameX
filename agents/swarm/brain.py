@@ -178,8 +178,15 @@ def choose_building(
     # Look ahead: if the favourite is a mine that would push the power negative, build the solar plant first.
     if ranked and "solar_plant" in by_name:
         top = ranked[0]
-        if planet["energy"] - extra_energy_needed(top["machine_name"], top["level"]) < persona.energy_buffer:
+        need = extra_energy_needed(top["machine_name"], top["level"])
+        if planet["energy"] - need < persona.energy_buffer:
             return _forced(by_name["solar_plant"], have, production, f"power for {top['machine_name']}")
+        # One step ahead: while the power is still enough, build the solar plant whenever it is affordable right now,
+        # so that it is never the thing everything else has to wait for.
+        solar_item = by_name["solar_plant"]
+        if need and planet["energy"] - 2 * need < persona.energy_buffer and solar_item.get("can_afford", True) \
+                and can_pay(solar_item["cost"], have):
+            return Choice(solar_item["machine_name"], None, f"power ahead of {top['machine_name']}")
     # Dependency: the favourite needs a resource we do not produce at all -> build what produces it first.
     if ranked and not can_pay(ranked[0]["cost"], have) and seconds_to_afford(ranked[0]["cost"], have, production) is None:
         for r in RESOURCES:
