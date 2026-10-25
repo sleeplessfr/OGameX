@@ -151,3 +151,36 @@ class AgentInTheFakeGameTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CharacterClassTests(unittest.TestCase):
+    def agent(self, persona, class_stuff=True):
+        game = FakeGame()
+        game.class_stuff = class_stuff
+        store = TokenStore(str(Path(tempfile.mkdtemp()) / "t.json"))
+        agent = Agent("sim", persona, "x", store, random.Random(3), client=game)
+        agent.log = lambda *a, **k: None
+        agent.user_id = 1
+        return game, agent
+
+    def test_each_personality_takes_its_class_once(self):
+        for name, wanted in (("miner", "collector"), ("raider", "general"), ("scientist", "discoverer")):
+            game, agent = self.agent(PRESETS[name])
+            agent.tick()
+            agent.tick()
+            self.assertEqual(game.char_class, wanted)
+            self.assertEqual(sum(1 for path, _ in game.post_log if path == "/character-class"), 1)
+
+    def test_an_agent_never_pays_to_change_a_class_it_already_has(self):
+        game, agent = self.agent(PRESETS["raider"])
+        game.char_class = "collector"
+        agent.tick()
+        self.assertEqual(game.char_class, "collector")
+        self.assertEqual([p for p, _ in game.post_log if p == "/character-class"], [])
+
+    def test_an_old_game_without_the_endpoint_is_not_a_problem(self):
+        game, agent = self.agent(PRESETS["raider"], class_stuff=False)
+        agent.tick()
+        agent.tick()
+        self.assertTrue(agent.memory.class_done)
+        self.assertEqual(agent.stats["errors"], 0)

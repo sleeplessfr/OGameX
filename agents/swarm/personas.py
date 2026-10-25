@@ -39,6 +39,7 @@ class Persona:
     target_range: int = 400      # how far it looks, in "system distance" (one galaxy = 500)
     spy_cooldown_s: float = 3600.0     # does not spy on the same target again before this
     attack_cooldown_s: float = 7200.0  # does not hit the same target again before this
+    character_class: str | None = None  # "collector", "general" or "discoverer": chosen once, free (None = leaves it)
     expansion: float = 0.0       # 0..1 appetite for colonies (0 = never settles; also sets how many planets it is content with)
 
 
@@ -53,7 +54,7 @@ PRESETS: dict[str, Persona] = {
         {"energy_technology": 1.0, "computer_technology": 0.5, "combustion_drive": 0.2},
         balance=0.8, patience=0.85, research_share=0.4, tick_seconds=60, max_save_seconds=1800, caution=0.6,
         aggression=0.05, scout_interest=0.1, army_share=0.05, unit_weights={"small_cargo": 1.0, "espionage_probe": 1.0},
-        probes_wanted=1, min_loot=2000, risk_ratio=0.3, max_target_ratio=0.8, expansion=0.5),
+        probes_wanted=1, min_loot=2000, risk_ratio=0.3, max_target_ratio=0.8, expansion=0.5, character_class="collector"),
     "scientist": Persona(
         "scientist", "Rushes the research lab and climbs the tech tree.",
         {**ECONOMY, "research_lab": 4.0, "crystal_mine": 3.0, "metal_mine": 2.0, "shipyard": 0.4},
@@ -62,7 +63,7 @@ PRESETS: dict[str, Persona] = {
          "impulse_drive": 1.0, "astrophysics": 1.5, "plasma_technology": 1.0},
         balance=1.2, patience=0.6, research_share=1.0, tick_seconds=45, max_save_seconds=7200, caution=0.5,
         aggression=0.0, scout_interest=0.4, army_share=0.1, unit_weights={"espionage_probe": 3.0, "small_cargo": 1.0},
-        probes_wanted=3, probes_per_spy=2, spy_cooldown_s=7200, expansion=0.7),
+        probes_wanted=3, probes_per_spy=2, spy_cooldown_s=7200, expansion=0.7, character_class="discoverer"),
     "turtle": Persona(
         "turtle", "Defensive and safe: big stores, steady growth, never overspends.",
         {**ECONOMY, "metal_store": 2.0, "crystal_store": 2.0, "deuterium_store": 1.5, "robot_factory": 2.0,
@@ -73,7 +74,7 @@ PRESETS: dict[str, Persona] = {
         aggression=0.0, scout_interest=0.05, army_share=0.3,
         unit_weights={"rocket_launcher": 3.0, "light_laser": 2.0, "heavy_laser": 1.0, "small_shield_dome": 1.0,
                       "espionage_probe": 0.5},
-        probes_wanted=1, expansion=0.3),
+        probes_wanted=1, expansion=0.3, character_class="collector"),
     "raider": Persona(
         "raider", "Wants ships early: shipyard and drives, economy only as a means.",
         {**ECONOMY, "shipyard": 3.5, "robot_factory": 2.0, "deuterium_synthesizer": 2.5, "research_lab": 1.5},
@@ -84,7 +85,7 @@ PRESETS: dict[str, Persona] = {
         unit_weights={"light_fighter": 3.0, "cruiser": 2.0, "heavy_fighter": 1.5, "small_cargo": 1.5, "large_cargo": 1.0,
                       "espionage_probe": 1.0},
         probes_wanted=3, probes_per_spy=2, risk_ratio=1.0, gamble=0.35, min_loot=400, strike_fraction=0.9,
-        max_target_ratio=1.3, spy_cooldown_s=1800, attack_cooldown_s=3600, expansion=0.2),
+        max_target_ratio=1.3, spy_cooldown_s=1800, attack_cooldown_s=3600, expansion=0.2, character_class="general"),
     "balanced": Persona(
         "balanced", "A bit of everything, like an average player.",
         dict(ECONOMY),
@@ -93,7 +94,7 @@ PRESETS: dict[str, Persona] = {
         balance=1.0, patience=0.65, research_share=0.7, tick_seconds=45, caution=0.5,
         aggression=0.3, scout_interest=0.4, army_share=0.2,
         unit_weights={"light_fighter": 1.0, "small_cargo": 1.0, "espionage_probe": 1.0, "rocket_launcher": 1.0},
-        probes_wanted=2, risk_ratio=0.6, min_loot=800, expansion=0.5),
+        probes_wanted=2, risk_ratio=0.6, min_loot=800, expansion=0.5, character_class="general"),
 }
 
 

@@ -41,6 +41,7 @@ class Memory:
     battles: list[dict] = field(default_factory=list)  # recent results of own attacks (newest last, capped)
     aggressors: dict[Coord, float] = field(default_factory=dict)  # planets that attacked us (when we last saw one coming)
     trade_cooldown_until: float = 0.0  # no new merchant call before this server time (dark matter is scarce)
+    class_done: bool = False           # the character class has been chosen (or cannot be)
     expanding: bool = False            # the home planet is crowded and this agent has decided to found a colony
     colony_sent_at: float = 0.0        # server time a colony ship left (0 = none on its way)
     colony_planets_before: int = 0     # planets owned when it left, to see whether it worked
@@ -51,7 +52,7 @@ class Memory:
 
     def to_dict(self) -> dict:
         out: dict = {"need_cargo": self.need_cargo, "risk_scale": self.risk_scale, "battles": self.battles,
-                     "trade_cooldown_until": self.trade_cooldown_until, "expanding": self.expanding,
+                     "trade_cooldown_until": self.trade_cooldown_until, "expanding": self.expanding, "class_done": self.class_done,
                      "colony_sent_at": self.colony_sent_at, "colony_planets_before": self.colony_planets_before,
                      "colony_until": self.colony_until}
         for name in self._COORD_MAPS:
@@ -79,6 +80,7 @@ class Memory:
         except (TypeError, ValueError):
             pass
         m.expanding = bool(data.get("expanding", False))
+        m.class_done = bool(data.get("class_done", False))
         for key in ("colony_sent_at", "colony_until"):
             try:
                 setattr(m, key, float(data.get(key, 0.0)))

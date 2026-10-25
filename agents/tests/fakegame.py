@@ -56,6 +56,8 @@ class FakeGame:
         self.merchant_quality = 0.9         # share of the fair value the merchant pays
         self.trades_done = 0
         self.battle_losses = 0
+        self.class_stuff = False            # the /character-class endpoint exists
+        self.char_class = None
         self.colony_stuff = False           # show astrophysics, colony ships... (off so older tests are unchanged)
         self.colonies: list[tuple] = []     # positions where a colony ship settled
         self.field_max = 10 ** 6           # building fields on the planet; every building level uses one
@@ -191,6 +193,11 @@ class FakeGame:
             return {"galaxy": int(g), "system": int(s), "positions": [
                 {"position": p, "planet": ({"id": 99, "name": "x"} if (int(g), int(s), p) in taken else None)}
                 for p in range(1, 16)]}
+        if route == "/character-class":
+            if not self.class_stuff:
+                raise ApiError(404, "not_found", route)
+            return {"class": self.char_class, "change_cost": 0 if self.char_class is None else 500000,
+                    "dark_matter": self.dark_matter, "options": []}
         if route == "/ships":
             return {"ships": [{"machine_name": n, "cargo_capacity": v[4]} for n, v in UNITS.items() if v[0] == "ship"]}
         if route == "/highscore":
@@ -263,6 +270,11 @@ class FakeGame:
         merchant = self._handle_merchant_post(path, body)
         if merchant is not None:
             return merchant
+        if path == "/character-class":
+            if self.char_class is not None:
+                raise ApiError(422, "class_change_refused", "costs dark matter")
+            self.char_class = body["class"]
+            return {"class": self.char_class}
         if path == "/planets/10/units":
             name, amount = body["machine_name"], int(body["amount"])
             item = next(u for u in self._units_list() if u["machine_name"] == name)

@@ -159,6 +159,7 @@ class Agent:
         research_busy = bool(research_queue)
 
         self.planets_owned = len(planets)
+        self._choose_class()
         goal_buildings, goal_research = self._colony_goals(status, home)
         threats = self._watch()
         if self.now < self.alert_until:
@@ -352,6 +353,23 @@ class Agent:
         if may_buy and not home["unit_queue"]:
             hints += self._build_units(home, units, have, ships_here)
         return hints
+
+    # ---- character class -----------------------------------------------------------------------------
+    def _choose_class(self) -> None:
+        """Once per agent: take the free first choice of character class that suits the personality."""
+        m = self.memory
+        if m.class_done or not self.persona.character_class:
+            return
+        try:
+            state = self.client.get("/character-class")
+            if state.get("class") is None and state.get("change_cost", 1) == 0:
+                self.client.post("/character-class", {"class": self.persona.character_class})
+                self.log("class", chosen=self.persona.character_class)
+            m.class_done = True
+        except ApiError as e:
+            if e.status == 404:      # an older game without the endpoint: never ask again
+                m.class_done = True
+            self.log("class_refused", code=e.code, msg=e.message[:100])
 
     # ---- colonies ------------------------------------------------------------------------------------
     def _colony_goals(self, status: dict, home: dict) -> tuple[dict | None, dict | None]:

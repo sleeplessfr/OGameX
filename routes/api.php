@@ -3,6 +3,7 @@
 use Illuminate\Support\Facades\Route;
 use OGame\Http\Controllers\Api\V1\AuthController;
 use OGame\Http\Controllers\Api\V1\BuildingController;
+use OGame\Http\Controllers\Api\V1\CharacterClassController;
 use OGame\Http\Controllers\Api\V1\FleetController;
 use OGame\Http\Controllers\Api\V1\GalaxyController;
 use OGame\Http\Controllers\Api\V1\HighscoreController;
@@ -74,6 +75,9 @@ Route::middleware(['api.token', 'throttle:ogamex-api', 'globalgame'])->group(fun
     Route::post('/merchant/call', [MerchantController::class, 'call']);
     Route::post('/merchant/dismiss', [MerchantController::class, 'dismiss']);
     Route::post('/planets/{planet}/merchant/trade', [MerchantController::class, 'trade'])->whereNumber('planet');
+
+    Route::get('/character-class', [CharacterClassController::class, 'show']);
+    Route::post('/character-class', [CharacterClassController::class, 'select']);
 
     Route::get('/highscore', [HighscoreController::class, 'index']);
 });

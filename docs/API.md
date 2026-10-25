@@ -167,6 +167,15 @@ The resource merchant buys one resource and pays in the other two at random rate
 | POST | `/planets/{planet}/merchant/trade` | Body: `receive` (object, e.g. `{"crystal": 5000}`; only resources other than the one he buys) and `give_amount` (most you will give him). Paid from and delivered to that planet. Wishes are scaled down to fit `give_amount`, the planet's stock and free storage. One trade only, then he leaves. Returns `gave`, `received`, `dark_matter`. Errors: `no_active_merchant`, `trade_failed`, `validation_failed` |
 | POST | `/merchant/dismiss` | Sends him away without trading; the dark matter is not refunded |
 
+### Character class
+
+Collector (mines, energy, transporters), General (combat, +2 fleet slots, Reaper) or Discoverer (-25% research time, expeditions, +10% larger colonies). The first choice is free; changing costs 500,000 dark matter and is refused while fleets are flying. Same rules and code as the web UI.
+
+| Method | Path | What it does |
+|---|---|---|
+| GET | `/character-class` | `class` (`collector`, `general`, `discoverer` or `null`), `change_cost` (0 while the free choice is unused), `dark_matter`, and `options` with the bonuses of each class |
+| POST | `/character-class` | Body: `class`. Returns the same data as GET. Errors: `class_change_refused` (not enough dark matter, same class, fleets flying), `validation_failed`, `vacation_mode` |
+
 ### Highscore
 
 | Method | Path | Description |
