@@ -151,3 +151,11 @@ class AgentDefenseTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GuardTests(unittest.TestCase):
+    def test_rearms_quietly_after_a_recent_raid(self):
+        self.assertEqual(defence_share(MINER, [], set(), on_guard=False), 0.0)
+        self.assertAlmostEqual(defence_share(MINER, [], set(), on_guard=True), MINER.caution * 0.25)
+        attack = Threat(1, "attack", 30, (1, 3, 7))
+        self.assertEqual(defence_share(MINER, [attack], set(), on_guard=True), MINER.caution)   # a real attack still counts fully

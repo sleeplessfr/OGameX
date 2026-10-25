@@ -80,9 +80,14 @@ def choose_defense(persona: Persona, units: list[dict], have: dict, share: float
 
 
 AGGRESSOR_MEMORY = 12 * 3600.0   # a planet that attacked us is treated as dangerous for this long
+RECENT_RAID = 3 * 3600.0         # attacked within this time: stay on guard (look every GUARD_SECONDS, keep rearming)
+GUARD_SECONDS = 60.0
+PEACE_WATCH_SECONDS = 180.0      # even at peace, look for incoming fleets at least this often
+STANDING_FACTOR = 0.25           # while on guard, this share of `caution` is always turned into defence
 
 
-def defence_share(persona: Persona, threats: list[Threat], aggressors: set[tuple[int, int, int]] | None = None) -> float:
+def defence_share(persona: Persona, threats: list[Threat], aggressors: set[tuple[int, int, int]] | None = None,
+                  on_guard: bool = False) -> float:
     """How much of the stock to turn into defence given what is coming.
 
     An attack always counts. A spy probe only counts when it comes from a planet that has attacked us before:
@@ -91,4 +96,6 @@ def defence_share(persona: Persona, threats: list[Threat], aggressors: set[tuple
         return persona.caution
     if any(t.origin in (aggressors or set()) for t in threats):
         return persona.caution * SPY_ONLY_FACTOR
+    if on_guard:
+        return persona.caution * STANDING_FACTOR   # recently robbed: rebuild instead of waiting for the next raid
     return 0.0

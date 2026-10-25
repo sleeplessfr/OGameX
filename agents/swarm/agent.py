@@ -13,7 +13,7 @@ from .combat import tech_from_research
 from .military import (Memory, choose_strike, judge_trade, summarize_battle, choose_units, coord_of, pick_attack, pick_target, summarize_report)
 from .client import ApiClient, ApiError
 from .personas import Persona
-from .defense import AGGRESSOR_MEMORY, ALERT_SECONDS, COOLDOWN_SECONDS as DEFEND_COOLDOWN, WATCH_SECONDS, choose_defense, defence_share, find_threats
+from .defense import AGGRESSOR_MEMORY, GUARD_SECONDS, PEACE_WATCH_SECONDS, RECENT_RAID, ALERT_SECONDS, COOLDOWN_SECONDS as DEFEND_COOLDOWN, WATCH_SECONDS, choose_defense, defence_share, find_threats
 from .trade import COOLDOWN_SECONDS, choose_sale, plan_deal
 
 
@@ -159,6 +159,10 @@ class Agent:
         threats = self._watch()
         if self.now < self.alert_until:
             hints.append(WATCH_SECONDS)   # someone hostile is about: look often
+        elif self._on_guard():
+            hints.append(GUARD_SECONDS)   # robbed recently: the raider will come back
+        else:
+            hints.append(PEACE_WATCH_SECONDS)
 
         for planet in planets:
             have = dict(planet["resources"])
@@ -210,10 +214,13 @@ class Agent:
             self.alert_until = self.now + ALERT_SECONDS
         return threats
 
+    def _on_guard(self) -> bool:
+        return any(self.now - when < RECENT_RAID for when in self.memory.aggressors.values())
+
     def _prepare_defense(self, home: dict, have: dict, threats: list) -> None:
         """Turn part of the stock into defence units before the fleet lands: it would be stolen otherwise."""
         known = {c for c, when in self.memory.aggressors.items() if self.now - when < AGGRESSOR_MEMORY}
-        share = defence_share(self.persona, threats, known)
+        share = defence_share(self.persona, threats, known, self._on_guard())
         if share <= 0 or self.now < self.defend_cooldown_until or home["unit_queue"]:
             return
         units = self.client.get(f"/planets/{home['id']}/units")["units"]
