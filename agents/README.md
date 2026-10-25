@@ -133,6 +133,19 @@ tables for a human (terraformer versus colony versus moon).
   than the spy report says. Each attack tries one of these (Thompson sampling), and the battle report tells whether it paid
   off, so each raider slowly learns the margin that suits it. Report section: LEARNED FIGHT MARGIN.
 
+## Expeditions
+
+An agent sends a small cargo fleet to position 16 of its home system (`swarm/expedition.py`). Discoverers (the scientist) go whenever
+a slot is free; the other personalities have an `expedition_interest` (0.05 to 0.25) and only go once astrophysics is 3 and then rarely
+(6 h pause). Rules taken from the game's `ExpeditionMission.php`: it needs astrophysics 1, a free expedition slot
+(`/status` `fleet_slots.expedition_used/max`: floor(sqrt(astrophysics)), +2 for a Discoverer) and a normal fleet slot; there is no
+fleet-size limit and the holding time does not change the odds, so agents hold 1 hour. Finds are capped by cargo capacity, so the fleet is
+mostly cargo ships (pathfinders first for a Discoverer) plus a few fighters as escort, never more than 40-60% of the ships at home. About
+1 in 3 expeditions finds resources, 1 in 6 ships, 1 in 13 dark matter, 1 in 500 loses the fleet. It stays home while it is on guard or an
+attack is on its way. Reports (`/messages?category=expeditions`) are parsed into counts saved in the agent's memory (`expedition`: outcomes,
+resources, dark matter, ships found and lost); a lost fleet shrinks the next fleet and pauses for 6 hours, good trips grow it again.
+Log events: `expedition_sent`, `expedition_result`, `expedition_refused`. Report section: EXPEDITIONS.
+
 ## The merchant
 
 A merchant call costs 3,500 dark matter (accounts start with 8,000), shows random rates and trades once. So an agent
@@ -156,7 +169,7 @@ Log events: `recycle_sent`, `recycle_skipped`, `units` (what=recycler); see RECY
 
 ## Not built yet
 
-Expeditions, the scrap merchant, alliances, fleet-saving, defending colonies, retaliation, and LLM-driven
+Expeditions' sibling features still missing: the scrap merchant, alliances, defending colonies, retaliation, and LLM-driven
 decisions. The brain is rule-based; the personas are the knobs; learning so far is the risk lesson, opponent memory and the
 fight margin bandit above.
 

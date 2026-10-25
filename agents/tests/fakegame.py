@@ -65,6 +65,10 @@ class FakeGame:
         self.recycle_fuel = 50              # deuterium a recycle trip burns
         self.recycled = 0                   # total picked up and brought home
         self.colonies: list[tuple] = []     # positions where a colony ship settled
+        self.expedition_stuff = False       # expeditions: position 16, expedition slots, outcome messages (off so older tests are unchanged)
+        self.exp_outcomes = ["resources"]   # outcome of each expedition in turn (cycled): resources, ships, dark_matter, nothing, delay, loss
+        self.exp_done = 0
+        self.is_discoverer = False
         self.field_max = 10 ** 6           # building fields on the planet; every building level uses one
 
     # -- economy --
@@ -134,6 +138,9 @@ class FakeGame:
                     self.colonies.append(m["to"])
                     self.missions.remove(m)   # the ship is used up
                     continue
+                if m["mission"] == "expedition":
+                    self._expedition_arrives(m)
+                    continue
                 target = next(o for o in self.others if o["coord"] == m["to"])
                 if m["mission"] == "espionage":
                     self._add_message("espionage_report", {
@@ -173,10 +180,36 @@ class FakeGame:
                 self.recycled += m.get("cargo", 0)
                 for name, n in m["ships"].items():
                     self.ships[name] += n
+                for r, v in (m.get("bring") or {}).items():
+                    self.res[r] += v
 
-    def _add_message(self, key, report):
-        self.messages.append({"id": self.next_message_id, "key": key, "viewed": False, "report": report})
+    def _add_message(self, key, report, body=""):
+        self.messages.append({"id": self.next_message_id, "key": key, "viewed": False, "report": report, "body": body})
         self.next_message_id += 1
+
+    def _expedition_arrives(self, m):
+        outcome = self.exp_outcomes[self.exp_done % len(self.exp_outcomes)]
+        self.exp_done += 1
+        key, body = {
+            "resources": ("expedition_gain_resources", "Your scouts found a rich asteroid.\n\nMetal 12,345 have been captured."),
+            "ships": ("expedition_gain_ships", "A derelict fleet joins you.\n\nThe following ships are now part of the fleet:\n"
+                                              "Small Cargo: 3\nLight Fighter: 12"),
+            "dark_matter": ("expedition_gain_dark_matter", "Strange matter.\n\n(150 Dark Matter)"),
+            "nothing": ("expedition_failed", "Nothing but void."),
+            "delay": ("expedition_failed_and_delay", "A storm delays you."),
+            "loss": ("expedition_loss_of_fleet", "The last message was: a black hole."),
+        }[outcome]
+        if outcome == "resources":
+            m["bring"] = {"metal": 12345}
+        elif outcome == "ships":
+            m["ships"] = dict(m["ships"], small_cargo=m["ships"].get("small_cargo", 0) + 3, light_fighter=m["ships"].get("light_fighter", 0) + 12)
+        elif outcome == "dark_matter":
+            self.dark_matter += 150
+        elif outcome == "delay":
+            m["back"] += 7200
+        elif outcome == "loss":
+            m["ships"] = {k: 0 for k in m["ships"]}
+        self._add_message(key, None, body)
 
     def _units_list(self):
         items = []
@@ -228,8 +261,9 @@ class FakeGame:
         if route == "/messages":
             rows = [m for m in self.messages if not (q.get("unread_only") == "1" and m["viewed"])
                     and (q.get("category") != "espionage" or m["key"] == "espionage_report")
-                    and (q.get("category") != "combat" or m["key"] == "combat_report")]
-            return {"messages": [{"id": m["id"], "key": m["key"], "viewed": m["viewed"],
+                    and (q.get("category") != "combat" or m["key"] == "combat_report")
+                    and (q.get("category") != "expeditions" or m["key"].startswith("expedition_"))]
+            return {"messages": [{"id": m["id"], "key": m["key"], "viewed": m["viewed"], "body": m.get("body", ""),
                                   "has_espionage_report": m["key"] == "espionage_report",
                                   "has_battle_report": m["key"] == "combat_report"} for m in rows]}
         if route.startswith("/messages/"):
@@ -319,6 +353,13 @@ class FakeGame:
                 if self.res["deuterium"] < self.recycle_fuel:
                     raise ApiError(422, "mission_rejected", "Not enough deuterium.")
                 self.res["deuterium"] -= self.recycle_fuel
+            elif body["mission"] == "expedition":
+                if not self.expedition_stuff or to[2] != 16 or self.tech["astrophysics"] < 1:
+                    raise ApiError(422, "mission_rejected", "Fleets cannot be sent to this target. You have to research Astrophysics first.")
+                if not 1 <= int(body.get("holding_hours", 0)) <= self.tech["astrophysics"]:
+                    raise ApiError(422, "invalid_holding_time", "holding_hours for an expedition must be between 1 and your astrophysics level.")
+                if sum(1 for x in self.missions if x["mission"] == "expedition") >= self._expedition_max():
+                    raise ApiError(422, "mission_rejected", "You are conducting too many expeditions at the same time.")
             elif body["mission"] != "colonisation" and not any(o["coord"] == to for o in self.others):
                 raise ApiError(422, "mission_rejected", "No planet there.")
             for n, v in body["ships"].items():
@@ -337,6 +378,9 @@ class FakeGame:
                     m["viewed"] = True
             return {"message": {"id": mid, "viewed": True}}
         return None
+
+    def _expedition_max(self):
+        return math.isqrt(self.tech["astrophysics"]) + (2 if self.is_discoverer else 0)
 
     # -- API --
     def get(self, path):
@@ -360,7 +404,10 @@ class FakeGame:
                     "fields": {"used": sum(self.levels.values()), "max": self.field_max},
                     "building_queue": self.qdict(self.bq, "b"), "unit_queue": []}],
                 "research": {"levels": {k: v for k, v in self.tech.items()}, "queue": self.qdict(self.rq, "r")},
-                "fleet_slots": {"used": len(self.missions), "max": self.slots_max}, "unread_messages": 0}
+                "fleet_slots": {"used": len(self.missions), "max": self.slots_max,
+                                **({"expedition_used": sum(1 for x in self.missions if x["mission"] == "expedition"),
+                                    "expedition_max": self._expedition_max()} if self.expedition_stuff else {})},
+                "unread_messages": 0}
         if path == "/planets/10/buildings":
             items = []
             for name in BASE:
@@ -373,7 +420,7 @@ class FakeGame:
         if path == "/planets/10/research":
             items = []
             for name in TECH:
-                if name in ("astrophysics", "impulse_drive", "espionage_technology") and not self.colony_stuff:
+                if name in ("astrophysics", "impulse_drive", "espionage_technology") and not (self.colony_stuff or self.expedition_stuff):
                     continue
                 lvl = self.tech[name]
                 cost = self.cost(name, lvl, TECH)

@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 from .brain import choose_building, choose_research, fields_left, pay
-from . import colonise, recycle
+from . import colonise, expedition, recycle
 from .combat import tech_from_research
 import random as _random
 from .bandit import outcome_of
@@ -182,6 +182,7 @@ class Agent:
                 hints += self._plan_research(planet, have, research_queue, goals=goal_research)
                 hints += self._plan_military(status, planet, have, self._economy_saving)
                 hints += self._plan_recycle(status, planet, have)
+                hints += self._plan_expedition(status, planet)
                 hints += self._plan_colony(status, planet, have, goal_research)
 
         return self._sleep_time(hints)
@@ -357,6 +358,55 @@ class Agent:
         if may_buy and not home["unit_queue"]:
             hints += self._build_units(home, units, have, ships_here)
         return hints
+
+    # ---- expeditions ---------------------------------------------------------------------------------
+    def _plan_expedition(self, status: dict, home: dict) -> list[float]:
+        """Read the reports of finished expeditions, then maybe send a new one (rules and odds in swarm/expedition.py)."""
+        if not expedition.wants_expeditions(self.persona):
+            return []
+        st = self.memory.expedition
+        if st["inflight"] and self.now - st["last_read"] >= 120:
+            st["last_read"] = self.now
+            self._read_expeditions()
+        astro = int((status["research"].get("levels") or {}).get("astrophysics", 0))
+        if expedition.can_consider(self.persona, now=self.now, state=st, astro=astro, fleet_slots=status["fleet_slots"],
+                                   on_guard=self._on_guard(), alert=self.now < self.alert_until):
+            return []
+        units = self.client.get(f"/planets/{home['id']}/units")["units"]
+        ships_here = {u["machine_name"]: u["amount"] for u in units if u["amount"] > 0 and u["category"] != "defense"}
+        if not self.ship_stats:
+            self.ship_stats = {s["machine_name"]: s for s in self.client.get("/ships")["ships"]}
+        cargo_of = {n: int(s.get("cargo_capacity") or 0) for n, s in self.ship_stats.items()}
+        try:
+            top = max([int(r.get("score") or 0) for r in self._get_players(self.now)[0]] or [0])
+        except ApiError:
+            top = 0
+        d = expedition.decide(self.persona, self.rng, ships_here=ships_here, cargo_of=cargo_of, top_score=top, state=st)
+        if not d.ships:
+            st["next_at"] = self.now + d.retry_in
+            return []
+        c = home["coordinates"]
+        try:
+            result = self.client.post(f"/planets/{home['id']}/fleet", {
+                "mission": "expedition", "galaxy": c["galaxy"], "system": c["system"], "position": 16,
+                "ships": d.ships, "holding_hours": d.holding_hours})
+        except ApiError as e:
+            self.stats["refused"] += 1
+            st["next_at"] = self.now + expedition.RETRY_SECONDS
+            self.log("expedition_refused", code=e.code, msg=e.message[:120])
+            return []
+        cost_of = {u["machine_name"]: sum((u.get("cost_per_unit") or {}).get(r, 0) for r in ("metal", "crystal", "deuterium")) for u in units}
+        expedition.record_sent(st, self.now, d.ships, expedition.fleet_value(d.ships, cost_of), d.retry_in)
+        self.log("expedition_sent", at=f"{c['galaxy']}:{c['system']}:16", ships=d.ships, hours=d.holding_hours, why=d.why,
+                 seconds=result["mission"]["seconds_remaining"])
+        return []
+
+    def _read_expeditions(self) -> None:
+        data = self.client.get("/messages?category=expeditions&unread_only=1&per_page=20")
+        for row in reversed(data["messages"]):   # oldest first
+            self.client.post(f"/messages/{row['id']}/read")
+            res = expedition.parse_message(row.get("key", ""), row.get("body", ""))
+            self.log("expedition_result", **expedition.record_result(self.memory.expedition, self.now, res))
 
     # ---- character class -----------------------------------------------------------------------------
     def _choose_class(self) -> None:
