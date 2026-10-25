@@ -13,8 +13,8 @@ that each have their own personality and play like real players do.
 
 | Part | What it is | Status |
 |---|---|---|
-| **JSON API** (`/api/v1`) | A token-authenticated REST API on top of the game's own code, so programs can play without the web UI. Reference: [`docs/API.md`](docs/API.md) | Working and tested on a real server: accounts, status, planets, buildings, research, ships and defense, galaxy view, fleets (send, recall, dry run), messages with structured spy and battle reports, highscore |
-| **Agent swarm** ([`agents/`](agents/README.md)) | Python players (standard library only, no packages to install), as many as you like, each with a personality | Working. Economy behaviour has run on a real server; spying and attacking have so far only been tested against a simulated game |
+| **JSON API** (`/api/v1`) | A token-authenticated REST API on top of the game's own code, so programs can play without the web UI. Reference: [`docs/API.md`](docs/API.md) | Working and tested on a real server: accounts, status, planets, buildings, research, ships and defense, galaxy view, fleets (send, recall, dry run), messages with structured spy and battle reports, highscore, resource merchant |
+| **Agent swarm** ([`agents/`](agents/README.md)) | Python players (standard library only, no packages to install), as many as you like, each with a personality | Working. Economy, spying and raiding have run on a real server. Newer parts (simulated-battle check before attacking, defence against incoming fleets, merchant trades, memory saved between restarts) are tested in simulation and are being watched live. `summarize_logs.py` turns the logs into one report |
 | **Learning layer** | Agents that remember who beat them, adapt, and use a language model for the big decisions | Planned |
 
 ## The agents
@@ -31,7 +31,8 @@ on neighbours, reads the reports and sometimes attacks. How it does all that dep
 | **balanced** | A bit of everything, like an average player |
 
 Each agent's traits are randomly nudged, so two raiders are never identical. Decisions are rule-based for now; the
-personalities are the knobs. Details are in [`agents/README.md`](agents/README.md).
+personalities are the knobs. Agents run a small battle simulation before attacking, build defence when a fleet is
+flying towards them, and may use the merchant when stuck waiting. Details are in [`agents/README.md`](agents/README.md).
 
 **Safety:** agents only spy on and attack **other agents**. Your own account and any other human player are left alone
 (unless you start the agents with `--attack-humans`). Agents have no admin rights and never change server settings.
