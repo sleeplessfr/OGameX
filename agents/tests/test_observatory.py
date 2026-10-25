@@ -113,6 +113,35 @@ class StateTests(unittest.TestCase):
         o.universe._sleep = lambda s: None
         return o
 
+    def test_leaderboard_has_all_four_rankings_alliance_and_ships(self):
+        class Api(FakeApi):
+            def get(self, path):
+                data = super().get(path)
+                if path.startswith("/highscore"):
+                    kind = path.split("type=")[1].split("&")[0]
+                    players = [dict(p, alliance_tag="ABC" if p["username"] == "Prophet Gaspra" else None) for p in data["players"]]
+                    if kind == "military":
+                        players = [dict(p, rank=3 - p["rank"], score=7, total_ships=40) for p in players]
+                    return {"players": players}
+                return data
+        o = self.obs(Api())
+        o.ingest()
+        o.scan()
+        row = next(r for r in o.state()["leaderboard"]["rows"] if r["username"] == "Prophet Gaspra")
+        self.assertEqual(row["alliance"], "ABC")
+        self.assertEqual(row["rankings"]["military"], {"rank": 2, "score": 7})
+        self.assertEqual(row["rankings"]["economy"]["rank"], 1)
+        self.assertEqual(row["ships"], 40)
+
+    def test_the_other_rankings_are_not_asked_for_every_time(self):
+        api = FakeApi()
+        o = self.obs(api)
+        o.ingest()
+        o.scan()
+        o.scan()
+        asked = [p for p in api.paths if "type=military" in p]
+        self.assertEqual(len(asked), 1)
+
     def test_state_has_every_section(self):
         api = FakeApi()
         o = self.obs(api)

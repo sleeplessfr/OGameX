@@ -29,6 +29,8 @@ from swarm.client import ApiClient, ApiError
 KEEP_EVENTS = 20000          # events kept in memory (counters are kept for the whole history)
 NOISE = ("wait", "opponent")  # logged often and of no interest to a reader: left out of the feed
 RECENT_BATTLE_S = 6 * 3600
+RANKING_TYPES = ("economy", "research", "military")   # besides the general ranking
+RANKING_TTL = 120.0   # seconds between two reads of those
 SCAN_BUDGET = 15             # galaxy views fetched per refresh
 SCAN_TTL = 300               # seconds before a system is looked at again
 SCAN_RATE = 4.0              # requests per second at most
@@ -312,6 +314,8 @@ class Universe:
         self._sleep, self._clock = sleep, clock
         self.systems: dict[int, tuple[float, list[dict]]] = {}   # system -> (fetched at, occupied slots)
         self.highscore: list[dict] = []
+        self.rankings: dict[str, list[dict]] = {}   # the other rankings: economy, research, military
+        self._rankings_at = 0.0
         self.available = client is not None
         self.note = "" if client else "no agent token found: map and ranking unavailable"
 
@@ -325,6 +329,14 @@ class Universe:
         except (ApiError, OSError, ValueError, AttributeError) as e:
             self.available, self.note = False, f"game unreachable: {str(e)[:80]}"
             return
+        if self._clock() - self._rankings_at > RANKING_TTL:   # the other rankings change slowly: ask now and then
+            self._rankings_at = self._clock()
+            for kind in RANKING_TYPES:
+                try:
+                    self.rankings[kind] = list(self.client.get(f"/highscore?type={kind}&per_page=100").get("players") or [])
+                except (ApiError, OSError, ValueError, AttributeError):
+                    pass
+                self._sleep(0.25)
         wanted = set(hint_systems)
         for row in self.highscore:
             mp = row.get("main_planet") or {}
@@ -432,10 +444,15 @@ class Observatory:
                 if slots:
                     systems.append({"galaxy": self.galaxy, "system": s, "slots": slots})
             leader = []
+            other = {kind: {r.get("username"): r for r in rows} for kind, rows in self.universe.rankings.items()}
             for row in self.universe.highscore:
                 agent = by_user.get(row.get("username"))
                 a = agents.get(agent) if agent else None
+                extra = {kind: {"rank": (other.get(kind, {}).get(row.get("username")) or {}).get("rank"),
+                                "score": (other.get(kind, {}).get(row.get("username")) or {}).get("score")} for kind in RANKING_TYPES}
+                ships = (other.get("military", {}).get(row.get("username")) or {}).get("total_ships")
                 leader.append({"rank": row.get("rank"), "username": row.get("username"), "score": row.get("score"),
+                               "alliance": row.get("alliance_tag"), "rankings": extra, "ships": ships,
                                "agent": agent, "persona": a["persona"] if a else None,
                                "planets": planets_owned.get(row.get("username")) or (1 + a["colonies"] if a else None),
                                "attacks": a["attacks"] if a else None, "net_loot": a["net_loot"] if a else None,
@@ -580,7 +597,7 @@ table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:6px 10px
 <section id="map" class="tab on"><div class="legend" id="legend"></div><div id="mapnote" class="warn"></div><div class="systems" id="systems"></div><div id="info" class="dim">Hover a planet.</div></section>
 <section id="news" class="tab"><div class="paper" id="paper"></div></section>
 <section id="feed" class="tab"><div class="filters"><select id="fa"></select><select id="fp"></select><select id="fk"></select><input id="ft" placeholder="search text"></div><div id="rows"></div></section>
-<section id="board" class="tab"><div id="boardnote" class="warn"></div><div id="boardtable"></div></section>
+<section id="board" class="tab"><div class="bar">Sort by <select id="bsort"><option value="general">General</option><option value="economy">Economy</option><option value="research">Research</option><option value="military">Military</option></select> <span class="dim">Alliance stays empty until agents found alliances.</span></div><div id="boardnote" class="warn"></div><div id="boardtable"></div></section>
 </main>
 <script>
 const COLORS={miner:"#d9a441",scientist:"#4aa3ff",turtle:"#4fbf7a",raider:"#e5534b",balanced:"#b07cf0",other:"#6b7280"};
@@ -628,15 +645,19 @@ function drawFeed(){
 function drawBoard(){
   const b=S.leaderboard,box=$("boardtable");box.replaceChildren();
   $("boardnote").textContent=b.available?"":"The game's highscore is unavailable: showing what the logs say.";
-  const t=el("table");const head=el("tr");(b.available?["#","Player","Score","Agent","Planets","Attacks","Net loot","Colonies"]:["Agent","Personality","Attacks","Net loot","Colonies"]).forEach(x=>head.appendChild(el("th","",x)));t.appendChild(head);
-  const add=cells=>{const r=el("tr");cells.forEach((c,i)=>r.appendChild(el("td",typeof c==="number"?"n":"",typeof c==="number"?fmt(c):(c==null?"":c))));t.appendChild(r)};
-  if(b.available)b.rows.forEach(r=>add([r.rank,r.username,r.score,r.agent?`${r.agent} (${r.persona||"?"})`:"",r.planets,r.attacks,r.net_loot,r.colonies]));
+  const t=el("table");const head=el("tr");(b.available?["Player","Alliance","General","Economy","Research","Military","Ships","Agent","Planets","Attacks","Net loot","Colonies"]:["Agent","Personality","Attacks","Net loot","Colonies"]).forEach(x=>head.appendChild(el("th","",x)));t.appendChild(head);
+  const add=cells=>{const r=el("tr");cells.forEach(c=>r.appendChild(el("td",typeof c==="number"?"n":"",typeof c==="number"?fmt(c):(c==null?"":c))));t.appendChild(r)};
+  const rk=(r,k)=>{const v=k==="general"?{rank:r.rank,score:r.score}:(r.rankings&&r.rankings[k])||{};return v.rank==null?"":`#${v.rank}  (${fmt(v.score||0)})`};
+  const key=$("bsort").value;
+  const sortRank=r=>{const v=key==="general"?r.rank:(r.rankings&&r.rankings[key]&&r.rankings[key].rank);return v==null?1e9:v};
+  if(b.available)b.rows.slice().sort((x,y)=>sortRank(x)-sortRank(y)).forEach(r=>add([r.username,r.alliance||"",rk(r,"general"),rk(r,"economy"),rk(r,"research"),rk(r,"military"),r.ships,r.agent?`${r.agent} (${r.persona||"?"})`:"",r.planets,r.attacks,r.net_loot,r.colonies]));
   else b.agents.forEach(a=>add([a.agent,a.persona||"?",a.attacks,a.net_loot,a.colonies]));
   box.appendChild(t)}
 function draw(){drawMap();drawNews();drawFeed();drawBoard();
   $("status").textContent=`${S.events_in_memory} events - last at ${S.latest_event?when(S.latest_event):"never"} - map ${S.map.available?"ok":"unavailable"}`}
 async function load(){try{const r=await fetch("/api/state");const j=await r.json();if(j.error){$("status").textContent="error: "+j.error}else{S=j;draw()}}catch(e){$("status").textContent="cannot reach the observatory"}
   setTimeout(load,((S&&S.refresh)||30)*1000)}
+$("bsort").onchange=()=>S&&drawBoard();
 ["fa","fp","fk"].forEach(i=>$(i).onchange=()=>S&&drawFeed());$("ft").oninput=()=>S&&drawFeed();
 load();
 </script></body></html>
