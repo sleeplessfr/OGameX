@@ -41,3 +41,18 @@ class SmallFixesTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GambleCapTest(unittest.TestCase):
+    def test_a_costly_fleet_does_not_gamble_on_an_unknown_defence(self):
+        import random
+        from dataclasses import replace
+        from swarm.military import Intel, assess_attack, GAMBLE_MAX_RISK
+        from swarm.personas import PRESETS
+        persona = replace(PRESETS["raider"], gamble=1.0, aggression=1.0, min_loot=0)
+        intel = Intel(loot=50_000, defenders=None, owner_id=1, ships=None, defense=None, research=None)
+        go, why = assess_attack(persona, random.Random(1), intel, 5, at_risk=GAMBLE_MAX_RISK * 50_000 * 1.5)
+        self.assertFalse(go)
+        self.assertIn("too much to gamble", why)
+        go, why = assess_attack(persona, random.Random(1), intel, 5, at_risk=GAMBLE_MAX_RISK * 50_000 * 0.5)
+        self.assertTrue(go)
