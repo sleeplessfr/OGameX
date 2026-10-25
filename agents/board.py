@@ -8,8 +8,9 @@ Agents post short messages with a KIND, so that rule-based agents can use the bo
 
     OFFER     I give X for Y            WANT      I want X
     BOUNTY    a reward for something    WARNING   a raider was seen near system S
-    REVENGE   I was robbed by X, who joins me?
+    REVENGE   I was robbed by X, who joins me? (a post with data.reply_to joins that call)
     TAUNT     bragging                  ALLIANCE  let us team up
+    CLAIM     I collected a BOUNTY      VERDICT   the referee's answer to a CLAIM (referee.py)
 
 Endpoints (JSON):
     POST /post     {"agent": "agent0001", "kind": "WARNING", "text": "...", "data": {...}, "ttl": 3600}
@@ -39,9 +40,9 @@ from pathlib import Path
 from board_page import PAGE
 from urllib.parse import parse_qs, urlparse
 
-KINDS = ("OFFER", "WANT", "BOUNTY", "WARNING", "REVENGE", "TAUNT", "ALLIANCE")
+KINDS = ("OFFER", "WANT", "BOUNTY", "WARNING", "REVENGE", "TAUNT", "ALLIANCE", "CLAIM", "VERDICT")
 DEFAULT_TTL = {"OFFER": 3600, "WANT": 3600, "BOUNTY": 6 * 3600, "WARNING": 2 * 3600, "REVENGE": 6 * 3600,
-               "TAUNT": 1800, "ALLIANCE": 12 * 3600}
+               "TAUNT": 1800, "ALLIANCE": 12 * 3600, "CLAIM": 6 * 3600, "VERDICT": 12 * 3600}
 MAX_TTL = 24 * 3600
 MAX_TEXT = 200
 MAX_DATA_BYTES = 600

@@ -21,6 +21,7 @@ from .defense import AGGRESSOR_MEMORY, GUARD_SECONDS, PEACE_WATCH_SECONDS, RECEN
 from .trade import COOLDOWN_SECONDS, choose_sale, plan_deal
 from .logistics_agent import LogisticsMixin
 from .social_agent import SocialMixin
+from .bounty_agent import BountyMixin
 
 
 # When an agent is stuck with nothing to do and no idea how long it will take, look again after this long.
@@ -52,7 +53,7 @@ class TokenStore:
             tmp.replace(self.path)
 
 
-class Agent(LogisticsMixin, SocialMixin):
+class Agent(LogisticsMixin, SocialMixin, BountyMixin):
     def __init__(
         self, name: str, persona: Persona, base_url: str, store: TokenStore, rng: random.Random,
         *, log_dir: str | None = None, email_domain: str = "example.com", client: ApiClient | None = None,
@@ -554,7 +555,7 @@ class Agent(LogisticsMixin, SocialMixin):
         c = home["coordinates"]
         target = pick_target(self.persona, self.rng, coord_of(c["galaxy"], c["system"], c["position"]), my_score, players,
                              self.memory, now, allowed_ids=self._allowed_target_ids(), cooldown=self.persona.spy_cooldown_s,
-                             exclude_user_id=self.user_id)
+                             exclude_user_id=self.user_id, focus=self._bounty_focus())
         if target is None:
             return
         galaxy, system, position = target["coord"]
@@ -622,6 +623,7 @@ class Agent(LogisticsMixin, SocialMixin):
                 self.log("probes_lost", at=b["at"], lost=b["my_loss"])  # shot down while spying
                 continue
             self.stats["battles"] += 1
+            b["report_id"] = row["id"]
             self._social_battle(b)   # galaxy board: tell the others when we were robbed
             verdict = judge_trade(b) if b["role"] == "attacker" else None
             margin = outcome = None
@@ -632,7 +634,8 @@ class Agent(LogisticsMixin, SocialMixin):
                     self.memory.bandit.update(margin, outcome)
             self.log("battle", at=b["at"], role=b["role"], margin=margin, outcome=outcome, my_loss=b["my_loss"], their_loss=b["their_loss"],
                      loot=b["loot"], debris=b["debris"], rounds=b["rounds"], verdict=verdict,
-                     mine=b["my_units"], theirs=b["their_units"])
+                     mine=b["my_units"], theirs=b["their_units"], their_id=b["their_id"], report=row["id"])
+            self._bounty_battle(b)   # galaxy board: end a joined revenge, claim a bounty (the referee reads the line above)
             recycle.remember(self.memory.debris, b["coord"], b["debris"], now, add=True)   # a new debris field to harvest
             if b["role"] != "attacker":
                 continue
@@ -651,7 +654,7 @@ class Agent(LogisticsMixin, SocialMixin):
                 self.memory.risk_scale = min(1.5, self.memory.risk_scale * 1.1)
 
     def _try_attack(self, home: dict, now: float, ships_here: dict) -> bool:
-        pick = pick_attack(self.persona, self.rng, self.memory, now, ships_here)
+        pick = pick_attack(self.persona, self.rng, self.memory, now, ships_here, focus=self._bounty_focus())
         if pick is None:
             return False
         coord, intel, reason = pick

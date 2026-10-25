@@ -67,7 +67,10 @@ MESSAGE_EVERY = 60.0        # how often the inbox is read while a deal is open
 
 def new_state() -> dict:
     return {"cursor": 0, "read_at": 0.0, "posted": [], "robbery_at": 0.0, "offer": None, "offer_at": 0.0,
-            "trades": {}, "rep": {}, "answered": [], "mail_at": 0.0, "seen_mail": []}
+            "trades": {}, "rep": {}, "answered": [], "mail_at": 0.0, "seen_mail": [],
+            # revenge and bounties (bounty.py): the revenge we joined, bounties we know / posted / claimed / owe / are owed
+            "revenge": None, "friends": [], "bounties": {}, "bounty_out": {}, "claims": {}, "owed": {}, "pay": {},
+            "bounty_done": [], "pay_mail_at": 0.0}
 
 
 def clean_state(raw) -> dict:
@@ -78,15 +81,18 @@ def clean_state(raw) -> dict:
     for key in ("cursor",):
         if isinstance(raw.get(key), int):
             out[key] = raw[key]
-    for key in ("read_at", "robbery_at", "offer_at", "mail_at"):
+    for key in ("read_at", "robbery_at", "offer_at", "mail_at", "pay_mail_at"):
         if isinstance(raw.get(key), (int, float)):
             out[key] = float(raw[key])
-    for key in ("posted", "answered", "seen_mail"):
+    for key in ("posted", "answered", "seen_mail", "bounty_done"):
         if isinstance(raw.get(key), list):
             out[key] = [x for x in raw[key] if isinstance(x, (int, float))][-SEEN_KEEP:]
-    if isinstance(raw.get("offer"), dict):
-        out["offer"] = raw["offer"]
-    for key in ("trades", "rep"):
+    if isinstance(raw.get("friends"), list):
+        out["friends"] = [x for x in raw["friends"] if isinstance(x, str)][-50:]
+    for key in ("offer", "revenge"):
+        if isinstance(raw.get(key), dict):
+            out[key] = raw[key]
+    for key in ("trades", "rep", "bounties", "bounty_out", "claims", "owed", "pay"):
         if isinstance(raw.get(key), dict):
             out[key] = {str(k): v for k, v in raw[key].items() if isinstance(v, dict)}
     return out

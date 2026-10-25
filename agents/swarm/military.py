@@ -9,6 +9,7 @@ import random
 from dataclasses import dataclass, field
 
 from . import expedition, social
+from .bounty import focus_for
 from .bandit import Bandit
 from .brain import RESOURCES
 from .combat import Estimate, Tech, estimate_battle, tech_from_research, unit_value
@@ -153,9 +154,10 @@ def distance(a: Coord, b: Coord) -> int:
 # ---- targets --------------------------------------------------------------------------------------------------
 def pick_target(
     persona: Persona, rng: random.Random, me: Coord, my_score: int, players: list[dict], memory: Memory, now: float,
-    *, allowed_ids: set[int] | None, cooldown: float, exclude_user_id: int | None = None,
+    *, allowed_ids: set[int] | None, cooldown: float, exclude_user_id: int | None = None, focus: dict | None = None,
 ) -> dict | None:
-    """Choose a neighbour to spy on. `players` are rows of GET /highscore. `allowed_ids` None = anyone."""
+    """Choose a neighbour to spy on. `players` are rows of GET /highscore. `allowed_ids` None = anyone.
+    `focus` (bounty.build_focus: a joined revenge, running bounties) makes a wanted target the first choice among the options."""
     options = []
     for p in players:
         if p.get("is_me") or p["user_id"] == exclude_user_id:
@@ -173,6 +175,12 @@ def pick_target(
         options.append((d, p, c))
     if not options:
         return None
+    if focus:
+        wanted = [(focus_for(focus, c, p["user_id"]), -d, p, c) for d, p, c in options]
+        wanted = [w for w in wanted if w[0] != (1.0, 0.0)]
+        if wanted:
+            (_, _), neg_d, p, c = max(wanted, key=lambda w: (w[0][1], w[0][0], w[1]))
+            return {**p, "coord": c, "distance": -neg_d}
     options.sort(key=lambda t: t[0])
     # Among the few nearest, pick one at random so agents do not all hammer the same neighbour.
     d, p, c = rng.choice(options[:3])
@@ -348,8 +356,10 @@ def count_fighters(ships_here: dict[str, int]) -> int:
     return sum(int(ships_here.get(n, 0)) for n in FIGHTERS)
 
 
-def pick_attack(persona: Persona, rng: random.Random, memory: Memory, now: float, ships_here: dict[str, int]) -> tuple[Coord, Intel, str] | None:
-    """Look through fresh spy reports for a target worth attacking now."""
+def pick_attack(persona: Persona, rng: random.Random, memory: Memory, now: float, ships_here: dict[str, int],
+                focus: dict | None = None) -> tuple[Coord, Intel, str] | None:
+    """Look through fresh spy reports for a target worth attacking now. `focus` (see pick_target) multiplies the worth of the
+    raider of a joined revenge and adds a bounty's reward value to its target's."""
     fighters = count_fighters(ships_here)
     best = None
     for c, info in memory.intel.items():
@@ -362,6 +372,9 @@ def pick_attack(persona: Persona, rng: random.Random, memory: Memory, now: float
         risk = sum(unit_value(n) * int(ships_here.get(n, 0) * persona.strike_fraction) for n in FIGHTERS)
         go, reason = assess_attack(persona, rng, intel, fighters, memory.risk_scale, at_risk=risk)
         worth = intel.loot * target_factor(memory.opponents.get(c), now)   # proven easy targets first, ones that beat us last
+        if focus:
+            mult, extra = focus_for(focus, c, intel.owner_id)
+            worth = worth * mult + extra
         if go and (best is None or worth > best[3]):
             best = (c, intel, reason, worth)
     return best[:3] if best else None

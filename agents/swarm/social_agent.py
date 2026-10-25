@@ -33,8 +33,10 @@ class SocialMixin:
             st = self.memory.social
             if self.now >= st["read_at"]:
                 self._social_read(home)
+            hints = self._plan_bounty(status, home)          # bounty.py: pay a bounty we owe, wait for one we are owed
             if self.persona.trade_interest > 0:
-                return self._trade_step(status, home)
+                hints += self._trade_step(status, home)
+            return hints
         except Exception as e:   # a bug or a surprise on the social side must never cost the agent its round
             if self._logi_note(("board_error", type(e).__name__)):
                 self.log("board_error", type=type(e).__name__, msg=str(e)[:160])
@@ -54,7 +56,7 @@ class SocialMixin:
     # ---- reading: warnings and revenge ---------------------------------------------------------------
     def _social_read(self, home: dict) -> None:
         st, m = self.memory.social, self.memory
-        r = self.board.read(since=st["cursor"], kind=["WARNING", "REVENGE"], limit=S.READ_LIMIT)
+        r = self.board.read(since=st["cursor"], kind=["WARNING", "REVENGE", "BOUNTY", "VERDICT"], limit=S.READ_LIMIT)
         if not r["ok"]:
             st["read_at"] = self.now + S.DOWN_RETRY      # the board is not there: carry on as before
             return
@@ -72,6 +74,7 @@ class SocialMixin:
             if others:
                 self.log("board_read", posts=len(others), warnings=sum(p["kind"] == "WARNING" for p in others),
                          revenge=sum(p["kind"] == "REVENGE" for p in others), guard=guard or None)
+            self._bounty_guard("read", self._bounty_on_posts, home, posts, r["now"])    # bounty.py: join a revenge, learn of bounties, verdicts
         if self.persona.trade_interest > 0:
             offers = self.board.read(since=0, kind=["OFFER", "WANT"], limit=S.READ_LIMIT)
             if offers["ok"]:
@@ -94,6 +97,7 @@ class SocialMixin:
         sent = [self._board_post(kind, text, data) for kind, text, data in posts]
         if any(sent):
             st["robbery_at"] = self.now
+            self._bounty_guard("post", self._bounty_after_robbery, b, posts[0][2])      # bounty.py: offer a reward if it was a big one
 
     # ---- trading ---------------------------------------------------------------------------------------------------
     def _partner_ok(self, name: str, pid: int, at) -> bool:
