@@ -30,7 +30,8 @@ Each round it reads `/status`, then, for every planet whose queue is empty, the 
 2. A resource store nearly full -> build that store.
 3. Otherwise score every available building by the personality's weights, spread over levels (`balance`),
    plus a little noise. If the top choice is too expensive it saves up (`patience`) or buys the best
-   affordable thing.
+   affordable thing. Mines are also weighted by how fast they pay back (hours until the extra output has repaid the
+   upgrade, including the solar power it needs); patient personalities care more about that.
 
 Research works the same way once a research lab exists. The agent sleeps until its current job finishes (or
 until it can afford the next one), with random jitter, so it only asks the server when something can change.
@@ -67,9 +68,17 @@ never attacks; the **scientist** and **miner** keep a few probes and watch (the 
 **Safety: agents only spy on and attack other agents.** Your own account and any other human player are left
 alone. To allow it anyway, start with `--attack-humans`.
 
+## The merchant
+
+A merchant call costs 3,500 dark matter (accounts start with 8,000), shows random rates and trades once. So an agent
+calls one only when it is stuck waiting for something big (a shortfall worth at least 20,000 and a wait of 20+ minutes),
+owns a spare resource that can pay for the whole shortfall even at the worst rate (70% of fair value), and is past a
+6-hour cooldown. Patient personalities keep one call in reserve. If the rates turn out too poor it sends him away
+(`merchant_dismissed`); otherwise it trades (`trade`). Rules are in `swarm/trade.py`.
+
 ## Not built yet
 
-Colonising, expeditions, trading, alliances, recycling debris, a defence loop, and LLM-driven
+Colonising, expeditions, the scrap merchant, alliances, recycling debris, a defence loop, and LLM-driven
 decisions. The brain is rule-based; the personas are the knobs; the only learning so far is the risk lesson above.
 
 ## Tests

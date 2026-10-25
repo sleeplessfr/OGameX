@@ -13,6 +13,7 @@ from .combat import tech_from_research
 from .military import (Memory, build_strike, can_carry_enough, carrying_capacity, judge_fight, judge_trade, summarize_battle, choose_units, coord_of, pick_attack, pick_target, summarize_report)
 from .client import ApiClient, ApiError
 from .personas import Persona
+from .trade import COOLDOWN_SECONDS, choose_sale, plan_deal
 
 
 # When an agent is stuck with nothing to do and no idea how long it will take, look again after this long.
@@ -69,7 +70,9 @@ class Agent:
         self._economy_saving = False
         self._last_battle_check = -1e12
         self.my_tech = None  # (weapons, shields, armour) levels, from /status
-        self.stats = {"ticks": 0, "builds": 0, "researches": 0, "refused": 0, "errors": 0,
+        self.dark_matter = 0     # from /status each round
+        self.now = 0.0           # server time of the current round
+        self.stats = {"trades": 0, "ticks": 0, "builds": 0, "researches": 0, "refused": 0, "errors": 0,
                       "spies": 0, "reports": 0, "attacks": 0, "units": 0, "battles": 0, "lessons": 0}
 
     # ---- memory on disk ------------------------------------------------------------------------------
@@ -137,6 +140,8 @@ class Agent:
         self.stats["ticks"] += 1
         status = self.client.get("/status")
         hints: list[float] = []
+        self.dark_matter = int(status["player"].get("dark_matter") or 0)
+        self.now = float(status.get("server_time") or time.time())
         research_queue = status["research"]["queue"]
         planets = [p for p in status["planets"] if p["type"] == "planet"]
         if not planets:
@@ -169,8 +174,45 @@ class Agent:
         if choice.machine_name is None:
             self._economy_saving = True  # do not spend the savings on ships
             self.log("wait", planet=planet["id"], why=choice.reason, hint=_r(choice.wait_seconds))
+            if self._maybe_trade(planet, choice, have):
+                return [5.0]  # we just got what was missing: look again at once
             return [choice.wait_seconds if choice.wait_seconds else IDLE_RECHECK]
         return self._act("build", planet, choice, data["buildings"], have, f"/planets/{planet['id']}/buildings")
+
+    def _maybe_trade(self, planet: dict, choice, have: dict) -> bool:
+        """Call the merchant when stuck waiting with a big surplus of something else (see trade.py). True = traded."""
+        sell = choose_sale(self.persona, choice.goal_cost, have, planet["storage"], choice.wait_seconds,
+                           self.dark_matter, self.now, self.memory.trade_cooldown_until)
+        if sell is None:
+            return False
+        self.memory.trade_cooldown_until = self.now + COOLDOWN_SECONDS   # set first: never hammer, whatever happens
+        why = choice.reason
+        try:
+            try:
+                state = self.client.post("/merchant/call", {"type": sell})
+                self.dark_matter = int(state["dark_matter"])
+            except ApiError as e:
+                if e.code != "merchant_already_active":
+                    raise
+                state = self.client.get("/merchant")   # one is already waiting (e.g. from an expedition): use him
+            deal = plan_deal(state["merchant"], choice.goal_cost, have, planet["storage"])
+            if deal is None:
+                self.client.post("/merchant/dismiss", {})
+                self.log("merchant_dismissed", planet=planet["id"], sold=state["merchant"]["type"], why="rates too poor for: " + why)
+                return False
+            result = self.client.post(f"/planets/{planet['id']}/merchant/trade",
+                                      {"receive": deal.receive, "give_amount": deal.give_amount})
+        except ApiError as e:
+            self.log("trade_failed", code=e.code, msg=e.message, request=e.request_line)
+            return False
+        for r, n in result["gave"].items():
+            have[r] = have.get(r, 0) - n
+        for r, n in result["received"].items():
+            have[r] = have.get(r, 0) + n
+        self.dark_matter = int(result.get("dark_matter", self.dark_matter))
+        self.stats["trades"] += 1
+        self.log("trade", planet=planet["id"], gave=result["gave"], received=result["received"], why=why)
+        return True
 
     def _plan_research(self, planet: dict, have: dict, research_queue: list) -> list[float]:
         if research_queue:

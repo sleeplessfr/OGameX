@@ -82,6 +82,7 @@ class Choice:
     machine_name: str | None      # what to start (None = nothing now)
     wait_seconds: float | None    # when it would make sense to look again (None = no idea)
     reason: str
+    goal_cost: dict | None = None  # when waiting: what the item we are waiting for costs (the merchant logic uses it)
 
 
 def seconds_to_afford(cost: dict, have: dict, production_per_hour: dict) -> float | None:
@@ -134,12 +135,12 @@ def _pick(
     # of a needed resource, or hours away) keep growing with whatever is affordable now.
     reachable = wait is not None and wait <= persona.max_save_seconds
     if reachable and rng.random() < persona.patience:
-        return Choice(None, wait, f"saving up for {top['machine_name']}")
+        return Choice(None, wait, f"saving up for {top['machine_name']}", top["cost"])
 
     for it in ranked[1:]:
         if affordable(it):
             return Choice(it["machine_name"], None, f"cannot afford {top['machine_name']}, took {it['machine_name']}")
-    return Choice(None, wait, f"cannot afford anything, nearest: {top['machine_name']}")
+    return Choice(None, wait, f"cannot afford anything, nearest: {top['machine_name']}", top["cost"])
 
 
 def choose_building(
@@ -203,5 +204,5 @@ def _forced(item: dict, have: dict, production: dict, why: str) -> Choice:
     """A must-do item: build it if payable, otherwise wait for it (never buy something else instead)."""
     if bool(item.get("can_afford", True)) and can_pay(item["cost"], have):
         return Choice(item["machine_name"], None, f"{why}: {item['machine_name']}")
-    return Choice(None, seconds_to_afford(item["cost"], have, production), f"{why}: waiting for {item['machine_name']}")
+    return Choice(None, seconds_to_afford(item["cost"], have, production), f"{why}: waiting for {item['machine_name']}", item["cost"])
 

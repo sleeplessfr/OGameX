@@ -47,6 +47,10 @@ class FakeGame:
                         "resources": {"metal": 40000, "crystal": 20000, "deuterium": 10000},
                         "ships": {"small_cargo": 1}, "defense": {"rocket_launcher": 0}}]
         self.attacks_resolved = 0
+        self.dark_matter = 8000
+        self.merchant: dict | None = None   # {"type", "receive": {res: {"rate", "per_unit_given"}}}
+        self.merchant_quality = 0.9         # share of the fair value the merchant pays
+        self.trades_done = 0
         self.battle_losses = 0
 
     # -- economy --
@@ -162,6 +166,8 @@ class FakeGame:
         url = urlparse(path)
         q = {k: v[0] for k, v in parse_qs(url.query).items()}
         route = url.path
+        if route == "/merchant":
+            return self._merchant_state()
         if route == "/planets/10/units":
             return {"planet_id": 10, "units": self._units_list(), "queue": []}
         if route == "/ships":
@@ -190,7 +196,52 @@ class FakeGame:
                                 "battle_report": m["report"] if m["key"] == "combat_report" else None}}
         return None
 
+    BASE_RATE = {"metal": 3.0, "crystal": 2.0, "deuterium": 1.0}
+
+    def _merchant_state(self):
+        return {"dark_matter": self.dark_matter, "call_cost": 3500, "merchant": self.merchant}
+
+    def _handle_merchant_post(self, path, body):
+        if path == "/merchant/call":
+            if self.merchant:
+                raise ApiError(422, "merchant_already_active", "already")
+            if self.dark_matter < 3500:
+                raise ApiError(422, "insufficient_dark_matter", "no")
+            sell = body["type"]
+            self.dark_matter -= 3500
+            self.merchant = {"type": sell, "receive": {
+                r: {"rate": self.BASE_RATE[r] * self.merchant_quality,
+                    "per_unit_given": self.BASE_RATE[r] * self.merchant_quality / self.BASE_RATE[sell]}
+                for r in self.BASE_RATE if r != sell}}
+            return self._merchant_state()
+        if path == "/merchant/dismiss":
+            self.merchant = None
+            return self._merchant_state()
+        if path == "/planets/10/merchant/trade":
+            if not self.merchant:
+                raise ApiError(422, "no_active_merchant", "none")
+            sell = self.merchant["type"]
+            cost, got = 0, {}
+            for r, n in body["receive"].items():
+                if r == sell:
+                    raise ApiError(422, "validation_failed", "same resource")
+                cost += n / self.merchant["receive"][r]["per_unit_given"]
+                got[r] = n
+            cost = int(cost) + 1
+            if cost > body["give_amount"] or cost > self.res[sell]:
+                raise ApiError(422, "trade_failed", "too expensive")
+            self.res[sell] -= cost
+            for r, n in got.items():
+                self.res[r] += n
+            self.merchant = None
+            self.trades_done += 1
+            return {"gave": {sell: cost}, "received": got, "dark_matter": self.dark_matter}
+        return None
+
     def _handle_new_post(self, path, body):
+        merchant = self._handle_merchant_post(path, body)
+        if merchant is not None:
+            return merchant
         if path == "/planets/10/units":
             name, amount = body["machine_name"], int(body["amount"])
             item = next(u for u in self._units_list() if u["machine_name"] == name)
@@ -239,7 +290,7 @@ class FakeGame:
             rate = self.rate()
             return {
                 "server_time": int(self.now),
-                "player": {"id": 1, "username": "Fake", "current_planet_id": 10},
+                "player": {"id": 1, "username": "Fake", "current_planet_id": 10, "dark_matter": self.dark_matter},
                 "planets": [{
                     "id": 10, "name": "Home", "type": "planet", "coordinates": {"galaxy": 1, "system": 3, "position": 8},
                     "resources": {r: int(v) for r, v in self.res.items()}, "storage": self.storage(),
