@@ -54,6 +54,8 @@ class Memory:
     colony_until: float = 0.0          # no new colony attempt before this server time
     debris: dict[Coord, dict] = field(default_factory=dict)  # known debris fields: {'at', 'amount' (metal+crystal), 'sent_until'} (recycle.py)
     expedition: dict = field(default_factory=expedition.new_state)  # expedition.py: cooldown, launches in flight, outcome counts, fleet-size scale
+    supply_next_at: float = 0.0        # no new supply trip between own planets before this server time (logistics.py)
+    away: list = field(default_factory=list)  # fleets sent to another own planet to dodge a raid, still to be brought home
 
     # Saved to disk so a restart does not make the agent forget (JSON cannot have tuple keys, so coordinates become "g:s:p").
     _COORD_MAPS = ("spied", "attacked", "pending", "intel", "avoid_until", "aggressors", "opponents", "arm_for", "debris")
@@ -63,7 +65,8 @@ class Memory:
                      "trade_cooldown_until": self.trade_cooldown_until, "expanding": self.expanding, "class_done": self.class_done,
                      "colony_sent_at": self.colony_sent_at, "colony_planets_before": self.colony_planets_before,
                      "colony_until": self.colony_until, "bandit": self.bandit.to_dict(),
-                     "expedition": self.expedition}
+                     "expedition": self.expedition,
+                     "supply_next_at": self.supply_next_at, "away": self.away}
         for name in self._COORD_MAPS:
             out[name] = {":".join(map(str, c)): v for c, v in getattr(self, name).items()}
         return out
@@ -99,6 +102,12 @@ class Memory:
             m.colony_planets_before = int(data.get("colony_planets_before", 0))
         except (TypeError, ValueError):
             pass
+        try:
+            m.supply_next_at = float(data.get("supply_next_at", 0.0))
+        except (TypeError, ValueError):
+            pass
+        away = data.get("away")
+        m.away = [a for a in away if isinstance(a, dict)] if isinstance(away, list) else []
         m.bandit = Bandit.from_dict(data.get("bandit"))
         m.expedition = expedition.clean_state(data.get("expedition"))
         battles = data.get("battles")

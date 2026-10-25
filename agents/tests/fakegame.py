@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import re
 from urllib.parse import parse_qs, urlparse
 
 from swarm.client import ApiError
@@ -28,6 +29,9 @@ UNITS = {
     "recycler": ("ship", 1000, 500, 0, 20000),
     "rocket_launcher": ("defense", 500, 0, 0, 0),
 }
+
+
+OWN = {10: (1, 3, 8), 11: (1, 4, 6)}   # the two planets when logistics_stuff is on
 
 
 class FakeGame:
@@ -70,6 +74,14 @@ class FakeGame:
         self.exp_done = 0
         self.is_discoverer = False
         self.field_max = 10 ** 6           # building fields on the planet; every building level uses one
+        # --- logistics: a second own planet (id 11) and transport / deployment between the two ---
+        self.logistics_stuff = False
+        self.res2 = {"metal": 0.0, "crystal": 0.0, "deuterium": 0.0}   # the colony's stock (it produces nothing here)
+        self.ships2 = {k: 0 for k, v in UNITS.items() if v[0] == "ship"}
+        self.defense2 = {"rocket_launcher": 0}
+        self.fuel_cost = 10                # deuterium every own-planet flight burns
+        self.storage2 = 10 ** 6
+        self.own_log: list[dict] = []     # every own-planet mission ever sent, for the tests
 
     # -- economy --
     def energy_prod(self):
@@ -126,6 +138,9 @@ class FakeGame:
     # -- fleets and messages --
     def _process_missions(self):
         for m in list(self.missions):
+            if m.get("own"):
+                self._process_own(m)
+                continue
             if not m["arrived"] and self.now >= m["arrive"]:
                 m["arrived"] = True
                 if m["mission"] == "recycle":
@@ -211,7 +226,64 @@ class FakeGame:
             m["ships"] = {k: 0 for k in m["ships"]}
         self._add_message(key, None, body)
 
-    def _units_list(self):
+    def _stock(self, pid):
+        return self.res if pid == 10 else self.res2
+
+    def _ship_box(self, pid):
+        return self.ships if pid == 10 else self.ships2
+
+    def _process_own(self, m):
+        """A transport or deployment between the two own planets."""
+        if not m["arrived"] and self.now >= m["arrive"]:
+            m["arrived"] = True
+            for r, v in m["resources"].items():
+                self._stock(m["dst"])[r] += v
+            m["resources"] = {}
+            if m["mission"] == "deployment":
+                for name, n in m["ships"].items():
+                    self._ship_box(m["dst"])[name] += n
+                self.missions.remove(m)
+                return
+        if m["arrived"] and self.now >= m["back"]:
+            self.missions.remove(m)
+            for name, n in m["ships"].items():
+                self._ship_box(m["src"])[name] += n
+
+    def _own_fleet(self, src, body, check):
+        to = (body["galaxy"], body["system"], body["position"])
+        dst = next((pid for pid, c in OWN.items() if c == to and pid != src), None)
+        if dst is None:
+            return None
+        if check:
+            cap = sum(UNITS[n][4] * k for n, k in body["ships"].items())
+            ok = {"possible": True, "reason": None}
+            return {"missions": {"transport": ok, "deployment": ok}, "duration_seconds": 60,
+                    "deuterium_consumption": self.fuel_cost, "cargo_capacity": cap, "fuel_capacity": 10 ** 6, "distance": 1000}
+        if len(self.missions) >= self.slots_max:
+            raise ApiError(422, "mission_rejected", "Maximum number of fleets reached.")
+        box, stock = self._ship_box(src), self._stock(src)
+        for n, v in body["ships"].items():
+            if box.get(n, 0) < v:
+                raise ApiError(422, "mission_rejected", "Not enough units on the planet to send the fleet.")
+        cargo = {r: int(v) for r, v in (body.get("resources") or {}).items() if v}
+        if sum(cargo.values()) > sum(UNITS[n][4] * k for n, k in body["ships"].items()):
+            raise ApiError(422, "mission_rejected", "Cargo too small.")
+        need = dict(cargo)
+        need["deuterium"] = need.get("deuterium", 0) + self.fuel_cost
+        if any(stock[r] < v for r, v in need.items()):
+            raise ApiError(422, "mission_rejected", "Not enough resources or fuel.")
+        for r, v in need.items():
+            stock[r] -= v
+        for n, v in body["ships"].items():
+            box[n] -= v
+        m = {"own": True, "mission": body["mission"], "src": src, "dst": dst, "to": to, "ships": dict(body["ships"]),
+             "resources": cargo, "arrived": False, "arrive": self.now + 60, "back": self.now + 120}
+        self.missions.append(m)
+        self.own_log.append(m)
+        return {"mission": {"id": 500 + len(self.own_log), "mission": body["mission"], "seconds_remaining": 60}}
+
+    def _units_list(self, pid=10):
+        res, ships, defense = (self.res, self.ships, self.defense) if pid == 10 else (self.res2, self.ships2, self.defense2)
         items = []
         for name, (cat, mc, cc, dc, cap) in UNITS.items():
             if name == "colony_ship" and not self.colony_stuff:
@@ -219,8 +291,8 @@ class FakeGame:
             if name == "recycler" and not self.recycle_stuff:
                 continue
             cost = {"metal": mc, "crystal": cc, "deuterium": dc}
-            fits = [int(self.res[r] // v) for r, v in cost.items() if v > 0]
-            amount = self.ships.get(name, 0) if cat == "ship" else self.defense.get(name, 0)
+            fits = [int(res[r] // v) for r, v in cost.items() if v > 0]
+            amount = ships.get(name, 0) if cat == "ship" else defense.get(name, 0)
             met = self.levels["shipyard"] >= (4 if name in ("colony_ship", "recycler") else 1)
             items.append({"id": 1, "machine_name": name, "title": name, "category": cat, "amount": amount,
                           "cost_per_unit": {**cost, "energy": 0}, "seconds_per_unit": 10, "requirements_met": met,
@@ -237,6 +309,8 @@ class FakeGame:
             return self._merchant_state()
         if route == "/planets/10/units":
             return {"planet_id": 10, "units": self._units_list(), "queue": []}
+        if route == "/planets/11/units" and self.logistics_stuff:
+            return {"planet_id": 11, "units": self._units_list(11), "queue": []}
         if route.startswith("/galaxy/"):
             _, _, g, s = route.split("/")
             taken = {o["coord"] for o in self.others} | {(1, 3, 8)}
@@ -318,6 +392,11 @@ class FakeGame:
         return None
 
     def _handle_new_post(self, path, body):
+        m = re.fullmatch(r"/planets/(10|11)/fleet(/check)?", path)
+        if self.logistics_stuff and m:
+            r = self._own_fleet(int(m.group(1)), body, bool(m.group(2)))
+            if r is not None:
+                return r
         merchant = self._handle_merchant_post(path, body)
         if merchant is not None:
             return merchant
@@ -382,6 +461,18 @@ class FakeGame:
     def _expedition_max(self):
         return math.isqrt(self.tech["astrophysics"]) + (2 if self.is_discoverer else 0)
 
+    def _colony_status(self):
+        if not self.logistics_stuff:
+            return []
+        g, sy, po = OWN[11]
+        return [{"id": 11, "name": "Colony", "type": "planet", "coordinates": {"galaxy": g, "system": sy, "position": po},
+                 "resources": {r: int(v) for r, v in self.res2.items()},
+                 "storage": {r: self.storage2 for r in self.res2}, "production_per_hour": {"metal": 10, "crystal": 5, "deuterium": 0},
+                 "energy": 0, "fields": {"used": 5, "max": 150},
+                 # a long running build keeps the agent from asking for this planet's building list (not simulated)
+                 "building_queue": [{"queue_id": 9, "machine_name": "metal_mine", "active": True, "seconds_remaining": 3600}],
+                 "unit_queue": []}]
+
     # -- API --
     def get(self, path):
         extra = self._handle_new_get(path)
@@ -402,7 +493,7 @@ class FakeGame:
                     "production_per_hour": {r: int(v) for r, v in rate.items()},
                     "energy": int(self.energy_prod() - self.energy_need()),
                     "fields": {"used": sum(self.levels.values()), "max": self.field_max},
-                    "building_queue": self.qdict(self.bq, "b"), "unit_queue": []}],
+                    "building_queue": self.qdict(self.bq, "b"), "unit_queue": []}] + self._colony_status(),
                 "research": {"levels": {k: v for k, v in self.tech.items()}, "queue": self.qdict(self.rq, "r")},
                 "fleet_slots": {"used": len(self.missions), "max": self.slots_max,
                                 **({"expedition_used": sum(1 for x in self.missions if x["mission"] == "expedition"),

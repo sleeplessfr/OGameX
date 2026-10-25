@@ -265,6 +265,37 @@ def summarize(events: list[dict], personas: dict[str, str] | None = None) -> str
         out.append("  none")
     out.append("")
 
+    out.append("LOGISTICS (supply = resources sent between own planets, saved = fleet dodged a raid it could not win)")
+    sent = [e for e in events if e["event"] == "supply_sent"]
+    skips = [e for e in events if e["event"] == "supply_skipped"]
+    saved = [e for e in events if e["event"] == "fleet_saved"]
+    back = [e for e in events if e["event"] == "fleet_returned"]
+    stays = [e for e in events if e["event"] == "fleet_stays"]
+    failed = [e for e in events if e["event"] == "fleet_save_failed"]
+    if sent or skips or saved or back or stays or failed:
+        moved: Counter = Counter()
+        for e in sent:
+            for r, v in (e.get("resources") or {}).items():
+                moved[r] += int(v or 0)
+        fuel = sum(int(e.get("fuel") or 0) for e in sent)
+        out.append(f"  {len(sent)} supply trips sent ({sum(int(e.get('value') or 0) for e in sent):,} worth: "
+                   f"{', '.join(f'{r} {v:,}' for r, v in moved.items()) or 'nothing'}; {fuel:,} deuterium fuel), {len(skips)} skipped")
+        for why, n in Counter(str(e.get("why", ""))[:60] for e in skips).most_common(3):
+            out.append(f"    skipped {n}x: {why}")
+        carried: Counter = Counter()
+        for e in saved:
+            for r, v in (e.get("resources") or {}).items():
+                carried[r] += int(v or 0)
+        out.append(f"  {len(saved)} fleets saved (ships worth {sum(int(e.get('value') or 0) for e in saved):,}; "
+                   f"resources taken along: {', '.join(f'{r} {v:,}' for r, v in carried.items()) or 'none'}), "
+                   f"{sum(1 for e in back if e.get('ok'))} brought home, {sum(1 for e in back if not e.get('ok'))} lost track of, "
+                   f"{len(stays)} stayed to fight, {len(failed)} could not run")
+        for e in (saved + failed)[-5:]:
+            out.append(f"    {clock(e['t'])} {e['agent']} {e['event']}: {e.get('why') or ''} {('ships ' + str(e.get('ships'))) if e.get('ships') else ''}".rstrip())
+    else:
+        out.append("  none")
+    out.append("")
+
     out.append("FULL PLANETS (no free building fields)")
     full = Counter(e["agent"] for e in events if e["event"] == "wait" and "no free fields" in str(e.get("why", "")))
     heading = Counter(e["agent"] for e in events if e["event"] == "wait" and "free fields left" in str(e.get("why", "")))
