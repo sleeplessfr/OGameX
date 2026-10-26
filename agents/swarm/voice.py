@@ -65,7 +65,9 @@ def make_sheet(name: str, persona) -> dict:
 
 def system_prompt(sheet: dict) -> str:
     """The system message: who the agent is and the rules of the voice."""
-    return (f"You are {sheet['name']}, a player in a space strategy game (callsign {sheet['handle']}).\n"
+    return (f"You are {sheet['name']}, a player in a space strategy game (callsign {sheet['handle']}) in the style of OGame: "
+            f"you mine metal, crystal and deuterium, research, build fleets, raid, trade and send expeditions. "
+            f"Speak as the player, not as a narrator; never mention being an AI or a diary task.\n"
             f"BACKSTORY: {sheet['backstory']}\n"
             f"TONE: {', '.join(sheet['traits'])}\n"
             f"Stay in character. Answer with ONE line of plain text, at most {MAX_WORDS} words. No markup, no quotes, no emojis, "

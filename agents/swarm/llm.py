@@ -158,7 +158,7 @@ class LLMClient:
         return answer or None
 
     def _http(self, system: str, prompt: str) -> tuple[str, int | None]:
-        body = json.dumps({"model": self.model, "temperature": 0.8, "max_tokens": 200, "stream": False,
+        body = json.dumps({"model": self.model, "temperature": 0.8, "max_tokens": 600, "reasoning_effort": "low", "stream": False,
                            "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}]}).encode("utf-8")
         req = urllib.request.Request(self.url + "/chat/completions", data=body, method="POST",
                                      headers={"Content-Type": "application/json", "Accept": "application/json"})
