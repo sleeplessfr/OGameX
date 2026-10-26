@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .brain import RESOURCES, VALUE
-from .combat import HULL_DIVISOR, STATS
+from .combat import HULL_DIVISOR, STATS, harmless_fleet
 from .personas import Persona
 
 ALERT_SECONDS = 900.0       # after a hostile fleet was seen, stay alert (look often, defend) for this long
@@ -42,6 +42,8 @@ def find_threats(missions: list[dict]) -> list[Threat]:
             continue
         kind = m.get("mission")
         if kind not in HOSTILE and kind not in SCOUTS:
+            continue
+        if kind in HOSTILE and harmless_fleet(m.get("ships")):   # no warship on board: it cannot hurt planet or fleet
             continue
         src = m.get("from") or {}
         found.append(Threat(int(m["id"]), kind, float(m.get("seconds_remaining") or 0),

@@ -26,6 +26,8 @@ DEFENDER_MARGIN = 1.5     # the estimate assumes the defender has this many time
 MAX_EXPOSURE = 4.0        # never put fighters worth more than this many times the loot at risk, however sure the estimate is
 STRIKE_FRACTIONS = (0.15, 0.25, 0.4, 0.6, 0.8, 1.0)   # try the smallest share of the fighters first
 LOOT_SHARE = 0.5          # an attack can take at most half of the resources on a planet
+ALLY_INTEL_MAX_AGE = 1200.0   # seconds: a report an ally shared (no composition, not read by our own probes) is not trusted for a go after this
+UNKNOWN_SIM_MIN = 30      # a garrison of at least this many units with no composition is simulated as rocket launchers
 SCORE_SLACK = 200         # new players have ~0 points: allow some room around the own score
 
 
@@ -143,6 +145,8 @@ class Intel:
     ships: dict | None = None      # what the report showed, by unit name (None = not shown)
     defense: dict | None = None
     research: dict | None = None   # the defender's technology levels, when the report showed them
+    at: float | None = None        # when the report was read (server time); None = not known
+    ally: int | None = None        # the ally who shared it (None = our own probes read it)
 
     @property
     def composition_known(self) -> bool:
@@ -218,12 +222,19 @@ def summarize_report(report: dict) -> Intel:
 
 
 def assess_attack(persona: Persona, rng: random.Random, intel: Intel, my_fighters: int,
-                  risk_scale: float = 1.0, at_risk: float | None = None) -> tuple[bool, str]:
-    """Decide whether this target is worth attacking with `my_fighters` fighters. Returns (go, reason)."""
+                  risk_scale: float = 1.0, at_risk: float | None = None, now: float | None = None) -> tuple[bool, str]:
+    """Decide whether this target is worth attacking with `my_fighters` fighters (the strike force that would really fight,
+    not everything at home). With `now` the age of the report is checked too. Returns (go, reason)."""
     if my_fighters < 1:
         return False, "no fighters"
     if intel.loot < persona.min_loot:
         return False, f"loot {intel.loot} below minimum {persona.min_loot}"
+    if now is not None and intel.at is not None:
+        age = now - intel.at
+        if age > INTEL_MAX_AGE:
+            return False, f"spy report is {age:.0f}s old"
+        if intel.ally is not None and age > ALLY_INTEL_MAX_AGE:
+            return False, f"intel from an ally is {age:.0f}s old: needs a fresh spy report"
     if intel.defenders is None:
         if at_risk is not None and at_risk > GAMBLE_MAX_RISK * intel.loot:
             return False, f"defenses unknown and my fleet (worth {at_risk:,.0f}) is worth too much to gamble for {intel.loot:,}"
@@ -314,13 +325,19 @@ def required_win_chance(persona: Persona, risk_scale: float = 1.0) -> float:
 def judge_fight(persona: Persona, rng: random.Random, strike: dict[str, int], intel: Intel, my_tech: Tech | None,
                 haul: int, risk_scale: float = 1.0, margin: float = DEFENDER_MARGIN) -> tuple[bool, str, Estimate | None]:
     """Simulate the fight with the fleet we would really send. Returns (go, reason, estimate). When the report did not
-    show the defenders' composition there is nothing to simulate: (True, '', None) and the old rules decide."""
+    show the defenders' composition, a big garrison is simulated as rocket launchers (cheap and strong against light
+    fighters: the worst usual case); a small one has nothing to simulate: (True, '', None) and the old rules decide."""
+    assumed = ""
     if not intel.composition_known:
-        return True, "", None
-    defenders = {n: int(-(-v * margin // 1)) for n, v in intel.all_defenders().items()}
+        if intel.defenders is None or intel.defenders < UNKNOWN_SIM_MIN:
+            return True, "", None
+        defenders = {"rocket_launcher": int(-(-intel.defenders * margin // 1))}
+        assumed = " (composition unknown, assumed rocket launchers)"
+    else:
+        defenders = {n: int(-(-v * margin // 1)) for n, v in intel.all_defenders().items()}
     est = estimate_battle(strike, defenders, rng, my_tech or (0, 0, 0), tech_from_research(intel.research))
     gain = est.win_chance * haul + 0.5 * est.their_loss_value - est.my_loss_value
-    facts = f"win chance {est.win_chance:.0%}, expected loss {est.my_loss_value:,.0f} for loot {haul:,}"
+    facts = f"win chance {est.win_chance:.0%}, expected loss {est.my_loss_value:,.0f} for loot {haul:,}{assumed}"
     need = required_win_chance(persona, risk_scale)
     if est.win_chance < need:
         return False, f"simulated fight: {facts}; wants at least {need:.0%}", est
@@ -330,11 +347,12 @@ def judge_fight(persona: Persona, rng: random.Random, strike: dict[str, int], in
 
 
 def choose_strike(persona: Persona, rng: random.Random, ships_here: dict[str, int], ship_stats: dict[str, dict],
-                  intel: Intel, my_tech: Tech | None, risk_scale: float = 1.0, margin: float = DEFENDER_MARGIN
-                  ) -> tuple[dict[str, int] | None, bool, str, str]:
+                  intel: Intel, my_tech: Tech | None, risk_scale: float = 1.0, margin: float = DEFENDER_MARGIN,
+                  info: dict | None = None) -> tuple[dict[str, int] | None, bool, str, str]:
     """The smallest fleet that is sure enough to win and not worth too much compared to the loot.
     Returns (strike, go, reason, kind) where kind is 'nofleet', 'cargo' (cannot carry the loot) or 'fight'.
-    Sending everything every time loses whole fleets for small loot when the estimate is wrong."""
+    Sending everything every time loses whole fleets for small loot when the estimate is wrong.
+    `info`, when given, receives 'win_chance' (None = nothing was simulated) of the last fight judged."""
     last = (None, False, "no fighters", "nofleet")
     for f in STRIKE_FRACTIONS:
         part = dict(ships_here)
@@ -352,7 +370,9 @@ def choose_strike(persona: Persona, rng: random.Random, ships_here: dict[str, in
         if exposed > MAX_EXPOSURE * haul:
             last = (strike, False, f"fleet worth {exposed:,} for a loot of {haul:,}: too much to risk", "fight")
             break   # bigger fleets only get more exposed
-        go, why, _ = judge_fight(persona, rng, strike, intel, my_tech, haul, risk_scale, margin)
+        go, why, est = judge_fight(persona, rng, strike, intel, my_tech, haul, risk_scale, margin)
+        if info is not None:
+            info["win_chance"] = None if est is None else round(est.win_chance, 3)
         if go:
             return strike, True, why, "fight"
         last = (strike, False, why, "fight")
@@ -378,6 +398,8 @@ def pick_attack(persona: Persona, rng: random.Random, memory: Memory, now: float
     """Look through fresh spy reports for a target worth attacking now. `focus` (see pick_target) multiplies the worth of the
     raider of a joined revenge and adds a bounty's reward value to its target's."""
     fighters = count_fighters(ships_here)
+    if fighters:   # the strike force that would fight, not every fighter at home
+        fighters = max(1, int(fighters * persona.strike_fraction))
     best = None
     for c, info in memory.intel.items():
         if now - info["at"] > INTEL_MAX_AGE or now - memory.attacked.get(c, -1e12) < persona.attack_cooldown_s:
@@ -385,9 +407,9 @@ def pick_attack(persona: Persona, rng: random.Random, memory: Memory, now: float
         if info.get("skip_until", 0) > now:  # skipped a moment ago (cannot carry the loot): do not retry every round
             continue
         intel = Intel(info["loot"], info["defenders"], info.get("owner_id"), info.get("ships"), info.get("defense"),
-                      info.get("research"))
+                      info.get("research"), info.get("at"), info.get("from_ally"))
         risk = sum(unit_value(n) * int(ships_here.get(n, 0) * persona.strike_fraction) for n in FIGHTERS)
-        go, reason = assess_attack(persona, rng, intel, fighters, memory.risk_scale, at_risk=risk)
+        go, reason = assess_attack(persona, rng, intel, fighters, memory.risk_scale, at_risk=risk, now=now)
         worth = intel.loot * target_factor(memory.opponents.get(c), now)   # proven easy targets first, ones that beat us last
         worth *= moons.away_factor(memory.moons, c, now, (memory.opponents.get(c) or {}).get("strength"))   # its fleet is out (phalanx): a little easier
         if focus:

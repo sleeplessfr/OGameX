@@ -63,6 +63,17 @@ class Estimate:
     my_survival: float       # average share of my fleet that survives
 
 
+HARMLESS = ("recycler", "espionage_probe", "small_cargo", "large_cargo", "colony_ship", "solar_satellite", "crawler")   # ships that cannot hurt a planet or a fleet
+
+
+def harmless_fleet(ships) -> bool:
+    """True when a foreign fleet is known (non-empty ship list) and made only of ships that cannot attack. No data = False."""
+    if not isinstance(ships, dict):
+        return False
+    present = [n for n, k in ships.items() if int(k or 0) > 0]
+    return bool(present) and all(n in HARMLESS for n in present)
+
+
 def unit_value(name: str) -> int:
     s = STATS.get(name)
     return s[0] + s[1] + s[2] if s else 0

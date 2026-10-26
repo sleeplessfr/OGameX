@@ -776,8 +776,9 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
             self.ship_stats = {s["machine_name"]: s for s in self.client.get("/ships")["ships"]}
         # How much to over-estimate the defenders is learned (bandit.py); its own random stream keeps the agent's other choices unchanged.
         margin = self.memory.bandit.choose(_random.Random(f"{self.name}:{self.memory.bandit.pulls}"))
+        sim_info: dict = {}
         strike, go, sim_reason, kind = choose_strike(self.persona, self.rng, ships_here, self.ship_stats, intel,
-                                                     self.my_tech, self.memory.risk_scale, margin)
+                                                     self.my_tech, self.memory.risk_scale, margin, info=sim_info)
         where = f"{coord[0]}:{coord[1]}:{coord[2]}"
         if strike is None:
             return False
@@ -813,7 +814,9 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
         self.stats["attacks"] += 1
         self.log("attack", at=f"{coord[0]}:{coord[1]}:{coord[2]}", margin=margin, why=reason, ships=strike,
                  seconds=result["mission"]["seconds_remaining"], saw_ships=intel.ships, saw_defense=intel.defense,
-                 saw_research=intel.research)
+                 saw_research=intel.research, intel_age=None if intel.at is None else round(now - intel.at),
+                 intel_source="ally" if intel.ally is not None else "own", composition_known=intel.composition_known,
+                 sim_win_chance=sim_info.get("win_chance"))
         return True
 
     def _build_units(self, home: dict, units: list[dict], have: dict, ships_here: dict, *, budget: dict | None = None,
