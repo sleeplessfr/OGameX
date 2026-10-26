@@ -129,6 +129,7 @@ class AgentInTheFakeGameTests(unittest.TestCase):
 
     def test_a_persona_without_appetite_never_builds_a_colony_ship(self):
         game, agent = self.make(replace(PRESETS["scientist"], expansion=0.0))
+        game.field_max = 163                 # (a FULL planet overrides a low appetite: see test_fullplanet.py)
         self.run_for(game, agent, 6)
         self.assertEqual(game.colonies, [])
         self.assertNotIn("expand", [e for e, _ in agent.events])

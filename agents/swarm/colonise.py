@@ -14,6 +14,7 @@ import math
 import random
 
 from .brain import VALUE, fields_left
+from .fullplanet import FULL_PLANET_CAP
 
 EXPAND_FIELDS = 70      # start thinking about a colony when the home planet has this few free fields (or fewer)
 SEARCH_SYSTEMS = 6      # look this many systems either side of home
@@ -73,6 +74,13 @@ def wants_colony(persona, home: dict, planets_owned: int, rng: random.Random) ->
     return rng.random() < persona.expansion
 
 
+def wants_colony_full(home: dict, planets_owned: int) -> bool:
+    """A home planet with no free field wants colonies whatever the persona's appetite: it has nothing else to grow with.
+    No dice and no persona limit (max_planets); only FULL_PLANET_CAP stops it."""
+    left = fields_left(home)
+    return left is not None and left <= 0 and planets_owned < FULL_PLANET_CAP
+
+
 def goals(planets_owned: int, research_levels: dict) -> tuple[dict, dict]:
     """(buildings, research) levels the home planet must reach before a colony ship can be built and used."""
     research = {name: level for name, level in SHIP_RESEARCH}
@@ -102,6 +110,6 @@ def pick_target(persona, rng: random.Random, home: tuple[int, int, int], systems
     return None if best is None else (best[1], best[2])
 
 
-def systems_to_scan(home: tuple[int, int, int]) -> list[tuple[int, int]]:
+def systems_to_scan(home: tuple[int, int, int], radius: int = SEARCH_SYSTEMS) -> list[tuple[int, int]]:
     g, s, _ = home
-    return [(g, x) for x in range(max(1, s - SEARCH_SYSTEMS), min(MAX_SYSTEM, s + SEARCH_SYSTEMS) + 1)]
+    return [(g, x) for x in range(max(1, s - radius), min(MAX_SYSTEM, s + radius) + 1)]

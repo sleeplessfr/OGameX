@@ -9,6 +9,7 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass
 
+from . import fullplanet
 from .personas import Persona
 
 RESOURCES = ("metal", "crystal", "deuterium")
@@ -98,6 +99,7 @@ class Choice:
     reason: str
     goal_cost: dict | None = None  # when waiting: what the item we are waiting for costs (the merchant logic uses it)
     full: bool = False             # nothing to build because the planet has no free fields (ships and defence still work)
+    reserved: bool = False         # nothing to build because the last free fields are kept for the terraformer chain
     forced: bool = False           # waiting for a must-do item (low energy, a goal...), not just saving up by choice
 
 
@@ -180,6 +182,16 @@ def choose_building(
     if left is not None and left <= 0:
         return Choice(None, None, "no free fields on this planet (a terraformer adds some)", full=True)
 
+    # Running low: the last fields belong to the terraformer chain (and to the shipyard / lab of a colony ship). Without
+    # this reserve a planet fills up completely and the terraformer, which needs a free field itself, can never be built.
+    kept = fullplanet.reserve(buildings, left, FIELD_ALARM)
+    if kept is not None and left - sum(kept.values()) <= 0:
+        allowed = set(kept)
+        usable = [b for b in usable if b["machine_name"] in allowed]
+        by_name = {b["machine_name"]: b for b in usable}
+        if not usable:
+            return Choice(None, None, f"no spare fields: {left} kept for {', '.join(f'{n} +{g}' for n, g in kept.items())}", reserved=True)
+
     # 1. Energy: mines starve without it. Nothing else matters until the power is back.
     if planet["energy"] <= persona.energy_buffer and "solar_plant" in by_name:
         return forced(by_name["solar_plant"], "low energy")
@@ -198,6 +210,10 @@ def choose_building(
     # 2b. Running out of fields: the terraformer gives new ones, and its prerequisites become important.
     weights = persona.building_weights
     if left is not None and left <= FIELD_ALARM:
+        if kept is not None and "terraformer" not in by_name:   # the chain, step by step (robot factory 10, then the nanite factory)
+            for name, target in fullplanet.CHAIN_BUILDINGS:
+                if name in by_name and by_name[name]["level"] < target:
+                    return forced(by_name[name], f"only {left} free fields left, {name} leads to the terraformer")
         if "terraformer" in by_name and by_name["terraformer"]["level"] < 30:
             return forced(by_name["terraformer"], f"only {left} free fields left")
         weights = {**weights, "nano_factory": max(weights.get("nano_factory", 0.0), 6.0),
@@ -246,13 +262,14 @@ def choose_research(
         if name in by_name and by_name[name]["level"] < target:
             return _forced(by_name[name], have, production, f"needed for a colony ({name} {target})")
     left = fields_left(planet)
-    if left is not None and left <= FIELD_ALARM:
+    full = left is not None and left <= 0     # nothing to build here, ever: the terraformer chain is closed (fullplanet.py)
+    if left is not None and left <= FIELD_ALARM and not full:
         # The terraformer needs energy technology 12 and a nanite factory (computer technology 10, robot factory 10).
         by_name = {t["machine_name"]: t for t in usable}
         for name, target in (("energy_technology", 12), ("computer_technology", 10)):
             if name in by_name and by_name[name]["level"] < target:
                 return _forced(by_name[name], have, production, f"only {left} free fields left, {name} leads to the terraformer")
-    weights = persona.research_weights
+    weights = fullplanet.research_weights(persona.research_weights) if full else persona.research_weights   # a full planet researches everything useful
     scored = [(_score(t, weights, persona, rng), t) for t in usable]
     ranked = [t for s, t in sorted(scored, key=lambda x: -x[0]) if s > 0]
     return _pick(ranked, persona, rng, have, production, "research")
