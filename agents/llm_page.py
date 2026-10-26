@@ -132,7 +132,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:var(--panel2);border-r
 <div id="err" class="err"></div><div id="feed"></div></div>
 <script>
 const $=id=>document.getElementById(id);
-let D=null,now=Date.now()/1000;
+let D=null,last='',opened=new Set();
 function el(t,c,x){const e=document.createElement(t);if(c)e.className=c;if(x!=null)e.textContent=x;return e}
 function age(t){const s=Math.max(0,Math.round(Date.now()/1000-t));if(s<60)return s+" s ago";if(s<3600)return Math.round(s/60)+" min ago";if(s<86400)return (s/3600).toFixed(1)+" h ago";return Math.round(s/86400)+" d ago"}
 function opts(sel,label,list){const cur=sel.value;sel.replaceChildren();const o=el("option","",label);o.value="";sel.appendChild(o);list.forEach(x=>{const e=el("option","",x);e.value=x;sel.appendChild(e)});if(list.includes(cur))sel.value=cur}
@@ -153,12 +153,15 @@ function draw(){
     top.appendChild(el("span","badge",state==="used"?"USED":state==="fail"?"FAILED":"NOT USED"));box.appendChild(top);
     if(c.answer!=null)box.appendChild(el("div","answer",c.answer));
     if(c.error)box.appendChild(el("div","err","error: "+c.error));
-    const d=el("details");d.appendChild(el("summary","","prompt"));d.appendChild(el("pre","",c.prompt));box.appendChild(d);
+    const key=c.t+"|"+c.agent+"|"+c.purpose;
+    const d=el("details");d.open=opened.has(key);d.ontoggle=()=>{if(d.open)opened.add(key);else opened.delete(key)};
+    d.appendChild(el("summary","","prompt"));d.appendChild(el("pre","",c.prompt));box.appendChild(d);
     feed.appendChild(box)});
   if(!n)feed.appendChild(el("div","empty",D.available?"No call matches.":"No llm.jsonl yet. Start the agents with --llm (or --llm fake) and the calls appear here."))}
 async function load(){
-  try{const r=await fetch("/api/llm?limit=200",{cache:"no-store"});D=await r.json();$("err").textContent="";
-    opts($("fa"),"all agents",D.agents||[]);opts($("fp"),"all purposes",D.purposes||[]);$("live").textContent=" - live";draw()}
+  try{const r=await fetch("/api/llm?limit=200",{cache:"no-store"});const j=await r.json();$("err").textContent="";
+    const sig=JSON.stringify([j.totals,(j.calls[0]||{}).t,j.calls.length]);$("live").textContent=" - live";if(sig===last&&D)return;last=sig;D=j;
+    opts($("fa"),"all agents",D.agents||[]);opts($("fp"),"all purposes",D.purposes||[]);draw()}
   catch(e){$("err").textContent="Cannot reach the server: "+e;$("live").textContent=""}}
 ["fa","fp","fs"].forEach(i=>$(i).onchange=()=>D&&draw());$("q").oninput=()=>D&&draw();
 load();setInterval(load,6000);
