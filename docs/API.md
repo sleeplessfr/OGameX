@@ -39,7 +39,7 @@ the game's own reason (no free fleet slot, not enough ships or fuel, cargo too s
 |---|---|---|
 | `OGAMEX_API_REGISTRATION` | `true` | Allow `POST /auth/register` |
 | `OGAMEX_API_TOKEN_TTL_DAYS` | `0` | Token lifetime in days, `0` = never expires |
-| `OGAMEX_API_RATE_LIMIT` | `300` | Authenticated requests per minute, per account |
+| `OGAMEX_API_RATE_LIMIT` | `300` | Authenticated requests per minute, per bearer token (one account = one bucket, so many agents on one machine do not share a limit; requests without a token are counted per IP address) |
 | `OGAMEX_API_AUTH_RATE_LIMIT` | `30` | Register/login requests per minute, per IP address |
 
 The first account created on a fresh server becomes the admin, also through the API.

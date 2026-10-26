@@ -41,11 +41,22 @@ class AppServiceProvider extends ServiceProvider
 
         // Rate limits of the JSON API (/api/v1), configurable in config/ogamex_api.php.
         // Authenticated calls are limited per account, register/login per IP address.
+        // The throttle middleware runs before authentication, so $request->user() is normally still null
+        // here. Without a fallback every agent on one machine would share a single per-IP bucket, so the
+        // bucket is keyed by a hash of the bearer token (one token = one account) when the request has one.
         RateLimiter::for('ogamex-api', function (Request $request) {
             $user = $request->user();
+            $token = $request->bearerToken();
 
-            return Limit::perMinute((int)config('ogamex_api.rate_limit_per_minute'))
-                ->by($user !== null ? 'user:' . $user->id : 'ip:' . $request->ip());
+            if ($user !== null) {
+                $key = 'user:' . $user->id;
+            } elseif (!empty($token)) {
+                $key = 'tok:' . sha1($token);
+            } else {
+                $key = 'ip:' . $request->ip();
+            }
+
+            return Limit::perMinute((int)config('ogamex_api.rate_limit_per_minute'))->by($key);
         });
         RateLimiter::for('ogamex-api-auth', function (Request $request) {
             return Limit::perMinute((int)config('ogamex_api.auth_rate_limit_per_minute'))
