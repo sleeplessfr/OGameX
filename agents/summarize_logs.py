@@ -200,6 +200,28 @@ def summarize(events: list[dict], personas: dict[str, str] | None = None, llm_ca
         out.append("  none yet")
     out.append("")
 
+    out.append("LEARNED TARGETING (learned = raiders that rank targets by what each target class really paid; control = old rule-only ranking; ratio = share of the announced loot netted)")
+    grp: dict = defaultdict(lambda: {"attacks": 0, "ratio": 0.0, "bad": 0, "net": 0, "agents": set()})
+    classes_seen: dict = defaultdict(lambda: [0, 0.0])
+    for e in events:
+        if e["event"] == "battle" and e.get("role") == "attacker" and e.get("ratio") is not None:
+            g = grp[e.get("group") or "?"]
+            g["attacks"] += 1; g["ratio"] += e["ratio"]; g["bad"] += 1 if e.get("verdict") == "bad" else 0
+            g["net"] += int(e.get("loot") or 0) + int(e.get("their_loss") or 0) // 2 - int(e.get("my_loss") or 0)
+            g["agents"].add(e["agent"])
+            if e.get("tkey"):
+                classes_seen[e["tkey"]][0] += 1; classes_seen[e["tkey"]][1] += e["ratio"]
+    if grp:
+        for name in sorted(grp):
+            g = grp[name]
+            out.append(f"  {name}: {len(g['agents'])} raiders, {g['attacks']} attacks, average ratio {g['ratio'] / g['attacks']:+.2f}, "
+                       f"{g['bad']} bad, net {g['net']:+,}")
+        for k, (n, r) in sorted(classes_seen.items(), key=lambda kv: -kv[1][1] / kv[1][0])[:8]:
+            out.append(f"    class {k}: {n} attacks, average ratio {r / n:+.2f}")
+    else:
+        out.append("  none yet")
+    out.append("")
+
     out.append("CHARACTER CLASSES (chosen once by each agent)")
     classes = {e["agent"]: e.get("chosen") for e in events if e["event"] == "class"}
     refused = [e for e in events if e["event"] == "class_refused"]

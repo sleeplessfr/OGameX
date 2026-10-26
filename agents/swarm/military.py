@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 
 from . import alliance, diplomacy, doctrine, expedition, moons, social
 from .bounty import focus_for
+from . import targetlearn
 from .bandit import Bandit
 from .brain import RESOURCES
 from .combat import Estimate, Tech, estimate_battle, tech_from_research, unit_value
@@ -50,6 +51,8 @@ class Memory:
     opponents: dict[Coord, dict] = field(default_factory=dict)  # per-target record: strength seen, our wins/losses/net (opponents.py)
     bandit: Bandit = field(default_factory=Bandit)  # learns how much to over-estimate defenders (bandit.py)
     arm_for: dict[Coord, float] = field(default_factory=dict)  # which margin each attack in flight was planned with
+    targets: dict = field(default_factory=targetlearn.new_book)  # learned worth of each target class (targetlearn.py)
+    target_for: dict[Coord, dict] = field(default_factory=dict)  # target class and announced loot of each attack in flight
     trade_cooldown_until: float = 0.0  # no new merchant call before this server time (dark matter is scarce)
     class_done: bool = False           # the character class has been chosen (or cannot be)
     expanding: bool = False            # the home planet is crowded and this agent has decided to found a colony
@@ -68,13 +71,13 @@ class Memory:
     diplomacy: dict = field(default_factory=diplomacy.new_state)  # first contact and the ladder of relationships per player (diplomacy.py)
 
     # Saved to disk so a restart does not make the agent forget (JSON cannot have tuple keys, so coordinates become "g:s:p").
-    _COORD_MAPS = ("spied", "attacked", "pending", "intel", "avoid_until", "aggressors", "opponents", "arm_for", "debris")
+    _COORD_MAPS = ("spied", "attacked", "pending", "intel", "avoid_until", "aggressors", "opponents", "arm_for", "target_for", "debris")
 
     def to_dict(self) -> dict:
         out: dict = {"need_cargo": self.need_cargo, "risk_scale": self.risk_scale, "battles": self.battles,
                      "trade_cooldown_until": self.trade_cooldown_until, "expanding": self.expanding, "class_done": self.class_done,
                      "colony_sent_at": self.colony_sent_at, "colony_planets_before": self.colony_planets_before,
-                     "colony_until": self.colony_until, "bandit": self.bandit.to_dict(),
+                     "colony_until": self.colony_until, "bandit": self.bandit.to_dict(), "targets": self.targets,
                      "expedition": self.expedition,
                      "supply_next_at": self.supply_next_at, "away": self.away, "social": self.social, "moons": self.moons,
                      "alliance": self.alliance, "doctrine": self.doctrine, "diplomacy": self.diplomacy}
@@ -122,6 +125,7 @@ class Memory:
         away = data.get("away")
         m.away = [a for a in away if isinstance(a, dict)] if isinstance(away, list) else []
         m.bandit = Bandit.from_dict(data.get("bandit"))
+        m.targets = targetlearn.clean_book(data.get("targets"))
         m.expedition = expedition.clean_state(data.get("expedition"))
         m.social = social.clean_state(data.get("social"))
         raw = data.get("voice")
@@ -399,7 +403,7 @@ def count_fighters(ships_here: dict[str, int]) -> int:
 
 
 def pick_attack(persona: Persona, rng: random.Random, memory: Memory, now: float, ships_here: dict[str, int],
-                focus: dict | None = None) -> tuple[Coord, Intel, str] | None:
+                focus: dict | None = None, learn_rng: random.Random | None = None) -> tuple[Coord, Intel, str] | None:
     """Look through fresh spy reports for a target worth attacking now. `focus` (see pick_target) multiplies the worth of the
     raider of a joined revenge and adds a bounty's reward value to its target's."""
     fighters = count_fighters(ships_here)
@@ -417,6 +421,12 @@ def pick_attack(persona: Persona, rng: random.Random, memory: Memory, now: float
         go, reason = assess_attack(persona, rng, intel, fighters, memory.risk_scale, at_risk=risk, now=now)
         worth = intel.loot * target_factor(memory.opponents.get(c), now)   # proven easy targets first, ones that beat us last
         worth *= moons.away_factor(memory.moons, c, now, (memory.opponents.get(c) or {}).get("strength"))   # its fleet is out (phalanx): a little easier
+        if go and learn_rng is not None:   # learned targeting (targetlearn.py): classes that paid are preferred, classes that kept losing are dropped
+            tkey = targetlearn.key_of(intel.loot, intel.defenders, intel.ally is not None)
+            if targetlearn.vetoed(memory.targets, tkey):
+                go, reason = False, f"learned: target class {tkey} has not paid ({targetlearn.expected(memory.targets, tkey):+.2f} of the loot on average)"
+            else:
+                worth *= targetlearn.factor(memory.targets, tkey, learn_rng)
         if focus:
             mult, extra = focus_for(focus, c, intel.owner_id)
             worth = worth * mult + extra
