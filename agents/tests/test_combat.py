@@ -56,9 +56,9 @@ class FightJudgementTests(unittest.TestCase):
         self.assertTrue(go, why)
         self.assertGreater(est.win_chance, 0.9)
 
-    def test_unknown_defenders_means_nothing_to_simulate(self):
+    def test_unknown_defenders_are_simulated_as_a_typical_garrison(self):
         go, why, est = judge_fight(RAIDER, random.Random(1), {"light_fighter": 5}, Intel(5000, None, 3), None, 1000)
-        self.assertEqual((go, why, est), (True, "", None))
+        self.assertFalse(go); self.assertIn("assumed 40 rocket_launchers".replace("launchers", "launchers"), why.replace("rocket launchers", "rocket_launchers"))
 
     def test_careful_personalities_and_burnt_raiders_want_more_certainty(self):
         self.assertLess(required_win_chance(RAIDER), required_win_chance(PRESETS["miner"]))

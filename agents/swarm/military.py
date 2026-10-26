@@ -27,6 +27,7 @@ MAX_EXPOSURE = 4.0        # never put fighters worth more than this many times t
 STRIKE_FRACTIONS = (0.15, 0.25, 0.4, 0.6, 0.8, 1.0)   # try the smallest share of the fighters first
 LOOT_SHARE = 0.5          # an attack can take at most half of the resources on a planet
 ALLY_INTEL_MAX_AGE = 1200.0   # seconds: a report an ally shared (no composition, not read by our own probes) is not trusted for a go after this
+UNKNOWN_GARRISON = 40   # a target with no known defence (e.g. an ally's shared report) is simulated as this many rocket launchers (the 2026-10-26 reports: typical garrisons were 40-90)
 UNKNOWN_SIM_MIN = 30      # a garrison of at least this many units with no composition is simulated as rocket launchers
 SCORE_SLACK = 200         # new players have ~0 points: allow some room around the own score
 
@@ -329,10 +330,14 @@ def judge_fight(persona: Persona, rng: random.Random, strike: dict[str, int], in
     fighters: the worst usual case); a small one has nothing to simulate: (True, '', None) and the old rules decide."""
     assumed = ""
     if not intel.composition_known:
-        if intel.defenders is None or intel.defenders < UNKNOWN_SIM_MIN:
+        if intel.defenders is None:
+            defenders = {"rocket_launcher": UNKNOWN_GARRISON}
+            assumed = f" (defence unknown, assumed {UNKNOWN_GARRISON} rocket launchers)"
+        elif intel.defenders < UNKNOWN_SIM_MIN:
             return True, "", None
-        defenders = {"rocket_launcher": int(-(-intel.defenders * margin // 1))}
-        assumed = " (composition unknown, assumed rocket launchers)"
+        else:
+            defenders = {"rocket_launcher": int(-(-intel.defenders * margin // 1))}
+            assumed = " (composition unknown, assumed rocket launchers)"
     else:
         defenders = {n: int(-(-v * margin // 1)) for n, v in intel.all_defenders().items()}
     est = estimate_battle(strike, defenders, rng, my_tech or (0, 0, 0), tech_from_research(intel.research))
