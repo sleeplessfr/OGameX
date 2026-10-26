@@ -8,7 +8,7 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass, field
 
-from . import alliance, doctrine, expedition, moons, social
+from . import alliance, diplomacy, doctrine, expedition, moons, social
 from .bounty import focus_for
 from .bandit import Bandit
 from .brain import RESOURCES
@@ -62,6 +62,7 @@ class Memory:
     voice: dict = field(default_factory=dict)  # character sheet and diary (last 20 lines); stays empty without --llm (voice.py)
     alliance: dict = field(default_factory=alliance.new_state)  # alliance: id, allies, chat cursor, what was shared, who attacked members (alliance.py)
     doctrine: dict = field(default_factory=doctrine.new_state)  # recent hopeless skips / attacks, last ship choice and army share (doctrine.py)
+    diplomacy: dict = field(default_factory=diplomacy.new_state)  # first contact and the ladder of relationships per player (diplomacy.py)
 
     # Saved to disk so a restart does not make the agent forget (JSON cannot have tuple keys, so coordinates become "g:s:p").
     _COORD_MAPS = ("spied", "attacked", "pending", "intel", "avoid_until", "aggressors", "opponents", "arm_for", "debris")
@@ -73,7 +74,7 @@ class Memory:
                      "colony_until": self.colony_until, "bandit": self.bandit.to_dict(),
                      "expedition": self.expedition,
                      "supply_next_at": self.supply_next_at, "away": self.away, "social": self.social, "moons": self.moons,
-                     "alliance": self.alliance, "doctrine": self.doctrine}
+                     "alliance": self.alliance, "doctrine": self.doctrine, "diplomacy": self.diplomacy}
         if self.voice:
             out["voice"] = {"sheet": dict(self.voice.get("sheet") or {}), "diary": list(self.voice.get("diary") or [])}
         for name in self._COORD_MAPS:
@@ -128,6 +129,7 @@ class Memory:
         m.moons = moons.clean_state(data.get("moons"))
         m.alliance = alliance.clean_state(data.get("alliance"))
         m.doctrine = doctrine.clean_state(data.get("doctrine"))
+        m.diplomacy = diplomacy.clean_state(data.get("diplomacy"))
         battles = data.get("battles")
         m.battles = battles if isinstance(battles, list) else []
         return m

@@ -262,8 +262,10 @@ class SocialMixin:
                 S.record_cheat(st["rep"], t, self.now)
                 self.log("trade_cheated", partner=name, owed=int(S.debt(t)), sent=int(t["sent_value"]), received=int(t["recv_value"]),
                          why="no payment in time; shunned")
+                self._diplo_trade(name, "cheated")      # diplomacy: trust drops hard
             elif verdict == "done":
                 S.record_done(st["rep"], t, self.now)
+                self._diplo_trade(name, "done")         # diplomacy: trust grows
                 if t["role"] == "poster":
                     self._price_log("ask", t["give"], t["get"], P.on_done(st["prices"], t["give"], t["get"]), "completed")
                 else:

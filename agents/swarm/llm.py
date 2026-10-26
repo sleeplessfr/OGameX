@@ -198,7 +198,13 @@ OPENERS = {"ruthless": "No mercy.", "opportunistic": "Business is business.", "p
 
 
 def fake_answer(system: str, prompt: str) -> str:
-    """Template answers for `--llm fake`. Understands the two tasks voice.py asks for; keeps the numbers of the input unchanged."""
+    """Template answers for `--llm fake`. Understands the tasks voice.py asks for (rewrite, diary) and the diplomacy ones (hello and
+    announce like a rewrite, answer with a canned decision); keeps the numbers of the input unchanged."""
+    if prompt.startswith("TASK: answer"):                  # diplomacy: a canned but repeatable ACCEPT / REFUSE / WAIT (diplomacy.fake_decision)
+        from . import diplomacy
+        canned = diplomacy.fake_answer(prompt)
+        if canned:
+            return canned
     tone = ""
     for line in system.splitlines():
         if line.upper().startswith("TONE:"):
