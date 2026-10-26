@@ -9,20 +9,75 @@ message (POST /alliance/broadcast) needs a rank with a permission that members o
 
 Log events: alliance_founded, alliance_applied, alliance_accepted (by the leader), alliance_rejected, alliance_joined, alliance_left,
 alliance_kicked, intel_shared, intel_used, ally_warned, and the quiet alliance_skipped (why something did not happen).
+With a language model there are also alliance_named (the name, tag, tone, purpose and charter a founder chose, and whether the model or
+the rules made them) and alliance_choice (an agent's decision to apply to an alliance after reading its charter: ACCEPT / REFUSE / WAIT,
+source llm or rule).
+
+The model never blocks the agent: a request is queued with a callback that only stores the text in a job; the round that finds the job
+done (or too late) goes on from there. Two kinds: "name" (at founding: NAME | TAG | CHARTER) and "choice" (before applying). Code checks
+every answer; no answer, a bad one or no model at all means the deterministic rules decide, exactly as without a model.
 """
 from __future__ import annotations
 
 import random
+import time
 
 from . import alliance as A
+from . import llm as L
 from . import social as S
+from . import voice as V
 from .client import ApiError
 
 NO_ENDPOINT = ("http_error", "not_found")   # a 404 that is not one of our own errors: the route does not exist
 
 
+JOB_WAIT = 90.0          # seconds (wall clock) the founder or applicant waits for the model before the rules decide
+JOB_STALE = 900.0        # a finished job nobody used by then is thrown away
+CHOICE_WAITS = 2         # a model that says WAIT this many times in a row counts as REFUSE
+
+
 class AllianceMixin:
     _alli_random = None
+    alli_clock = staticmethod(time.time)     # wall clock for the model's waiting times (tests replace it)
+
+    # ---- the language model (never blocks) -----------------------------------------------------------
+    def _alli_llm_on(self) -> bool:
+        return bool(getattr(self.llm, "enabled", False))
+
+    def _alli_job_ask(self, job: dict, purpose: str, system: str, prompt: str) -> bool:
+        """Queue a model request; its callback only stores the text. False if it could not be queued (then the rules decide)."""
+        def done(answer):
+            job["answer"] = answer
+            job["done"] = True
+
+        job.update(started=self.alli_clock(), done=False, answer=None, ready=False)
+        try:
+            ok = self.llm.submit(self.name, purpose, system, prompt, done, L.NORMAL, JOB_WAIT + 30)
+        except Exception:
+            ok = False
+        if ok:
+            self.__dict__["_alli_job"] = job
+        return bool(ok)
+
+    def _alli_job_state(self) -> str:
+        """'none', 'pending' (still waiting for the model) or 'finished' (answered, or too late: its answer is then None)."""
+        job = self.__dict__.get("_alli_job")
+        if not job:
+            return "none"
+        if job["done"]:
+            return "finished"
+        if self.alli_clock() - job["started"] > JOB_WAIT:
+            job["answer"], job["done"] = None, True
+            return "finished"
+        return "pending"
+
+    def _alli_job_pop(self) -> dict | None:
+        """The finished job (cleared), or None. A stale one is dropped."""
+        job = self.__dict__.get("_alli_job")
+        if not job or not job["done"]:
+            return None
+        self.__dict__["_alli_job"] = None
+        return job if self.alli_clock() - job["started"] <= JOB_STALE else None
 
     # ---- small helpers -------------------------------------------------------------------------------
     def _alli_rng(self) -> random.Random:
@@ -75,6 +130,13 @@ class AllianceMixin:
             coord = (int(c["galaxy"]), int(c["system"]), int(c["position"]))
             if st["id"] is not None:
                 self._alli_warn(threats, coord)
+            state = self._alli_job_state()
+            if state == "pending":
+                return []                       # the model is thinking: nothing to decide yet
+            job = self.__dict__.get("_alli_job")
+            if state == "finished" and not job.get("ready"):
+                job["ready"] = True
+                st["next_at"] = min(st["next_at"], self.now)      # look now and use the answer
             if self.now < st["next_at"]:
                 return []
             st["next_at"] = self.now + A.CHECK_EVERY
@@ -101,6 +163,7 @@ class AllianceMixin:
     # ---- no alliance: found one or apply -------------------------------------------------------------
     def _alli_free(self, coord) -> None:
         st = self.memory.alliance
+        job = self._alli_job_pop()      # a finished model job (name or choice) from an earlier look, or None
         if st["id"] is not None:   # we were in one: kicked out, or it was disbanded
             self.log("alliance_left", alliance=st["tag"], reason="kicked or disbanded")
             st["applied"][str(st["id"])] = self.now
@@ -124,12 +187,16 @@ class AllianceMixin:
             candidates.append(a)
         candidates.sort(key=lambda a: -int(a.get("member_count", 0)))
         detailed = []
+        ads = self._alli_adverts() if candidates else {}
         for a in candidates[:4]:
             info = self.client.get(f"/alliances/{a['id']}")["alliance"]
             ids = [int(m["user_id"]) for m in info.get("members", [])]
-            detailed.append({"id": a["id"], "tag": a["tag"], "open": True, "member_count": len(ids), "ids": ids,
-                             "coords": [c for c in (self._alli_coord(rows.get(u)) for u in ids) if c],
-                             "personas": [personas.get(u) for u in ids]})
+            ad = ads.get(int(a["id"])) or {}
+            detailed.append({"id": a["id"], "tag": a["tag"], "name": a.get("name") or info.get("name") or a["tag"], "open": True,
+                             "member_count": len(ids), "ids": ids, "coords": [c for c in (self._alli_coord(rows.get(u)) for u in ids) if c],
+                             "personas": [personas.get(u) for u in ids],
+                             "charter": A.clean_charter(ad.get("charter")) or A.clean_charter(a.get("external_text") or info.get("external_text")),
+                             "purpose": ad.get("purpose") if ad.get("purpose") in A.PURPOSE_WORDS else None})
         partners = self._diplo_alliance_ids()      # diplomacy: prefer the alliance a partner at the `alliance` step belongs to
         if partners:
             detailed = [d for d in detailed if partners & set(d["ids"])] or detailed
@@ -137,6 +204,8 @@ class AllianceMixin:
                                bar=A.APPLY_MIN_SCORE - 0.1 * self.persona.sociability)
         if pick is not None:
             cand, score = pick
+            if not self._alli_choose(cand, score, job):
+                return
             text = A.application_text(me_persona, self.name, coord)
             try:
                 self.client.post(f"/alliances/{cand['id']}/apply", {"text": text})
@@ -153,10 +222,30 @@ class AllianceMixin:
         _, my_score = self._get_players(self.now)
         ok, why = A.can_found(self.persona, points=my_score, age=age, agent_count=max(1, len(agent_ids)), alliances=len(ours),
                               now=self.now, cooldown_until=st["cooldown_until"])
-        if not ok or self._alli_rng().random() >= A.FOUND_CHANCE:
+        named = job if job and job["kind"] == "name" else None      # the model has answered a naming request: this look is the founding
+        if not ok or (named is None and self._alli_rng().random() >= A.FOUND_CHANCE):
             st["apply_until"] = self.now + 300
             return
-        tag, name = A.make_identity(me_persona, A.agent_number(self.name), [a["tag"] for a in alliances], [a["name"] for a in alliances], st["seq"])
+        purpose = A.purpose_for(self.persona)
+        taken_tags, taken_names = [a["tag"] for a in alliances], [a["name"] for a in alliances]
+        if named is None:
+            tone = A.pick_tone(self.name, st["seq"])
+            if self._alli_llm_on() and self._alli_job_ask({"kind": "name", "purpose": purpose, "tone": tone}, "alliance_name", A.NAME_SYSTEM,
+                                                           A.name_prompt(purpose, tone, taken_tags, taken_names)):
+                return                      # founds on a later look, when the answer (or the timeout) is in
+            parsed = None
+        else:
+            tone = named["tone"]
+            parsed = A.parse_name_answer(named["answer"], taken_tags, taken_names)    # checked against what is taken NOW
+        charter, source = None, "rule"
+        if parsed:
+            tag, name, charter = parsed
+            source = "llm"
+        else:
+            tag, name = A.fallback_identity(purpose, tone, self.name, taken_tags, taken_names, st["seq"])
+        charter_source = "llm" if charter else "rule"
+        charter = charter or A.fallback_charter(purpose, tone, self.name, st["seq"])
+        self.log("alliance_named", name=name, tag=tag, tone=tone, purpose=purpose, source=source, charter=charter, charter_source=charter_source)
         try:
             data = self.client.post("/alliance", {"tag": tag, "name": name})
         except ApiError as e:
@@ -165,9 +254,70 @@ class AllianceMixin:
             self._alli_refused("found", e)
             return
         info = data["alliance"]
-        st.update(id=int(info["id"]), tag=info["tag"], founder=True, joined_at=self.now, active_at=self.now, cursor=0)
-        self.log("alliance_founded", alliance=info["tag"], name=info["name"], alliance_id=info["id"], points=my_score)
-        self._alli_advertise(info["tag"], info["id"], coord, 1)
+        st.update(id=int(info["id"]), tag=info["tag"], founder=True, joined_at=self.now, active_at=self.now, cursor=0,
+                  charter=charter, purpose=purpose, tone=tone)
+        self.log("alliance_founded", alliance=info["tag"], name=info["name"], alliance_id=info["id"], points=my_score, source=source)
+        self._alli_advertise(info["tag"], info["id"], coord, 1, info["name"])
+
+    # ---- the charter and the choice --------------------------------------------------------------------
+    def _alli_charter(self) -> str:
+        st = self.memory.alliance
+        return st.get("charter") or A.fallback_charter(st.get("purpose") or A.purpose_for(self.persona),
+                                                       st.get("tone") or A.pick_tone(self.name, 0), self.name)
+
+    def _alli_adverts(self) -> dict[int, dict]:
+        """The data of the latest ALLIANCE advert per alliance id on the galaxy board (the charter is in it); {} without a board. Fail-soft."""
+        if not self._board_on():
+            return {}
+        try:
+            r = self.board.read(since=0, kind=["ALLIANCE"], limit=200)
+            ads = {}
+            for p in r.get("posts", []) if r.get("ok") else []:
+                data = p.get("data") if isinstance(p.get("data"), dict) else {}
+                if isinstance(data.get("alliance_id"), int) and data.get("charter"):
+                    ads[data["alliance_id"]] = data
+            return ads
+        except Exception:
+            return {}
+
+    def _alli_choose(self, cand: dict, score: float, job: dict | None) -> bool:
+        """True: apply now. The rules have already picked the best alliance and applied the hard ones (open, room, no member who attacked
+        us); the model can only confirm or veto that choice, after reading the charter. No model, no answer: apply, as the rules say."""
+        st = self.memory.alliance
+        if not self._alli_llm_on():
+            return True
+        aid = int(cand["id"])
+        if job and job["kind"] == "choice" and job["aid"] == aid:
+            if job["answer"] is None:
+                decision, reason, source = "ACCEPT", "no model answer: the rules decide", "rule"
+            else:
+                decision, reason = A.parse_choice(job["answer"])
+                source = "llm"
+                tries = self.__dict__.setdefault("_alli_waits", {})
+                if decision == "WAIT":
+                    tries[aid] = tries.get(aid, 0) + 1
+                    if tries[aid] >= CHOICE_WAITS:
+                        decision, reason = "REFUSE", (reason or "undecided") + " (waited long enough)"
+                else:
+                    tries.pop(aid, None)
+            self.log("alliance_choice", alliance=cand["tag"], alliance_id=aid, decision=decision, reason=reason[:120], source=source,
+                     charter=(cand.get("charter") or "")[:160], fit=score)
+            if decision == "REFUSE":
+                st["applied"][str(aid)] = self.now          # not this one for a while; the next look tries another
+                return False
+            if decision == "WAIT":
+                st["apply_until"] = self.now + 300
+                return False
+            return True
+        facts = A.choice_facts(name=cand.get("name") or cand["tag"], tag=cand["tag"], charter=cand.get("charter"), purpose=cand.get("purpose"),
+                               members=int(cand.get("member_count", 0)), fit=score, traits=V.temperament(self.persona) +
+                               (["keen on trade"] if getattr(self.persona, "trade_interest", 0) >= 0.5 else []), persona_name=self.persona.name)
+        sheet = self._voice_state()["sheet"]
+        if self._alli_job_ask({"kind": "choice", "aid": aid}, "alliance_choice", A.choice_system(sheet), A.choice_prompt(facts)):
+            return False                    # decided on a later look
+        self.log("alliance_choice", alliance=cand["tag"], alliance_id=aid, decision="ACCEPT", reason="model not available: the rules decide",
+                 source="rule", charter=(cand.get("charter") or "")[:160], fit=score)
+        return True
 
     def _alli_refused(self, what: str, e: ApiError) -> None:
         st = self.memory.alliance
@@ -335,22 +485,27 @@ class AllianceMixin:
                 continue
             if ok:
                 left += 1
+                self._alli_say(f"Welcome to {mine.get('name') or st['tag']}! {self._alli_charter()}"[:400])    # the charter, for the new member to read
                 self.log("alliance_accepted", alliance=st["tag"], applicant=uid, members=left, text=str(app.get("text") or "")[:80])
             else:
                 self.log("alliance_rejected", alliance=st["tag"], applicant=uid, why=why)
         if mine.get("open") and left < A.MAX_MEMBERS:
-            self._alli_advertise(st["tag"], st["id"], coord, left)
+            self._alli_advertise(st["tag"], st["id"], coord, left, mine.get("name"))
 
-    def _alli_advertise(self, tag, alliance_id, coord, members: int) -> None:
+    def _alli_advertise(self, tag, alliance_id, coord, members: int, name: str | None = None) -> None:
         """Say on the galaxy board that the alliance takes members (off without the board; fails soft)."""
         st = self.memory.alliance
         if self.now < st["ad_at"] or not self._board_on():
             return
         st["ad_at"] = self.now + A.AD_EVERY
         near = A.fmt_coord(coord)
+        charter = self._alli_charter()
+        head = f"{name or tag} [{tag}] takes members near {near} ({members}/{A.MAX_MEMBERS}): "
+        text = (head + charter)[:200]                      # the board allows 200 characters; the full charter is in the data
         try:
-            self._board_post("ALLIANCE", f"{tag} takes members near {near} ({members}/{A.MAX_MEMBERS})",
-                             {"tag": tag, "alliance_id": alliance_id, "at": near, "members": members})
+            self._board_post("ALLIANCE", text, {"tag": tag, "alliance_id": alliance_id, "at": near, "members": members, "name": name or tag,
+                                                "charter": charter, "purpose": st.get("purpose") or A.purpose_for(self.persona),
+                                                "tone": st.get("tone") or ""})
         except Exception as e:
             if self._logi_note(("alliance_ad", type(e).__name__)):
                 self.log("alliance_skipped", why=f"board: {type(e).__name__}")

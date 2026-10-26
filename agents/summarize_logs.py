@@ -615,7 +615,7 @@ def alliances_section(events: list[dict]) -> list[str]:
     """ALLIANCES: who founded one, who applied, was let in or left, and what allies told each other."""
     out = ["ALLIANCES (agents team up: they share spy reports in the alliance chat and warn each other of attacks)"]
     names = ("alliance_founded", "alliance_applied", "alliance_accepted", "alliance_rejected", "alliance_joined", "alliance_left",
-             "alliance_kicked", "intel_shared", "intel_used", "ally_warned", "alliance_skipped")
+             "alliance_kicked", "intel_shared", "intel_used", "ally_warned", "alliance_skipped", "alliance_named", "alliance_choice")
     ev = [e for e in events if e["event"] in names]
     if not ev:
         return out + ["  none", ""]
@@ -628,6 +628,17 @@ def alliances_section(events: list[dict]) -> list[str]:
     for e in by["alliance_founded"][-8:]:
         members = sum(1 for a in by["alliance_accepted"] if a.get("alliance") == e.get("alliance"))
         out.append(f"    {clock(e['t'])} {e['agent']} founded {e.get('alliance')} \"{e.get('name')}\" (+{members} accepted since)")
+    named, choices = by["alliance_named"], by["alliance_choice"]
+    if named or choices:
+        by_source = Counter(str(e.get("source", "rule")) for e in named)
+        decisions = Counter((str(e.get("source", "rule")), str(e.get("decision", ""))) for e in choices)
+        out.append(f"  names and charters: {by_source.get('llm', 0)} by the model, {by_source.get('rule', 0)} by the rules; tones "
+                   + (", ".join(f"{t} {n}" for t, n in Counter(str(e.get("tone", "?")) for e in named).most_common(4)) or "none")
+                   + f"; {len(choices)} choices after reading a charter (model: "
+                   + (", ".join(f"{d.lower()} {n}" for (src, d), n in sorted(decisions.items()) if src == "llm") or "none")
+                   + f"; rules {sum(n for (src, _), n in decisions.items() if src == 'rule')})")
+        for e in named[-5:]:
+            out.append(f"    {e.get('tag')} \"{e.get('name')}\" [{e.get('purpose')}, {e.get('tone')}, {e.get('source')}]: {str(e.get('charter', ''))[:100]}")
     shared, used = by["intel_shared"], by["intel_used"]
     out.append(f"  {len(shared)} spy reports shared ({sum(int(e.get('loot') or 0) for e in shared):,} loot in them), {len(used)} used by an ally as a target "
                f"({sum(int(e.get('loot') or 0) for e in used):,} loot), {len(by['ally_warned'])} warnings of incoming attacks")

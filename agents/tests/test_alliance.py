@@ -287,7 +287,7 @@ class AgentAllianceTests(unittest.TestCase):
         self.assertEqual(len(self.world.alliances), 1)
         (founded,) = self.events(a, "alliance_founded")
         self.assertTrue(3 <= len(founded["alliance"]) <= 8)
-        self.assertTrue(founded["alliance"].startswith("MINE"))
+        self.assertTrue(A.TAG_OK.match(founded["alliance"]) and founded["alliance"] == founded["alliance"].upper())
         self.assertEqual(self.world.user_alliance[1], founded["alliance_id"])
         self.assertTrue(a.memory.alliance["founder"])
         # c is sociable and old enough but far away: it must not found a second alliance (one per 5 agents), and does not join (too far)

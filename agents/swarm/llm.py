@@ -231,6 +231,11 @@ def fake_answer(system: str, prompt: str) -> str:
         canned = diplomacy.fake_answer(prompt)
         if canned:
             return canned
+    if prompt.startswith("TASK: alliance_name") or prompt.startswith("TASK: alliance_choice"):     # alliances: canned name/charter or choice
+        from . import alliance
+        canned = alliance.fake_name_answer(prompt) if prompt.startswith("TASK: alliance_name") else alliance.fake_choice_answer(prompt)
+        if canned:
+            return canned
     tone = ""
     for line in system.splitlines():
         if line.upper().startswith("TONE:"):

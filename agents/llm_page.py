@@ -138,7 +138,7 @@ let D=null,last='',opened=new Set();
 function el(t,c,x){const e=document.createElement(t);if(c)e.className=c;if(x!=null)e.textContent=x;return e}
 function age(t){const s=Math.max(0,Math.round(Date.now()/1000-t));if(s<60)return s+" s ago";if(s<3600)return Math.round(s/60)+" min ago";if(s<86400)return (s/3600).toFixed(1)+" h ago";return Math.round(s/86400)+" d ago"}
 function opts(sel,label,list,name){const cur=sel.value;sel.replaceChildren();const o=el("option","",label);o.value="";sel.appendChild(o);list.forEach(x=>{const e=el("option","",name?name(x):x);e.value=x;sel.appendChild(e)});if(list.includes(cur))sel.value=cur}
-const PURPOSE={hello:"hello (diplomacy)",answer:"answer (diplomacy)",announce:"announcement (diplomacy)",diary:"diary"};
+const PURPOSE={hello:"hello (diplomacy)",answer:"answer (diplomacy)",announce:"announcement (diplomacy)",diary:"diary",alliance_name:"alliance name and charter",alliance_choice:"alliance choice (join or not)"};
 function purposeName(p){return PURPOSE[p]||(String(p).startsWith("rewrite:")?"rewrite "+String(p).slice(8):p)}
 function stat(label,v){const s=el("div","stat");s.append(el("b","",String(v)),el("small","",label));return s}
 function draw(){

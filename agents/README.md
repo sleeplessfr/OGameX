@@ -173,7 +173,7 @@ endpoints of the game (`/alliance`, `/alliances`, `/chat`, see `docs/API.md`, "A
 miner, scientist and turtle 0.8-0.9, trader 0.7, balanced 0.5, raider 0.15 (drawn last in `make_persona`, from its own stream, so nothing else changes).
 
 - **Founding:** sociability 0.6+, 300+ points, playing 30+ minutes, at most one alliance per 5 agents (at least one), 35% chance per look.
-  Tag and name come from the personality and the agent's number (`MINE07`, "Quiet Miners 7"), unique among the existing ones.
+  Name, tag and charter: see "Alliance names" below.
 - **Applying:** after 15 minutes, to the open, not full alliance whose members are the best fit: neighbours in the galaxy and similar
   personalities (`compat`), never one with a member who attacked this agent or beat it in a fight. A short text says who and where.
 - **Accepting:** the founder answers within one look: max 8 members, rejects a grudge (attacked it, or beat it in a fight in the
@@ -186,8 +186,22 @@ miner, scientist and turtle 0.8-0.9, trader 0.7, balanced 0.5, raider 0.15 (draw
 - **Leaving:** a member leaves after an ally attacked it, or when nobody has said anything for 12 hours (no way back to the same alliance
   for 4 hours; the game also has its own cooldown). A founder cannot leave, so it kicks a member that attacked it.
 - **Board:** a founder with room left posts an `ALLIANCE` note to the galaxy board once an hour (nothing without `--board`).
+- **Alliance names, charters and choices:** the name says what the alliance wants (its *purpose*, from the founder's persona: miner = mining
+  cartel, turtle = defence pact, raider = raiding fleet, scientist = research circle, trader = trade guild, balanced = mixed), in a *tone*
+  drawn from 12 (funny, edgy, menacing, solemn, bureaucratic, poetic, mysterious, absurd, pompous, laconic, heroic, folksy) by crc32 of agent
+  name and attempt. Never the founder's name or story. Without a model (`alliance.fallback_identity`) names come from tone patterns times
+  purpose words ("Smelters Anonymous", "Bureau of Rock", "Lanterns of Tender Deuterium"), cut to 30 characters, and the tag from the name's
+  initials (3-8 of A-Z0-9, made unique). With `--llm` the founder asks the model once (purpose `alliance_name`, normal priority, answer
+  `NAME | TAG | CHARTER`, no founder data in the prompt), founds on a later look (the round never waits; 90 s without an answer, or an
+  invalid one, or a taken name: the rules name it) and cannot found twice. The *charter* (max 150 characters: what it wants and who it
+  welcomes) goes into the board `ALLIANCE` advert (`data.charter`, `purpose`, `tone`) and into the leader's welcome line in the alliance
+  chat (the game API has no way to set an alliance text, only to read `external_text`, which is used as a fallback charter).
+  Before applying, an agent with a model reads the charter (advert) and the fit, and the model answers ACCEPT / REFUSE / WAIT
+  (purpose `alliance_choice`); the rules (open, room, no member who attacked us, 4 h between tries) have already filtered and picked, so
+  the model can only confirm or veto; WAIT twice = REFUSE; no model or no answer = the rules apply as before. Events `alliance_named`
+  (name, tag, tone, purpose, source llm|rule, charter) and `alliance_choice`. `--llm fake` gives canned valid names and decisions.
 - Events: `alliance_founded`, `alliance_applied`, `alliance_accepted` (written by the leader), `alliance_rejected`, `alliance_joined`,
-  `alliance_left`, `alliance_kicked`, `intel_shared`, `intel_used`, `ally_warned`, `alliance_skipped`. Report section: ALLIANCES.
+  `alliance_left`, `alliance_kicked`, `intel_shared`, `intel_used`, `ally_warned`, `alliance_skipped`, `alliance_named`, `alliance_choice`. Report section: ALLIANCES.
   The observatory leaderboard shows each player's alliance tag from `/highscore`.
 - Not done: ranks, alliance texts, voting, a leader handing over, joint attacks, resource help between allies, members beyond the top 100 of the highscore.
 
