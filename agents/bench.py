@@ -124,6 +124,7 @@ def ensure_accounts(api: Api, state_path: str, n: int, prefix: str = "bench", do
             state[name] = {"email": email, "password": password, "token": token}
             save_state(state_path, state)
             out.append({"name": name, "token": token, "home": None})
+            say(f"  registered {name} ({len(out)}/{n})")
         else:
             say(f"  could not register {name}: HTTP {status}" + (" (too many requests: lower --max-rate or wait a minute)" if status == 429 else ""))
             if status in (0, 429, 502, 503):
@@ -370,6 +371,8 @@ def main(argv: list[str] | None = None, transport=urllib_transport) -> int:
             print(f"Cannot reach the API at {base}. Is the game running?", file=sys.stderr)
             return 1
         print(f"Preparing {args.agents} accounts ({args.prefix}0001..) in {state} ...")
+        print("  Each new account creates a real player and planet in your game (about 1-3 s each), so this can take a few minutes the first time.")
+        print("  Accounts are kept: the next run reuses them. Registration is silent for a while if the game is busy: wait for the 'registered' lines.")
         accounts = ensure_accounts(api, state, args.agents, args.prefix, args.email_domain)
         if not accounts:
             print("No account could be made or reused: nothing to test.", file=sys.stderr)
