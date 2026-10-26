@@ -17,7 +17,7 @@ class PlanetController extends ApiController
     {
         $planets = [];
         foreach ($player->planets->all() as $planet) {
-            $planet->update();
+            $planet->updateIfStale();
             $planets[] = $this->planetSummary($planet) + $this->planetEconomy($planet);
         }
 

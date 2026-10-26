@@ -69,7 +69,7 @@ abstract class ApiController extends Controller
         }
 
         $planet = $player->planets->getById($planetId);
-        $planet->update();
+        $planet->updateIfStale();
 
         return $planet;
     }

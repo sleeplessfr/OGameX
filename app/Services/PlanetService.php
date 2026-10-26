@@ -51,6 +51,14 @@ class PlanetService
     private PlayerService $player;
 
     /**
+     * Unix second in which update() last completed on this instance, or null if unknown. Cleared by save()
+     * so any later change through this instance invalidates it. Only used by updateIfStale().
+     *
+     * @var int|null
+     */
+    private int|null $lastUpdateSecond = null;
+
+    /**
      * Planet constructor.
      *
      * @param PlayerServiceFactory $playerServiceFactory
@@ -536,6 +544,7 @@ class PlanetService
      */
     public function save(): void
     {
+        $this->lastUpdateSecond = null;
         $this->planet->save();
     }
 
@@ -1317,6 +1326,8 @@ class PlanetService
      */
     public function update(): void
     {
+        $updateSecond = (int)Date::now()->timestamp;
+
         DB::transaction(function () {
             // Attempt to acquire a lock on the row for this planet. This is to prevent
             // race conditions when multiple requests are updating the same planet and
@@ -1360,6 +1371,26 @@ class PlanetService
                 throw new Exception('Could not acquire planet update lock.');
             }
         });
+
+        $this->lastUpdateSecond = $updateSecond;
+    }
+
+    /**
+     * Same as update(), but does nothing if update() already completed on this instance in the current
+     * second and the planet was not saved through this instance since. A repeated update in the same second
+     * has nothing new to process. Meant for API requests where the middleware already updated the planet.
+     *
+     * @return void
+     * @throws Exception
+     * @throws Throwable
+     */
+    public function updateIfStale(): void
+    {
+        if ($this->lastUpdateSecond !== null && $this->lastUpdateSecond === (int)Date::now()->timestamp) {
+            return;
+        }
+
+        $this->update();
     }
 
     /**
