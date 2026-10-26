@@ -141,6 +141,10 @@ def describe(e: dict) -> str:
         return f"built {g('amount')} {g('what')} ({g('why')})"
     if k == "trade":
         return f"traded with the merchant: gave {_res(g('gave'))} for {_res(g('received'))}"
+    if k == "diary":
+        return str(g("text", ""))
+    if k == "voice_post":
+        return f"put a {g('kind')} post in its own words: {str(g('text', ''))[:100]}"
     if k == "board_post":
         return f"posted on the board ({g('kind')}): {str(g('text', ''))[:100]}"
     if k == "board_read":
@@ -372,6 +376,52 @@ class Tally:
             a["last_events"].append({"t": e["t"], "text": describe(e)})
 
 
+# ---- the language model's call log (read-only, fail-soft) --------------------------------------------
+class LlmStatus:
+    """Counts the calls in <logs>/llm.jsonl (written by swarm/llm.py) for the header. Reads only what is new; never raises."""
+
+    def __init__(self, folder: str | Path):
+        self.path = Path(folder) / "llm.jsonl"
+        self.offset, self.partial = 0, b""
+        self.calls = self.failed = 0
+        self.latency = 0.0
+        self.last_t = 0
+
+    def summary(self) -> dict | None:
+        try:
+            size = self.path.stat().st_size
+            if size < self.offset:
+                self.offset, self.partial = 0, b""
+                self.calls = self.failed = 0
+                self.latency = 0.0
+            if size > self.offset:
+                with self.path.open("rb") as f:
+                    f.seek(self.offset)
+                    chunk = f.read(size - self.offset)
+                self.offset += len(chunk)
+                lines = (self.partial + chunk).split(b"\n")
+                self.partial = lines.pop()
+                for raw in lines:
+                    try:
+                        e = json.loads(raw.decode("utf-8", errors="replace"))
+                    except ValueError:
+                        continue
+                    if not isinstance(e, dict) or e.get("kind") != "llm_call":
+                        continue
+                    self.calls += 1
+                    if not e.get("ok"):
+                        self.failed += 1
+                    self.latency += float(e.get("latency") or 0) if isinstance(e.get("latency"), (int, float)) else 0.0
+                    self.last_t = max(self.last_t, num(e.get("t")))
+        except OSError:
+            return None
+        except Exception:
+            pass
+        if not self.calls:
+            return None
+        return {"calls": self.calls, "failed": self.failed, "avg_latency": round(self.latency / self.calls, 2), "last_t": self.last_t}
+
+
 # ---- the game side (read-only) ------------------------------------------------------------------------
 class ReadOnlyClient:
     """The only door to the game: it has a get() and nothing else, so nothing here can change the game."""
@@ -590,6 +640,7 @@ class Observatory:
                  board: BoardReader | None = None):
         self.board = board or BoardReader(None)
         self.tail = LogTail(logs)
+        self.llm = LlmStatus(logs)
         self.events: deque = deque(maxlen=KEEP_EVENTS)
         self.tally = Tally()
         self.state_path = state
@@ -698,7 +749,7 @@ class Observatory:
             wanted = every[:8]
             news["wanted"] = wanted
             feed = [{"t": e["t"], "agent": e["agent"], "kind": e["event"], "persona": agents.get(e["agent"], {}).get("persona"),
-                     "text": describe(e)} for e in events[-1500:] if e["event"] not in NOISE][-600:]
+                     "text": describe(e), "quote": e["event"] == "diary"} for e in events[-1500:] if e["event"] not in NOISE][-600:]
             feed.reverse()
             counters = [{"agent": n, **{k: v for k, v in agents[n].items() if k in ("persona", "attacks", "net_loot", "colonies")}}
                         for n in names]
@@ -707,7 +758,8 @@ class Observatory:
                     "map": {"available": self.universe.available, "note": self.universe.note, "systems": systems,
                             "scanned": len(self.universe.systems)},
                     "newspaper": news, "feed": feed, "board": self._board_state(agents, every),
-                    "leaderboard": {"available": bool(self.universe.highscore), "rows": leader, "agents": counters}}
+                    "leaderboard": {"available": bool(self.universe.highscore), "rows": leader, "agents": counters},
+                    "llm": self.llm.summary()}
 
 
 # ---- the web server -----------------------------------------------------------------------------------
@@ -854,6 +906,7 @@ select,input{background:var(--panel);border:1px solid var(--line);color:var(--te
 .row{padding:5px 0;border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:baseline}.row .t{color:var(--dim);font-variant-numeric:tabular-nums;flex:none}.row .a{font-weight:600}
 .row .kd{width:8px;height:8px;border-radius:50%;flex:none;align-self:center;background:var(--c,var(--dim))}
 .row .body{min-width:0;overflow-wrap:anywhere}
+.row .quote{font-style:italic;border-left:3px solid var(--taunt);padding-left:8px}.row .quote b{font-style:normal;font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--dim);margin-right:6px}
 .tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:8px;background:var(--panel);margin-top:8px}
 table{border-collapse:collapse;width:100%;min-width:760px}th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
 th{color:var(--dim);font-weight:600;font-size:12px;background:var(--panel2);position:sticky;top:0}td.n{text-align:right;font-variant-numeric:tabular-nums}
@@ -915,7 +968,7 @@ function kindColor(k){k=String(k);
   if(/bounty/.test(k))return "var(--bounty)";
   if(/trade|supply|recycle/.test(k))return "var(--offer)";
   if(/colony|expand|registered|class/.test(k))return "var(--want)";
-  if(/board|lesson/.test(k))return "var(--taunt)";
+  if(/board|lesson|diary|voice/.test(k))return "var(--taunt)";
   if(/defend|fleet/.test(k))return "var(--alliance)";
   return "var(--dim)"}
 let S=null,tab="map",gfilter=null;
@@ -967,7 +1020,8 @@ function drawFeed(){
   const rows=$("rows");rows.replaceChildren();let shown=0;
   for(const f of S.feed){if(fa&&f.agent!==fa||fp&&f.persona!==fp||fk&&f.kind!==fk||ft&&!(f.agent+" "+f.text).toLowerCase().includes(ft))continue;
     const r=el("div","row");r.style.setProperty("--c",kindColor(f.kind));const d=el("span","kd");d.title=f.kind;
-    const body=el("span","body");const a=el("span","a",f.agent);a.style.color=COLORS[f.persona]||COLORS.other;body.append(a," ",f.text);
+    const body=el("span","body");const a=el("span","a",f.agent);a.style.color=COLORS[f.persona]||COLORS.other;
+    if(f.quote){const q=el("span","quote");q.appendChild(el("b","","Diary"));q.append("\u201c"+f.text+"\u201d");body.append(a," ",q)}else body.append(a," ",f.text);
     r.append(d,el("span","t",when(f.t)),body);rows.appendChild(r);if(++shown>=300)break}}
 // ---- galaxy board: the cards of the board page
 function lot(label,obj){const box=el("div","lot");box.appendChild(el("small","",label));
@@ -1031,7 +1085,7 @@ function drawBoard(){
   else b.agents.forEach(a=>add([a.agent,a.persona||"?",a.attacks,a.net_loot,a.colonies],a.persona||"other"));
   wrap.appendChild(t);box.appendChild(wrap)}
 function draw(){drawMap();drawNews();drawFeed();drawGalaxyBoard();drawBoard();
-  $("status").textContent=`${S.events_in_memory} events - last at ${S.latest_event?when(S.latest_event):"never"} - map ${S.map.available?"ok":"unavailable"}`}
+  $("status").textContent=`${S.events_in_memory} events - last at ${S.latest_event?when(S.latest_event):"never"} - map ${S.map.available?"ok":"unavailable"}${S.llm?` - LLM ${S.llm.calls} calls${S.llm.failed?` (${S.llm.failed} failed)`:""}, avg ${S.llm.avg_latency} s`:""}`}
 async function load(){try{const r=await fetch("/api/state");const j=await r.json();if(j.error){$("status").textContent="error: "+j.error}else{S=j;draw()}}catch(e){$("status").textContent="cannot reach the observatory"}
   setTimeout(load,((S&&S.refresh)||30)*1000)}
 $("bsort").onchange=()=>S&&drawBoard();

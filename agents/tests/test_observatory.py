@@ -341,6 +341,42 @@ class BoardTabTests(unittest.TestCase):
             self.assertTrue(ob.describe({"t": T, "agent": "a1", **ev}))
 
 
+class DiaryAndLlmTests(unittest.TestCase):
+    def logs(self):
+        d = Path(tempfile.mkdtemp())
+        make_logs(d)
+        with (d / "agent0001.jsonl").open("a") as f:
+            f.write(line(t=T + 40, agent="agent0001", event="diary", text="They took my crystal. I will remember.", about="robbed"))
+        return d
+
+    def test_diary_is_a_quoted_feed_line_and_the_page_knows_how_to_draw_it(self):
+        o = ob.Observatory(self.logs(), "none.json", None)
+        feed = o.state()["feed"]
+        diary = [f for f in feed if f["kind"] == "diary"]
+        self.assertEqual(len(diary), 1)
+        self.assertEqual((diary[0]["text"], diary[0]["quote"]), ("They took my crystal. I will remember.", True))
+        self.assertFalse(any(f["quote"] for f in feed if f["kind"] != "diary"))
+        self.assertIn("Diary", ob.PAGE)
+        self.assertIn("S.llm", ob.PAGE)
+
+    def test_llm_status_from_the_call_log_is_read_only_and_fail_soft(self):
+        d = self.logs()
+        o = ob.Observatory(d, "none.json", None)
+        self.assertIsNone(o.state()["llm"])                                  # no llm.jsonl: nothing shown
+        f = d / "llm.jsonl"
+        f.write_text(line(t=T, kind="llm_call", agent="a", ok=True, latency=2.0) + line(t=T + 1, kind="llm_call", agent="a", ok=False, latency=4.0, error="x")
+                     + "garbage\n" + '{"t": 5, "kind": "llm_ca')
+        st = o.state()
+        self.assertEqual(st["llm"], {"calls": 2, "failed": 1, "avg_latency": 3.0, "last_t": T + 1})
+        self.assertEqual(o.state()["llm"]["calls"], 2)                       # nothing counted twice
+        self.assertEqual(st["events_in_memory"], 7)                          # the call log is not an agent event
+        with f.open("a") as h:
+            h.write('ll", "ok": true, "latency": 6.0}\n')
+        self.assertEqual(o.state()["llm"]["calls"], 3)
+        f.write_text("")                                                     # emptied: starts again
+        self.assertIsNone(o.state()["llm"])
+
+
 class ServerTests(unittest.TestCase):
     def test_serves_the_page_and_the_state_and_refuses_writes(self):
         d = Path(tempfile.mkdtemp())

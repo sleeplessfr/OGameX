@@ -43,7 +43,7 @@ def clock(t: float) -> str:
     return datetime.fromtimestamp(t).strftime("%d %H:%M")
 
 
-def summarize(events: list[dict], personas: dict[str, str] | None = None) -> str:
+def summarize(events: list[dict], personas: dict[str, str] | None = None, llm_calls: list[dict] | None = None) -> str:
     out: list[str] = []
     if not events:
         return "No events found. Are you in the agents folder, and are the agents running?\n"
@@ -412,6 +412,8 @@ def summarize(events: list[dict], personas: dict[str, str] | None = None) -> str
         out.append("  none")
     out.append("")
 
+    out += llm_section(events, llm_calls or [])
+
     out.append("ERRORS")
     errs = [e for e in events if e["event"] in ("api_error", "error", "giving_up")]
     if errs:
@@ -433,6 +435,51 @@ def summarize(events: list[dict], personas: dict[str, str] | None = None) -> str
     if not others:
         out.append("  none")
     return "\n".join(out) + "\n"
+
+
+def read_llm_calls(log_dir: Path, since: float = 0.0) -> list[dict]:
+    """The calls in <logs>/llm.jsonl (swarm/llm.py). Missing file or broken lines: fewer calls, never an error."""
+    calls = []
+    try:
+        with (log_dir / "llm.jsonl").open(encoding="utf-8", errors="replace") as f:
+            for raw in f:
+                try:
+                    e = json.loads(raw)
+                except ValueError:
+                    continue
+                if isinstance(e, dict) and e.get("kind") == "llm_call" and (e.get("t") or 0) >= since:
+                    calls.append(e)
+    except OSError:
+        pass
+    return calls
+
+
+def llm_section(events: list[dict], calls: list[dict]) -> list[str]:
+    """LLM: calls, failures, latency, and what the voice did with the answers (only when a language model was used)."""
+    rewritten = [e for e in events if e["event"] == "voice_post"]
+    diary = [e for e in events if e["event"] == "diary"]
+    if not (calls or rewritten or diary):
+        return []
+    out = ["LLM (the inner voice: text only, it changes no decision; see llm.jsonl for every prompt and answer)"]
+    if calls:
+        failed = [c for c in calls if not c.get("ok")]
+        lat = [float(c["latency"]) for c in calls if c.get("ok") and isinstance(c.get("latency"), (int, float))]
+        tokens = sum(int(c["tokens"]) for c in calls if isinstance(c.get("tokens"), int))
+        out.append(f"  {len(calls)} calls, {len(failed)} failed, average latency {sum(lat) / len(lat):.1f} s"
+                   f" (slowest {max(lat):.1f} s), {tokens:,} tokens reported" if lat else
+                   f"  {len(calls)} calls, {len(failed)} failed, no answer in time")
+        for why, n in Counter(str(c.get("error", ""))[:50] for c in failed).most_common(3):
+            out.append(f"    failed {n}x: {why}")
+        for purpose, n in Counter(str(c.get("purpose", "?")).split(":")[0] for c in calls).most_common():
+            out.append(f"    {n}x {purpose}")
+    else:
+        out.append("  no call log found (llm.jsonl)")
+    out.append(f"  {len(rewritten)} board posts rewritten, {len(diary)} diary lines")
+    for e in (rewritten + diary)[-4:]:
+        what = f"{e.get('kind')} post: {e.get('text')}" if e["event"] == "voice_post" else f"diary: {e.get('text')}"
+        out.append(f"    {clock(e['t'])} {e['agent']} {what}"[:200])
+    out.append("")
+    return out
 
 
 def moons_section(events: list[dict]) -> list[str]:
@@ -493,7 +540,7 @@ def main() -> int:
         print(f"No folder named {args.logs!r} here. Run this from the agents folder (the one with run_swarm.py).", file=sys.stderr)
         return 1
     since = time.time() - args.hours * 3600 if args.hours > 0 else 0.0
-    text = summarize(read_events(log_dir, since), personas_from_state(Path(args.state)))
+    text = summarize(read_events(log_dir, since), personas_from_state(Path(args.state)), read_llm_calls(log_dir, since))
     Path(args.out).write_text(text, encoding="utf-8")
     print(text)
     print(f"(also saved to {args.out})")

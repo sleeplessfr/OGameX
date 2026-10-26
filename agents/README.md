@@ -327,10 +327,48 @@ REVENGE in the report. The Board tab shows the same cards as the board's own pag
 newspaper has a "Wanted" section with every bounty and what became of it (open, claimed, confirmed, paid, unpaid, expired). Without `--board` nothing here
 does anything.
 
+## The inner voice: a local language model (optional, text only)
+
+Off by default. With it on, each agent gets a short **character sheet** (a name, temperament words taken from its personality
+knobs, a one-line backstory; always the same for the same agent) and a small **voice**. The language model NEVER touches the
+game: it cannot build, attack or trade, and the rules decide everything exactly as before. It only writes text:
+
+1. **Board posts**: when the rules have decided a WARNING, REVENGE, BOUNTY, OFFER, TAUNT or CLAIM post, the model may put
+   its `text` in the agent's own words (25 words at most). The structured `data` is never changed. An answer is thrown away if it is
+   empty, too long, contains markup, or has a number or coordinate that is not in the original post.
+2. **Diary**: after a notable event (robbed, a big raid won, colony founded, expedition result, fleet saved, trade completed) the
+   agent writes one line. The last 20 are kept in its memory file, logged as `diary` events and shown in the observatory Feed
+   as a quote. The header of the observatory shows the number of LLM calls and the average latency.
+
+Each agent asks for at most one voice request per 5 minutes. A post never waits for the model for more than about a second:
+if the rewrite is not ready it goes out in the rules' words (a late rewrite is only used if the same post is tried again, for
+example after the board was down), so with a slow model many posts stay original. The diary is not time critical and works fine slowly.
+
+**Start LM Studio's server**: load one model (for instance gpt-oss 20b), open the Developer tab, start the local server
+(default `http://localhost:1234`), then:
+
+```
+python run_swarm.py --count 20 --board http://localhost:8765 --llm http://localhost:1234/v1 --llm-model <the model name LM Studio shows>
+```
+
+- `--llm fake` answers from templates without any server: use it first to see the plumbing (posts get a short opener, the diary fills, `logs/llm.jsonl` is written).
+- `--llm-model NAME` the model to ask for. `--llm-timeout 60` seconds to wait for one answer.
+- `--llm-max-per-hour 120` budget for ALL agents together; when it is used up the agents simply keep their own words.
+- One request is in flight at a time (all agents share the process and the GPU). Urgent talk (warnings, revenge, bounties) goes before
+  routine chatter; a request that waits more than 10 minutes in the queue is dropped. Any failure (server off, timeout, bad
+  answer) just means "no rewrite / no diary line"; the agents never stop or wait for it.
+- `logs/llm.jsonl` has every call (agent, purpose, prompt, answer, latency, tokens when given). `python summarize_logs.py` adds an LLM
+  section: calls, failures, average latency, posts rewritten, diary lines.
+
+Honest notes: this was tested only against a fake server, not on a real GPU. How fast gpt-oss 20b or qwen2.5-coder 14b answers on a Radeon VII
+(Vulkan), and whether 20 agents fit in the budget, is unknown until you try; watch the latency in the observatory header and in the report.
+Small models sometimes ignore the word limit or change a number; those answers are rejected and cost a call.
+The server address may be any `http://` address (it is not limited to this computer like the board).
+
 ## Not built yet
 
 The scrap merchant, alliances (the board has an ALLIANCE kind but no agent uses it yet), jump gate use by agents, defending colonies, other retaliation than the revenge join, and LLM-driven
-decisions. The brain is rule-based; the personas are the knobs; learning so far is the risk lesson, opponent memory and the
+decisions (the LLM so far only writes text: see the inner voice). The brain is rule-based; the personas are the knobs; learning so far is the risk lesson, opponent memory and the
 fight margin bandit above.
 
 ## Tests

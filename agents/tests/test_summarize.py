@@ -55,6 +55,34 @@ class SummarizeTests(unittest.TestCase):
         self.assertEqual(len(sl.read_events(d, since=80)), 1)          # --hours filter
         self.assertEqual(sl.personas_from_state(d / "missing.json"), {})
 
+class LlmReportTests(unittest.TestCase):
+    def test_section_counts_calls_failures_latency_rewrites_and_diary(self):
+        t = 1_700_000_000
+        events = [ev(t, "a1", "build", what="metal_mine"),
+                  ev(t + 1, "a1", "voice_post", kind="WARNING", original="Robbed of 5.", text="Hey, robbed of 5."),
+                  ev(t + 2, "a1", "diary", text="They took it all.", about="robbed"),
+                  ev(t + 3, "a2", "diary", text="A new home.", about="colony")]
+        calls = [{"t": t, "kind": "llm_call", "agent": "a1", "purpose": "rewrite:WARNING", "ok": True, "latency": 2.0, "tokens": 100},
+                 {"t": t, "kind": "llm_call", "agent": "a1", "purpose": "diary", "ok": True, "latency": 4.0, "tokens": 50},
+                 {"t": t, "kind": "llm_call", "agent": "a2", "purpose": "diary", "ok": False, "latency": 60.0, "error": "timed out"}]
+        text = sl.summarize(events, None, calls)
+        self.assertIn("LLM (", text)
+        self.assertIn("3 calls, 1 failed, average latency 3.0 s (slowest 4.0 s), 150 tokens reported", text)
+        self.assertIn("failed 1x: timed out", text)
+        self.assertIn("1 board posts rewritten, 2 diary lines", text)
+        self.assertIn("diary: A new home.", text)
+        self.assertNotIn("LLM (", sl.summarize(events[:1]))                # no language model, no section
+
+    def test_reads_the_call_log_and_survives_a_missing_or_broken_one(self):
+        d = Path(tempfile.mkdtemp())
+        self.assertEqual(sl.read_llm_calls(d), [])
+        (d / "llm.jsonl").write_text(json.dumps({"t": 100, "kind": "llm_call", "ok": True}) + "\n{broken\n" +
+                                     json.dumps({"t": 10, "kind": "llm_call", "ok": True}) + "\n")
+        self.assertEqual(len(sl.read_llm_calls(d)), 2)
+        self.assertEqual(len(sl.read_llm_calls(d, since=50)), 1)
+        self.assertEqual(sl.read_events(d), [])                             # the call log is not an agent log
+
+
 class RecyclingReportTests(unittest.TestCase):
     def test_report_counts_trips_haul_and_skips(self):
         t = 1_700_000_000
