@@ -147,6 +147,8 @@ class LLMClient:
                 answer = fake_answer(system, prompt)
             else:
                 answer, tokens = self._http(system, prompt)
+                if not (answer or "").strip():     # some reasoning models now and then return an empty message: one more try
+                    answer, tokens = self._http(system, prompt)
         except Exception as e:
             error = f"{type(e).__name__}: {str(e)[:100]}"
         answer = answer.strip() if isinstance(answer, str) else answer

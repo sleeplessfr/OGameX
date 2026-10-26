@@ -44,3 +44,18 @@ class LlmPageTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RetryOnEmptyTest(unittest.TestCase):
+    def test_empty_answer_is_asked_again_once(self):
+        from swarm import llm as L
+        with tempfile.TemporaryDirectory() as d:
+            c = L.LLMClient("http://localhost:1/v1", "m", log_dir=d)
+            calls = []
+
+            def fake_http(system, prompt):
+                calls.append(1)
+                return ("", 5) if len(calls) == 1 else ("Hello there.", 7)
+            c._http = fake_http
+            self.assertEqual(c._one("a1", "diary", "s", "p", L.NORMAL, c.clock(), 60), "Hello there.")
+            self.assertEqual(len(calls), 2)

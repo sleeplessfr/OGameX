@@ -18,7 +18,7 @@ from . import llm as L
 from . import voice as V
 
 VOICE_EVERY = 300.0       # seconds between two voice requests of one agent
-GRACE = 1.0               # seconds a board post may wait for a rewrite that is almost ready
+GRACE = 20.0              # seconds a board post may wait for its rewrite (a local model needs 6-12 s; a rewrite that arrives later is never used)
 READY_KEEP = 20
 READY_TTL = 3600.0
 PENDING_DIARY = 3
