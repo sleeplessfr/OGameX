@@ -103,7 +103,7 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
         self.planets_owned = 1
         self.memory_levels: dict = {}   # research levels from the latest /status (for the doctrine)
         self.alert_until = 0.0           # server time until which a hostile fleet keeps us alert
-        self.defend_cooldown_until = 0.0
+        self._defend_cd: dict[int, float] = {}   # planet id -> no new defence order before this time
         self._seen_threats: set[int] = set()
         self.dark_matter = 0     # from /status each round
         self.now = 0.0           # server time of the current round
@@ -210,6 +210,10 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
             have = dict(planet["resources"])
             if planet is home:
                 self._prepare_defense(home, have, threats)   # before the economy spends the stock the raider is after
+            else:   # a colony an attack is flying to arms itself too (a new colony is the softest target there is)
+                mine = [t for t in threats if t.is_attack and t.target is not None and t.target == self._coord_tuple(planet)]
+                if mine:
+                    self._prepare_defense(planet, have, mine)
             self._economy_saving = False
             self._economy_reserve = {}
             self._economy_forced = False
@@ -300,11 +304,18 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
     def _on_guard(self) -> bool:
         return any(self.now - when < RECENT_RAID for when in self.memory.aggressors.values())
 
+    def _coord_tuple(self, planet: dict) -> tuple[int, int, int] | None:
+        c = planet.get("coordinates") or {}
+        try:
+            return (int(c["galaxy"]), int(c["system"]), int(c["position"]))
+        except (KeyError, TypeError, ValueError):
+            return None
+
     def _prepare_defense(self, home: dict, have: dict, threats: list) -> None:
         """Turn part of the stock into defence units before the fleet lands: it would be stolen otherwise."""
         known = {c for c, when in self.memory.aggressors.items() if self.now - when < AGGRESSOR_MEMORY}
         share = defence_share(self.persona, threats, known, self._on_guard())
-        if share <= 0 or self.now < self.defend_cooldown_until or home["unit_queue"]:
+        if share <= 0 or self.now < self._defend_cd.get(home["id"], 0.0) or home["unit_queue"]:
             return
         units = self.client.get(f"/planets/{home['id']}/units")["units"]
         coming = [x.arrives_in for x in threats if x.is_attack]
@@ -312,7 +323,7 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
         if pick is None:
             return
         name, amount = pick
-        self.defend_cooldown_until = self.now + DEFEND_COOLDOWN
+        self._defend_cd[home["id"]] = self.now + DEFEND_COOLDOWN
         try:
             self.client.post(f"/planets/{home['id']}/units", {"machine_name": name, "amount": amount})
         except ApiError as e:
@@ -328,7 +339,7 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
             why = f"{first.kind} on its way from {':'.join(map(str, first.origin))}, arrives in {_r(first.arrives_in)} s"
         else:
             why = "on guard after a recent raid: rearming"
-        self.log("defend", what=name, amount=amount, why=why)
+        self.log("defend", what=name, amount=amount, planet=home["id"], why=why)
 
     def _maybe_trade(self, planet: dict, choice, have: dict) -> bool:
         """Call the merchant when stuck waiting with a big surplus of something else (see trade.py). True = traded."""

@@ -28,6 +28,7 @@ class Threat:
     kind: str                   # the mission name
     arrives_in: float           # seconds
     origin: tuple[int, int, int]
+    target: tuple[int, int, int] | None = None   # the planet it flies to (None = not known)
 
     @property
     def is_attack(self) -> bool:
@@ -46,8 +47,10 @@ def find_threats(missions: list[dict]) -> list[Threat]:
         if kind in HOSTILE and harmless_fleet(m.get("ships")):   # no warship on board: it cannot hurt planet or fleet
             continue
         src = m.get("from") or {}
+        dst = m.get("to") or {}
+        target = (int(dst.get("galaxy") or 0), int(dst.get("system") or 0), int(dst.get("position") or 0)) if dst else None
         found.append(Threat(int(m["id"]), kind, float(m.get("seconds_remaining") or 0),
-                            (int(src.get("galaxy") or 0), int(src.get("system") or 0), int(src.get("position") or 0))))
+                            (int(src.get("galaxy") or 0), int(src.get("system") or 0), int(src.get("position") or 0)), target))
     return found
 
 
