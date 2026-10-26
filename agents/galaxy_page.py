@@ -80,6 +80,27 @@ def fleets_from(events: list[dict], origin_of, now: float, persona_of=lambda a: 
     return live[:limit]
 
 
+def relations_for_map(events: list[dict], main_of: dict, user_of: dict) -> list[dict]:
+    """Pacts and alliances between two players whose main planets are known, as lines for the map: [{a, b, step, names}].
+    One line per pair (the strongest step seen), never raises."""
+    try:
+        from swarm.diplomacy import relations_from_events
+        out: dict[tuple, dict] = {}
+        for r in relations_from_events(events):
+            if r["step"] not in ("pact", "alliance"):
+                continue
+            me, other = user_of.get(r["agent"]), r["with"]
+            a, b = main_of.get(me), main_of.get(other)
+            if not a or not b or a == b:
+                continue
+            key = tuple(sorted((str(me), str(other))))
+            if key not in out or r["step"] == "alliance":
+                out[key] = {"a": a, "b": b, "step": r["step"], "names": [me, other]}
+        return list(out.values())
+    except Exception:
+        return []
+
+
 DEFENCE = ("rocket_launcher", "light_laser", "heavy_laser", "gauss_cannon", "ion_cannon", "plasma_turret", "small_shield_dome",
            "large_shield_dome", "anti_ballistic_missile", "interplanetary_missile")
 
@@ -261,8 +282,10 @@ function draw(ts){requestAnimationFrame(draw);const dpr=devicePixelRatio;g.setTr
           if(dk){const lg=Math.log10(sl.debris+1),m=Math.max(1,Math.min(8,Math.round((lg-2.6)*2.4))),scale=Math.max(.35,Math.min(1,(lg-2.5)/3));for(let i=0;i<m;i++){const a=i*2.4+sl.position,rr=R*scale*(.3+((i*37)%10)/12),sz=(2.4+((i*11)%4)*.6)*(.5+scale*.9),cx=p.x+o.x+db.x+Math.cos(a)*rr,cy=p.y+o.y+db.y+Math.sin(a)*rr*.7;
             g.save();g.globalAlpha=mix*.95;g.translate(cx,cy);g.rotate(i*1.3);g.drawImage(dk,-sz/2,-sz/2,sz,sz);g.restore()}g.globalAlpha=mix}
           else{g.fillStyle="#c9a27a";for(let i=0;i<n;i++){const a=i*2.4+sl.position,rr=R*(.35+((i*37)%10)/10);g.globalAlpha=mix*(.45+.4*((i*13)%5)/5);g.beginPath();g.arc(p.x+o.x+db.x+Math.cos(a)*rr,p.y+o.y+db.y+Math.sin(a)*rr*.6,.7,0,7);g.fill()}g.globalAlpha=mix}}
+        if(sl.owner&&D.tags&&D.tags[sl.owner]){g.strokeStyle=tagColor(D.tags[sl.owner]);g.lineWidth=.9;g.globalAlpha=mix*.9;g.beginPath();g.arc(p.x+o.x,p.y+o.y,pr+1.6,0,7);g.stroke();g.globalAlpha=mix}
         if(sl.colony&&sl.owner){g.fillStyle="#05070f";g.beginPath();g.arc(p.x+o.x,p.y+o.y,1.2,0,7);g.fill()}
         if(cam.k>3.5){g.fillStyle="#7d8bb0";g.font=`${11/cam.k}px system-ui`;g.textAlign="center";g.fillText(""+sl.position,p.x+o.x*(1+9/orbitR(sl.position)),p.y+o.y*(1+9/orbitR(sl.position))+4/cam.k)}g.globalAlpha=1})}});
+  if(!hidden.has("pacts"))(D.relations||[]).forEach(r=>{const A=pos(r.a[1]),B=pos(r.b[1]);g.save();g.globalAlpha=.55;g.strokeStyle=r.step==="alliance"?"#7b9cff":"#5eead4";g.lineWidth=(r.step==="alliance"?1.6:1)/Math.max(1,cam.k*.7);g.setLineDash(r.step==="alliance"?[]:[3/cam.k*1.4,4/cam.k*1.4]);g.beginPath();g.moveTo(A.x,A.y);const mx=(A.x+B.x)/2*.8,my=(A.y+B.y)/2*.8;g.quadraticCurveTo(mx,my,B.x,B.y);g.stroke();g.restore()});
   D.fleets.forEach(f=>{if(hidden.has(f.kind))return;const ph=phase(f,now);if(ph.leg==="gone"||ph.leg==="wait"||(!showBack&&(ph.leg==="back"||ph.leg==="hold"||ph.leg==="done"&&f.back)))return;
     const [A,B]=ends(f,mix);if(A.x===B.x&&A.y===B.y)return;const L=Math.hypot(B.x-A.x,B.y-A.y);const bulge=bulgeOf(f,A,B);
     const fade=ph.fade==null?1:Math.max(0,ph.fade);const back=ph.leg==="back"||ph.leg==="done"&&f.back;
@@ -274,6 +297,7 @@ function draw(ts){requestAnimationFrame(draw);const dpr=devicePixelRatio;g.setTr
     else if(ph.leg==="hold"){g.globalAlpha=blink;g.fillStyle=f.color;g.beginPath();g.arc(B.x,B.y,4/Math.max(1,cam.k*.6),0,7);g.fill()}
     g.restore()});
   g.restore()}
+function tagColor(t){let h=0;for(const c of t)h=(h*31+c.charCodeAt(0))%360;return `hsl(${h},80%,65%)`}
 function bulgeOf(f,A,B){const L=Math.hypot(B.x-A.x,B.y-A.y);return Math.min(40,L*.18)*(f.agent&&f.agent.charCodeAt(f.agent.length-1)%2?1:-1)}
 function nearCurve(f,A,B,mx,my){const bl=bulgeOf(f,A,B);let bd=1e9;for(let i=0;i<=28;i++){const q=bez(A,B,i/28,bl),sp=w2s(q.x,q.y),d=Math.hypot(sp.x-mx,sp.y-my);if(d<bd)bd=d}return bd}
 function hoverAt(mx,my){const tip=$("tip");if(!D||drag){tip.style.display="none";return}
@@ -293,6 +317,7 @@ function lists(){const now=Date.now()/1000+offset;const box=$("list");box.innerH
   if(!n)box.innerHTML+='<div class="dim">no fleet in flight right now</div>'}
 function legend(){const L=$("legend");L.innerHTML="";const kinds=D.missions;Object.keys(kinds).forEach(k=>{const lab=document.createElement("label");const c=document.createElement("input");c.type="checkbox";c.checked=!hidden.has(k);
   c.onchange=()=>{c.checked?hidden.delete(k):hidden.add(k);saveView();lists()};const i=document.createElement("i");i.style.background=kinds[k][1];lab.append(c,i,kinds[k][0]);L.appendChild(lab)});
+  const pl=document.createElement("label");const pc=document.createElement("input");pc.type="checkbox";pc.checked=!hidden.has("pacts");pc.onchange=()=>{pc.checked?hidden.delete("pacts"):hidden.add("pacts");saveView()};const pi=document.createElement("i");pi.style.background="#5eead4";pl.append(pc,pi,"pacts & alliances");L.appendChild(pl);
   const bl=document.createElement("label");const bc=document.createElement("input");bc.type="checkbox";bc.checked=showBack;bc.onchange=()=>{showBack=bc.checked;saveView();lists()};bl.append(bc,document.createTextNode(" return trips"));bl.style.marginTop="4px";L.appendChild(bl);
   const p=document.createElement("div");p.className="dim";p.style.marginTop="6px";p.innerHTML=Object.keys(COLORS).map(k=>`<span style="color:${COLORS[k]}">●</span> ${k}`).join("<br>")+'<br><span style="color:#b9c0d0">●</span> moon<br>debris field (from the logs)';L.appendChild(p)}
 let first=true;

@@ -57,3 +57,19 @@ class Composition(unittest.TestCase):
         out = {f["kind"]: f for f in G.fleets_from(ev, lambda a: [1, 2, 4], 1010)}
         self.assertEqual(out["attack"]["fleet"], {"light_fighter": 7, "small_cargo": 106})
         self.assertEqual(out["spy"]["fleet"], {"espionage_probe": 3}); self.assertEqual(out["recycle_sent"]["fleet"], {"recycler": 12})
+
+
+class RelationsForMap(unittest.TestCase):
+    def test_pact_and_alliance_lines(self):
+        import galaxy_page as G
+        ev = [{"event": "diplo_step", "agent": "agent0001", "with": "Bob", "to": "pact", "t": 1},
+              {"event": "diplo_step", "agent": "agent0002", "with": "Cy", "to": "friendly", "t": 1},
+              {"event": "diplo_step", "agent": "agent0003", "with": "Dee", "to": "alliance", "t": 1}]
+        main = {"Al": [1, 5, 3], "Bob": [1, 9, 4], "Cy": [1, 2, 2], "Eve": [1, 7, 7], "Dee": [1, 8, 8]}
+        users = {"agent0001": "Al", "agent0002": "Eve", "agent0003": "Eve"}
+        out = G.relations_for_map(ev, main, users)
+        self.assertEqual({(r["step"]) for r in out}, {"pact", "alliance"})
+        self.assertEqual(len(out), 2)
+    def test_never_raises(self):
+        import galaxy_page as G
+        self.assertEqual(G.relations_for_map([{"event": 5}], {}, {}), [])

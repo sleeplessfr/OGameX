@@ -774,7 +774,9 @@ class Observatory:
             events = list(self.events)
         fleets = galaxy_page.fleets_from(events, lambda ag: main_of.get(user_of.get(ag)), now,
                                          lambda ag: (st["agents"].get(ag) or {}).get("persona"))
-        return {"now": now, "systems": st["map"]["systems"], "fleets": fleets,
+        tags = {r["username"]: r.get("alliance_tag") for r in self.universe.highscore if r.get("username") and r.get("alliance_tag")}
+        return {"now": now, "systems": st["map"]["systems"], "fleets": fleets, "tags": tags,
+                "relations": galaxy_page.relations_for_map(events, main_of, user_of),
                 "debris": galaxy_page.debris_from(events, now),
                 "agents": {n: {"last_events": a.get("last_events", [])[-6:]} for n, a in st["agents"].items()},
                 "missions": {k: [v[0], v[1]] for k, v in galaxy_page.MISSIONS.items()}}
