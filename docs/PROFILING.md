@@ -34,6 +34,22 @@ Start over with `docker compose exec ogamex-app php artisan api:profile-clear`.
 Remove the line `API_PROFILE=true` (or set it to `false`), run `docker compose restart` and
 `docker compose run --rm ogamex-app php artisan optimize:clear` again. Delete the log with `api:profile-clear`.
 
+## Speed settings
+
+What the server owner applied after the first measurements (per request CPU is the limit, not the database):
+
+- **OPcache sizes**: `php/zz-opcache.ini` (`opcache.max_accelerated_files=30000`, `opcache.memory_consumption=256`,
+  `opcache.interned_strings_buffer=16`), mounted into the app container by this line of `docker-compose.yml`
+  (service `ogamex-app`): `- ./php/zz-opcache.ini:/usr/local/etc/php/conf.d/zz-opcache.ini`.
+  OPcache itself must be on in the image (the compose file builds the dev image with `OPCACHE_ENABLE: "0"`; check
+  `docker compose exec ogamex-app php -i | grep opcache.enable` if the ini seems to have no effect).
+- **Config and route cache**: `docker compose exec ogamex-app php artisan config:cache` and `php artisan route:cache`.
+  Run `php artisan optimize:clear` before changing `.env` or routes, then cache again.
+- **Optional trial, not applied by default**: `CACHE_STORE=file` in `.env`. The default cache store is the database, and the
+  rate limiter and other cache reads cost a `select * from cache` query each (about 4 per request). Switching to `file`
+  removes those queries; run `php artisan config:cache` again after the change and compare with the profiler.
+  Nothing in the code depends on it, so it is easy to revert.
+
 ## Code-reading suspects (not measured yet)
 
 These come from reading the code only. The numbers will tell which one is real.
