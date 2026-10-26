@@ -775,6 +775,7 @@ class Observatory:
         fleets = galaxy_page.fleets_from(events, lambda ag: main_of.get(user_of.get(ag)), now,
                                          lambda ag: (st["agents"].get(ag) or {}).get("persona"))
         return {"now": now, "systems": st["map"]["systems"], "fleets": fleets,
+                "debris": galaxy_page.debris_from(events, now),
                 "agents": {n: {"last_events": a.get("last_events", [])[-6:]} for n, a in st["agents"].items()},
                 "missions": {k: [v[0], v[1]] for k, v in galaxy_page.MISSIONS.items()}}
 

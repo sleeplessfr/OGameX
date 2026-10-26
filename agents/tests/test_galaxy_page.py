@@ -32,3 +32,12 @@ class Detail(unittest.TestCase):
             o = observatory.Observatory(d, d + "/s.json")
             out = o.planet_detail(7, "someone", "Home")
             self.assertTrue(out["public"])
+
+class Debris(unittest.TestCase):
+    def test_battle_then_recycle(self):
+        ev = [{"t": 100, "event": "battle", "at": "1:5:3", "debris": 90000},
+              {"t": 200, "event": "recycle_sent", "at": "1:5:3", "debris": 90000, "haul": 30000},
+              {"t": 300, "event": "battle", "at": "1:6:1", "debris": 500}]
+        out = G.debris_from(ev, 400)
+        self.assertEqual([(d["at"], d["amount"]) for d in out], [([1, 5, 3], 60000)])
+        self.assertEqual(G.debris_from(ev, 400 + 90000), [])

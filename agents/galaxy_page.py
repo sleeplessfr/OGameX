@@ -66,6 +66,41 @@ DEFENCE = ("rocket_launcher", "light_laser", "heavy_laser", "gauss_cannon", "ion
            "large_shield_dome", "anti_ballistic_missile", "interplanetary_missile")
 
 
+DEBRIS_KEEP_S = 24 * 3600.0
+
+
+def debris_from(events: list[dict], now: float) -> list[dict]:
+    """Debris fields as the agents last knew them (the game's galaxy view does not list them): a battle adds its debris, a recycler
+    trip takes what it hauled, a skipped trip says how much was there. Fields untouched for a day are forgotten."""
+    fields: dict[tuple, list] = {}
+    for e in sorted(events, key=lambda x: x["t"]):
+        kind = e.get("event")
+        if kind not in ("battle", "recycle_sent", "recycle_skipped"):
+            continue
+        c = _coord(e.get("at"))
+        if not c:
+            continue
+        key = tuple(c)
+        try:
+            amount = float(e.get("debris") or 0)
+        except (TypeError, ValueError):
+            amount = 0.0
+        cur = fields.get(key, [0.0, 0.0])
+        if kind == "battle":
+            cur = [cur[0] + amount, e["t"]]
+        elif kind == "recycle_sent":
+            try:
+                haul = float(e.get("haul") or 0)
+            except (TypeError, ValueError):
+                haul = 0.0
+            cur = [max(0.0, (amount or cur[0]) - haul), e["t"]]
+        else:
+            cur = [amount, e["t"]]
+        fields[key] = cur
+    return [{"at": list(k), "amount": int(v[0]), "t": v[1]} for k, v in fields.items()
+            if v[0] >= 1000 and now - v[1] <= DEBRIS_KEEP_S]
+
+
 def planet_view(d: dict) -> dict:
     """The GET /planets/{id} answer, cut into what the map shows: summary, economy, buildings, ships, defence, queues."""
     units = d.get("units") or {}
@@ -121,6 +156,8 @@ const A=74,POWER=.65,MAXSYS=499,POS=[null];
   POS.push({x:Math.cos(th)*r,y:Math.sin(th)*r})}})();   // y points down on the screen: a growing angle turns clockwise
 function pos(s){return POS[Math.max(1,Math.min(POS.length-1,s))]}
 function orbitR(p){return 12+p*4.6}   // slot 1 is close to the star, slot 15 far away
+function moonOff(p){const a=p*2.4-1+.9;return {x:Math.cos(a)*6,y:Math.sin(a)*6}}
+function debrisOff(p){const a=p*2.4-1-.9;return {x:Math.cos(a)*9,y:Math.sin(a)*9}}
 function planetOff(p){const a=p*2.4-1;const r=orbitR(p);return {x:Math.cos(a)*r,y:Math.sin(a)*r}}
 function resize(){cv.width=innerWidth*devicePixelRatio;cv.height=innerHeight*devicePixelRatio}
 addEventListener("resize",resize);resize();
@@ -148,9 +185,10 @@ async function showPlanet(h){const pl=$("pl");pl.style.display="block";$("list")
   pl.innerHTML=`<span class="x" onclick="closePlanet()">\u2715</span><h3>${sl.planet||"planet"}</h3><div class="dim">${1}:${h.sys}:${sl.position} - ${sl.owner||"?"}${sl.agent?` (${sl.agent}, ${sl.persona||"?"})`:""}${sl.moon?" - has a moon":""}</div><div class="dim">loading...</div>`;
   try{const r=await fetch(`/api/planet?id=${sl.planet_id||0}&owner=${encodeURIComponent(sl.owner||"")}&name=${encodeURIComponent(sl.planet||"")}`);const d=await r.json();
     let html=pl.innerHTML.replace('<div class="dim">loading...</div>',"");
+    if(sl.debris&&d.public)html+=`<h4>Debris field here</h4>about ${nf(sl.debris)} metal+crystal (as last known from the logs)`;
     if(d.public){html+=`<p class="dim">${d.note||"public information only"}</p>`}
     else{const f=d.fields||{},rs=d.resources||{},pr=d.production||{},st=d.storage||{};
-      html+=`<h4>Fields</h4>${f.used}/${f.max} used`;
+      if(sl.debris)html+=`<h4>Debris field here</h4>about ${nf(sl.debris)} metal+crystal (as last known from the logs)`;html+=`<h4>Fields</h4>${f.used}/${f.max} used`;
       html+=`<h4>Resources (stock / hourly production / storage)</h4><table><tr><td>metal</td><td>${nf(rs.metal)} / +${nf(pr.metal)} / ${nf(st.metal)}</td></tr><tr><td>crystal</td><td>${nf(rs.crystal)} / +${nf(pr.crystal)} / ${nf(st.crystal)}</td></tr><tr><td>deuterium</td><td>${nf(rs.deuterium)} / +${nf(pr.deuterium)} / ${nf(st.deuterium)}</td></tr><tr><td>energy</td><td>${nf(d.energy)}</td></tr></table>`;
       html+=`<h4>Buildings</h4>${tbl(d.buildings)}<h4>Defence</h4>${tbl(d.defence)}<h4>Ships</h4>${tbl(d.ships)}`;
       html+=`<h4>Building queue</h4>${queueTxt(d.building_queue)}<h4>Unit queue</h4>${queueTxt(d.unit_queue)}`;
@@ -188,6 +226,9 @@ function draw(ts){requestAnimationFrame(draw);const dpr=devicePixelRatio;g.setTr
       i.slots.forEach(sl=>{const o=planetOff(sl.position);g.globalAlpha=mix;g.fillStyle=sl.owner?(COLORS[sl.persona]||COLORS.other):"#334";
         g.beginPath();g.arc(p.x+o.x,p.y+o.y,(sl.owner?3.2:1.4)*Math.min(1,2.2/Math.pow(cam.k,.45)),0,7);g.fill();
         if(sl.battle){g.strokeStyle="#ff4d4d";g.lineWidth=1.2/cam.k;g.beginPath();g.arc(p.x+o.x,p.y+o.y,5.5+Math.sin(ts/120),0,7);g.stroke()}
+        if(sl.moon&&sl.owner){const mo=moonOff(sl.position);g.fillStyle="#b9c0d0";g.beginPath();g.arc(p.x+o.x+mo.x,p.y+o.y+mo.y,Math.max(1.2,1.8*Math.min(1,2.2/Math.pow(cam.k,.45))),0,7);g.fill();g.strokeStyle="rgba(185,192,208,.35)";g.lineWidth=.5/cam.k;g.beginPath();g.arc(p.x+o.x,p.y+o.y,Math.hypot(mo.x,mo.y),0,7);g.stroke()}
+        if(sl.debris){const db=debrisOff(sl.position),n=Math.min(14,4+Math.round(Math.log10(sl.debris+1)*2)),R=2+Math.log10(sl.debris+1);
+          g.fillStyle="#c9a27a";for(let i=0;i<n;i++){const a=i*2.4+sl.position,rr=R*(.35+((i*37)%10)/10);g.globalAlpha=mix*(.45+.4*((i*13)%5)/5);g.beginPath();g.arc(p.x+o.x+db.x+Math.cos(a)*rr,p.y+o.y+db.y+Math.sin(a)*rr*.6,.7,0,7);g.fill()}g.globalAlpha=mix}
         if(sl.colony&&sl.owner){g.fillStyle="#05070f";g.beginPath();g.arc(p.x+o.x,p.y+o.y,1.2,0,7);g.fill()}
         if(cam.k>3.5){g.fillStyle="#7d8bb0";g.font=`${11/cam.k}px system-ui`;g.textAlign="center";g.fillText(""+sl.position,p.x+o.x*(1+9/orbitR(sl.position)),p.y+o.y*(1+9/orbitR(sl.position))+4/cam.k)}g.globalAlpha=1})}});
   D.fleets.forEach(f=>{if(hidden.has(f.kind))return;const ph=phase(f,now);if(ph.leg==="gone"||ph.leg==="wait"||(!showBack&&(ph.leg==="back"||ph.leg==="hold"||ph.leg==="done"&&f.back)))return;
@@ -219,7 +260,7 @@ function legend(){const L=$("legend");L.innerHTML="";const kinds=D.missions;Obje
   const p=document.createElement("div");p.className="dim";p.style.marginTop="6px";p.innerHTML=Object.keys(COLORS).map(k=>`<span style="color:${COLORS[k]}">●</span> ${k}`).join("<br>");L.appendChild(p)}
 let first=true;
 async function load(){try{const r=await fetch("/api/galaxy");const j=await r.json();if(j.error){$("status").textContent="error: "+j.error}else{D=j;offset=j.now-Date.now()/1000;
-  sysInfo={};j.systems.forEach(s=>sysInfo[s.system]=s);j.fleets.forEach(f=>[f.from[1],f.to[1]].forEach(s=>{if(!sysInfo[s])sysInfo[s]={system:s,slots:[]}}));
+  sysInfo={};j.systems.forEach(s=>sysInfo[s.system]=s);(j.debris||[]).forEach(d=>{const si=sysInfo[d.at[1]];if(!si)return;let sl=si.slots.find(x=>x.position===d.at[2]);if(!sl){sl={position:d.at[2],planet:null,owner:null,agent:null,persona:null,colony:false,moon:false,battle:false};si.slots.push(sl)}sl.debris=d.amount});j.fleets.forEach(f=>[f.from[1],f.to[1]].forEach(s=>{if(!sysInfo[s])sysInfo[s]={system:s,slots:[]}}));
   if(first){first=false;legend();fit()}lists();$("status").textContent=`${j.systems.length} systems, ${j.fleets.length} fleets`}}catch(e){$("status").textContent="cannot reach the observatory"}
   setTimeout(load,5000)}
 for(let i=0;i<160;i++)stars.push({x:Math.random(),y:Math.random(),r:Math.random()*1.6+.3,a:Math.random()*.7+.15});
