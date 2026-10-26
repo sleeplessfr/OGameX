@@ -87,3 +87,11 @@ These come from reading the code only. The numbers will tell which one is real.
 
 Not checked: `hasCommander()` / `hasAdmiral()` in `PlayerService` (could hit the database inside the production loop), the web-only
 middleware, and whether PHP-FPM / opcache settings (for example `opcache.validate_timestamps`, JIT) matter.
+
+## Fast cache on every start (`OGAMEX_FAST_CACHE`)
+
+`composer install`, which the game runs on every container start, deletes the cached configuration. So a hand-made
+`php artisan config:cache` is lost at the next restart and the game becomes slow again without any message.
+Add the line `OGAMEX_FAST_CACHE=true` to `.env`: the start-up script then rebuilds the config and route caches itself,
+after `composer install`. When you change `.env` or the routes, just restart the game.
+To go back to the normal behaviour, remove the line and run `php artisan optimize:clear`.

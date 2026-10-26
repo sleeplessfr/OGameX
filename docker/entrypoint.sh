@@ -63,6 +63,11 @@ elif [ "$role" = "app" ]; then
     if [ "$is_production" = true ]; then
         echo "Production environment: Caching configurations..."
         su -s /bin/sh -c "php artisan cache:clear && php artisan config:cache && php artisan route:cache && php artisan view:cache" www-data
+    elif grep -q "^OGAMEX_FAST_CACHE=true" .env; then
+        # Opt-in speed mode for development: `composer install` above deletes the cached config on every start,
+        # so rebuild the config and route caches here. After changing .env, restart the game to pick it up.
+        echo "OGAMEX_FAST_CACHE=true: caching the configuration and the routes..."
+        su -s /bin/sh -c "php artisan config:cache && php artisan route:cache" www-data
     fi
 
     exec php-fpm
