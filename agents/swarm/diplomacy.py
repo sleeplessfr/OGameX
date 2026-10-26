@@ -486,6 +486,8 @@ def hello_template(me: str, other: str, step: str) -> str:
 
 def hello_prompt(text: str, step: str) -> str:
     return (f"TASK: hello\nYou propose to another player: {PHRASE.get(step, step)}. Say it in your own voice, one line. "
+            f"Use your own words and your own temperament (blunt, warm, wary, businesslike...); do NOT start with 'Greetings'. "
+            f"This is only an offer: they have not answered, so never say yes, accepted or agreed. "
             f"Keep every name and number exactly as written.\nTEXT: {text}")
 
 
