@@ -429,3 +429,8 @@ python -m unittest discover -s . -t . -p "test_*.py"
 ```
 
 They run against a small simulated game (`tests/fakegame.py`), not your server.
+
+
+## LLM log page
+
+With the observatory running, open `http://localhost:18766/llm` (your observatory port). It lists every language-model call newest first: agent, purpose, answer, time taken, tokens, and a prompt you can expand. Green USED = the answer was posted or written in a diary; orange NOT USED = answered but rejected (too long, changed numbers...); red FAILED = no answer. Filters by agent, purpose, result and text. Needs `--llm` (or `--llm fake`) on run_swarm.py.

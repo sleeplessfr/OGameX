@@ -27,6 +27,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import llm_page
 from swarm.client import ApiClient, ApiError
 from swarm.boardclient import TIMEOUT as BOARD_TIMEOUT
 
@@ -769,6 +770,16 @@ def make_handler(observatory: Observatory):
             path = self.path.split("?")[0]
             if path in ("/", "/index.html"):
                 self._send(200, PAGE.encode("utf-8"), "text/html; charset=utf-8")
+            elif path in ("/llm", "/llm.html"):
+                self._send(200, llm_page.PAGE.encode("utf-8"), "text/html; charset=utf-8")
+            elif path == "/api/llm":
+                try:
+                    q = self.path.split("?", 1)[1] if "?" in self.path else ""
+                    lim = int(dict(x.split("=", 1) for x in q.split("&") if "=" in x).get("limit", 200))
+                    body = json.dumps(llm_page.llm_view(observatory.tail.folder, lim)).encode("utf-8")
+                except Exception as e:
+                    body = json.dumps({"available": False, "calls": [], "totals": {}, "agents": [], "purposes": [], "error": str(e)[:200]}).encode("utf-8")
+                self._send(200, body, "application/json")
             elif path == "/api/state":
                 try:
                     body = json.dumps(observatory.state()).encode("utf-8")
@@ -941,7 +952,7 @@ tr:last-child td{border-bottom:0}tr.ours td:first-child{box-shadow:inset 3px 0 0
 .empty{color:var(--dim);padding:30px 0}
 @media(max-width:520px){main{padding:12px}.card.reply{margin-left:14px}.top{flex-wrap:wrap}.badges{margin-left:44px;flex-basis:100%;justify-content:flex-start}}
 </style></head><body>
-<header><h1>Observatory</h1><nav id="nav"></nav><span id="status" class="dim"></span></header>
+<header><h1>Observatory</h1><nav id="nav"></nav><a href="/llm" style="color:var(--accent)">LLM log</a><span id="status" class="dim"></span></header>
 <main>
 <section id="map" class="tab on"><div class="legend" id="legend"></div><div id="mapnote" class="warn"></div><div class="systems" id="systems"></div><div id="info" class="dim">Hover a planet.</div></section>
 <section id="news" class="tab"><div class="paper" id="paper"></div></section>
