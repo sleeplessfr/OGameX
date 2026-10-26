@@ -13,9 +13,13 @@ that each have their own personality and play like real players do.
 
 | Part | What it is | Status |
 |---|---|---|
-| **JSON API** (`/api/v1`) | A token-authenticated REST API on top of the game's own code, so programs can play without the web UI. Reference: [`docs/API.md`](docs/API.md) | Working and tested on a real server: accounts, status, planets, buildings, research, ships and defense, galaxy view, fleets (send, recall, dry run), messages with structured spy and battle reports, highscore, resource merchant |
-| **Agent swarm** ([`agents/`](agents/README.md)) | Python players (standard library only, no packages to install), as many as you like, each with a personality | Working. Economy, spying and raiding have run on a real server. Newer parts (simulated-battle check before attacking, defence against incoming fleets, merchant trades, memory saved between restarts) are tested in simulation and are being watched live. `summarize_logs.py` turns the logs into one report |
-| **Learning layer** | Agents that remember who beat them, adapt, and use a language model for the big decisions | Planned |
+| **JSON API** (`/api/v1`) | A token-authenticated REST API on top of the game's own code, so programs can play without the web UI. Reference: [`docs/API.md`](docs/API.md) | Working on a real server: accounts, status, planets, buildings, research, ships and defense, galaxy view, fleets (send, recall, dry run), messages with structured spy and battle reports, highscore, merchant. Moons (sensor phalanx, jump gate), alliances and alliance chat are written and in use, with their automated tests still to be run on a real install |
+| **Agent swarm** ([`agents/`](agents/README.md)) | Python players (standard library only, nothing to install), as many as you like, each with a personality | Running on a real server with about 20 agents. Economy, spying, raiding with a battle simulation, defence, colonies, recycling debris, transports and fleet saving, expeditions, moons, the merchant, character classes. `summarize_logs.py` turns the logs into one report |
+| **Social layer** | A galaxy board where agents trade, warn each other, call for revenge and post bounties (with a referee that checks claims), alliances with a chat that shares spy reports, and Stellaris-style diplomacy: first contact, trust, pacts, alliances | Running. See the board, revenge and diplomacy sections of [`agents/README.md`](agents/README.md) |
+| **Learning** | Agents remember who beat them and who cheated, learn how much margin to assume when they fight, learn trade prices, and pick the warship that wins simulated fights against what their targets really have | Running |
+| **Inner voice** | A local language model (LM Studio or any OpenAI-compatible server) writes diary lines and the text of board posts, diplomatic greetings and answers, alliance names and charters. Rules and hard limits stay in code, and no model means the agents still play | Running, optional |
+| **Observatory** | A read-only web page: map, newspaper, feed, board, relationships, leaderboard, and `/llm` with every question and answer of the model | Running |
+| **Scaling tools** | `bench.py` measures how many requests per second your server handles, `--routine` gives agents daily online hours, `--procs` splits them over processes, `--llm-voices` limits the model to a few agents | New, see "Scaling up" in the agents README |
 
 ## The agents
 
@@ -29,9 +33,10 @@ on neighbours, reads the reports and sometimes attacks. How it does all that dep
 | **turtle** | Big storage and defense, steady growth, never attacks |
 | **raider** | Wants ships early, spies a lot, attacks weak neighbours |
 | **balanced** | A bit of everything, like an average player |
+| **trader** | Lives off the board and the merchant: posts offers, learns prices |
 
-Each agent's traits are randomly nudged, so two raiders are never identical. Decisions are rule-based for now; the
-personalities are the knobs. Agents run a small battle simulation before attacking, build defence when a fleet is
+Each agent's traits are randomly nudged, so two raiders are never identical. Decisions are rule-based; the
+personalities are the knobs, and a language model only gives them a voice and helps with diplomacy. Agents run a small battle simulation before attacking, build defence when a fleet is
 flying towards them, and may use the merchant when stuck waiting. They choose a character class, found colonies when
 their home planet runs out of fields, and learn from their fights. Details are in [`agents/README.md`](agents/README.md).
 
@@ -66,6 +71,11 @@ You need [Docker](https://www.docker.com/) and Python 3.9 or newer.
    python run_swarm.py --count 6
    ```
    Stop them with Ctrl+C, or by creating a file called `STOP` in the `agents` folder.
+6. **Optional, in other terminals:** `python board.py` (the galaxy board, then add `--board http://localhost:8765`
+   to `run_swarm.py`), `python observatory.py --port 18766 --board http://localhost:8765` (the web page), and
+   `--llm http://localhost:1234/v1 --llm-model <name>` on `run_swarm.py` for a local language model. For a
+   20-agent run: `python run_swarm.py --count 20 --board http://localhost:8765 --llm http://localhost:1234/v1 --llm-model <name>`.
+   Reports: `python summarize_logs.py --hours 1`.
 
 The agents keep their accounts and passwords in `agents/agents_state.json`. Keep that file private. It is not
 committed to git. When you are done creating agents, you can close registration with
@@ -80,18 +90,19 @@ More install options (production setup, upgrades) are in the original project's 
 # API (runs inside the game container)
 docker compose run --rm ogamex-app composer run tests -- --filter ApiV1
 
-# Agents (a simulated game, no server needed)
+# Agents (a simulated game, no server needed; more than 700 tests)
 cd agents
-python -m unittest discover -s . -t . -p "test_*.py"
+python -m unittest discover -s tests -t .
 ```
 
 ## Roadmap
 
-- Test the spying and attacking on a real server and fix what real reports reveal
-- Read battle results, remember who is dangerous, adapt (first simple learning)
-- Expeditions, defending colonies, more personalities
-- A language model for the big decisions, with a budget cap and per-agent memory
-- A battle simulator endpoint, alliances, trading
+- Test the alliance and moon API routes on a real install and fix what the tests reveal
+- Make the game's API faster: a benchmark shows about 42 requests per second on a 14-core machine, and a profiler
+  (`docs/PROFILING.md` on the `api-profiler` branch) is being used to find where each request spends its time
+- More agents: routines, multi-process runs, and a growth path from 20 to thousands (see "Scaling up")
+- Agents that learn between restarts at a deeper level (strategy, not only margins and prices)
+- Colony defence, jump-gate use, resource settings, and fewer full planets
 
 ## Credits and license
 
