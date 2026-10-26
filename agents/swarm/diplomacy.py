@@ -24,6 +24,7 @@ All times are server seconds (like the rest of Memory).
 """
 from __future__ import annotations
 
+import random
 import re
 import zlib
 
@@ -51,20 +52,37 @@ LOSS = {"raided_us": 40.0, "we_raided": 25.0, "cheat": 30.0}
 LOG_BIG = 5.0                # a trust change this big is always logged
 LOG_EVERY = 6 * 3600.0       # smaller ones at most this often per pair
 
+# ---- pact limits (so that peace cannot take over the galaxy) ----
+PACT_LIFE = 3 * 86400.0       # a pact lasts this long (server seconds), then it is renewed or it falls back to `friendly`
+PACT_RENEW_WINDOW = 12 * 3600.0   # peaceful time in the last stretch of a pact renews it (trust >= PACT_AT and no grudge)
+PACT_EXPIRE_COOL = 6 * 3600.0     # after an expiry nobody proposes a new pact to that pair for this long
+SLOTS_MIN, SLOTS_MAX = 1, 6       # pact_slots() always lies in this range
+RAIDER_AT = 0.4               # aggression from which an agent only makes pacts with partners it could NOT profitably raid
+RUTHLESS_AT = 0.6             # aggression from which an agent has a single slot (two when sociable) and may betray
+STRONGER_RATIO = 2.0          # a partner with score ratio >= this (theirs vs ours, see standing()) is too strong to raid
+DEFENCE_VS_LOOT = 2.0         # a known defence worth >= this times the loot (and >= min_loot) makes a raid unprofitable
+PACT_INTEL_MAX_AGE = 24 * 3600.0  # a spy report older than this is not used for the "could I raid them" question
+BETRAY_CHANCE = 0.15          # chance per day that a ruthless agent with a pact considers breaking one
+BETRAY_LOOT_FACTOR = 8        # ... only for a loot of at least this times its usual min_loot ...
+BETRAY_LOOT_FLOOR = 5000      # ... and at least this much in absolute terms
+BETRAY_WIN_CHANCE = 0.9       # ... and a simulated fight that is won with at least this chance
+BETRAY_EVERY = 24 * 3600.0    # at most one betrayal per agent per this long
+
 KEEP_RELATIONS = 200
 
 
 # ---- state ------------------------------------------------------------------------------------------------------------------
 def new_state() -> dict:
     return {"rel": {}, "open": None, "next_hello_at": 0.0, "read_at": 0.0, "scan_at": 0.0, "cursor": 0,
-            "handled": [], "later": {}, "born": 0.0}
+            "handled": [], "later": {}, "born": 0.0, "betray_at": 0.0}
 
 
 def new_rel(now: float, how: str = "") -> dict:
     return {"step": "contact", "trust": 0.0, "opinion": 0.0, "since": float(now), "how": how, "name": "", "coord": "",
             "imp": False, "role": "", "ratio": None, "rank": None, "hit_us": 0, "spied_us": 0, "last_hit_at": 0.0, "robbed_at": 0.0,
             "betrayed_at": 0.0, "betrayals": 0, "cool_until": 0.0, "trades": 0, "cheats": 0, "warned_us_at": 0.0,
-            "peace_at": float(now), "day": 0, "day_gain": 0.0, "log_at": 0.0, "warn_at": 0.0}
+            "peace_at": float(now), "day": 0, "day_gain": 0.0, "log_at": 0.0, "warn_at": 0.0,
+            "pact_since": 0.0, "pact_until": 0.0, "renewals": 0, "we_betrayed": 0}
 
 
 def _num(value, default: float, lo: float | None = None, hi: float | None = None) -> float:
@@ -102,7 +120,7 @@ def clean_rel(raw, now: float = 0.0) -> dict | None:
             rel[key] = _num(value, 0.0) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
         elif key == "rank":
             rel[key] = int(value) if isinstance(value, int) and not isinstance(value, bool) else None
-        elif key in ("hit_us", "spied_us", "betrayals", "trades", "cheats", "day"):
+        elif key in ("hit_us", "spied_us", "betrayals", "trades", "cheats", "day", "renewals", "we_betrayed"):
             rel[key] = int(_num(value, 0, 0))
         else:
             rel[key] = _num(value, float(default), 0.0)
@@ -123,7 +141,7 @@ def clean_state(raw) -> dict:
     if isinstance(op, dict) and op.get("to") is not None and op.get("step") in STEPS:
         st["open"] = {"to": int(_num(op.get("to"), 0)), "to_name": str(op.get("to_name") or "")[:60], "step": op["step"],
                       "post": op.get("post"), "at": _num(op.get("at"), 0.0)}
-    for key in ("next_hello_at", "read_at", "scan_at", "born"):
+    for key in ("next_hello_at", "read_at", "scan_at", "born", "betray_at"):
         st[key] = _num(raw.get(key), 0.0, 0.0)
     st["cursor"] = int(_num(raw.get("cursor"), 0, 0))
     if isinstance(raw.get("handled"), list):
@@ -153,9 +171,66 @@ def step_of(st: dict, uid) -> str:
     return rel["step"] if rel else "unknown"
 
 
-def peace_ids(st: dict) -> set[int]:
-    """Players we have a pact or alliance with: never a raid target."""
-    return {int(k) for k, r in st["rel"].items() if r.get("step") in PEACE_STEPS}
+def pact_valid(rel: dict, now: float | None = None) -> bool:
+    """Is this relationship protecting the partner? An alliance always; a pact until `pact_until` (0 = an old saved pact without an end
+    date: valid until settle() gives it one)."""
+    step = rel.get("step")
+    if step == "alliance":
+        return True
+    if step != "pact":
+        return False
+    until = rel.get("pact_until") or 0.0
+    return now is None or until <= 0 or now < until
+
+
+def peace_ids(st: dict, now: float | None = None) -> set[int]:
+    """Players we have a valid pact or an alliance with: never a raid target (an expired pact no longer protects)."""
+    return {int(k) for k, r in st["rel"].items() if pact_valid(r, now)}
+
+
+def pact_used(st: dict, now: float | None = None) -> int:
+    """How many pact slots are taken: valid pacts plus alliances."""
+    return sum(1 for r in st["rel"].values() if pact_valid(r, now))
+
+
+def pact_slots(persona) -> int:
+    """The most pact and alliance partners at the same time this personality accepts (1..6).
+
+    Aggression decides first: ruthless (>= 0.6) 1, or 2 when sociable (>= 0.5); 0.4..0.6 two; 0.2..0.4 two, or three when sociable;
+    peaceful ones start at 4 and gain one for a cautious nature (>= 0.6) and one for a sociable or trading one (>= 0.7), so
+    miners, turtles and traders get 5-6, scientists 5."""
+    g = lambda name: _num(getattr(persona, name, 0.0), 0.0, 0.0, 1.0)
+    agg, soc = g("aggression"), max(g("sociability"), g("trade_interest"))
+    if agg >= RUTHLESS_AT:
+        n = 2 if soc >= 0.5 else 1
+    elif agg >= RAIDER_AT:
+        n = 2
+    elif agg >= 0.2:
+        n = 3 if soc >= 0.5 else 2
+    else:
+        n = 4 + (1 if g("caution") >= 0.6 else 0) + (1 if soc >= 0.7 else 0)
+    return max(SLOTS_MIN, min(SLOTS_MAX, n))
+
+
+def is_raider(persona) -> bool:
+    return _num(getattr(persona, "aggression", 0.0), 0.0, 0.0, 1.0) >= RAIDER_AT
+
+
+def could_raid(persona, info: dict | None) -> bool:
+    """Would a raid on this partner look worthwhile? `info` has what we know: `ratio` (their score vs ours), `strength` and `loot` of
+    the last spy report (None = unknown), `age` of that report. No information at all counts as 'yes' (a raider cannot tell)."""
+    info = info or {}
+    ratio, strength, loot = info.get("ratio"), info.get("strength"), info.get("loot")
+    age = info.get("age")
+    fresh = strength is not None and loot is not None and (age is None or age <= PACT_INTEL_MAX_AGE)
+    if isinstance(ratio, (int, float)) and not isinstance(ratio, bool) and ratio >= STRONGER_RATIO:
+        return False                         # far stronger than us: not a target
+    if fresh:
+        min_loot = _num(getattr(persona, "min_loot", 0), 0.0, 0.0)
+        if loot < min_loot or strength >= DEFENCE_VS_LOOT * max(loot, min_loot, 1):
+            return False                     # nothing worth taking, or defended too well for the loot
+        return True
+    return True                              # weak, peer or unknown without a fresh report: looks like a target
 
 
 def alliance_ids(st: dict) -> set[int]:
@@ -307,14 +382,47 @@ def peace_tick(rel: dict, now: float) -> float:
     return bump(rel, GAIN["peace_hour"] * hours, now, soft=True)
 
 
-def settle(rel: dict, now: float) -> list[tuple[str, str]]:
-    """Apply trust to the ladder: fall back one step when trust is too low, and `neutral -> friendly` when it is high enough.
-    Returns the (from, to) moves made. One move per call, so a step is never skipped."""
+def start_pact(rel: dict, now: float) -> None:
+    rel["pact_since"], rel["pact_until"] = float(now), float(now) + PACT_LIFE
+
+
+def pact_time(rel: dict, now: float, renew_ok: bool = True, events: list | None = None) -> bool:
+    """A pact's clock. Near the end, peaceful time renews it (trust >= PACT_AT, no grudge, and `renew_ok`: the agent's own persona
+    check); at the end it falls back to `friendly`. Appends 'renewed' / 'expired' to `events`. True if the step changed."""
+    if rel["step"] != "pact":
+        return False
+    if rel["pact_until"] <= 0:                 # a pact saved before pacts expired: it starts its clock now
+        start_pact(rel, now)
+        return False
+    if now >= rel["pact_until"] - PACT_RENEW_WINDOW and rel["trust"] >= PACT_AT and renew_ok and not blocked_by_history(rel, now):
+        rel["pact_until"] = float(now) + PACT_LIFE
+        rel["renewals"] += 1
+        if events is not None:
+            events.append("renewed")
+        return False
+    if now >= rel["pact_until"]:
+        rel["step"] = "friendly"
+        rel["pact_until"] = 0.0
+        rel["cool_until"] = max(rel["cool_until"], now + PACT_EXPIRE_COOL)
+        if events is not None:
+            events.append("expired")
+        return True
+    return False
+
+
+def settle(rel: dict, now: float, renew_ok: bool = True, events: list | None = None) -> list[tuple[str, str]]:
+    """Apply trust to the ladder: fall back one step when trust is too low, `neutral -> friendly` when it is high enough, and the
+    pact clock (renew near the end, else `pact -> friendly`). Returns the (from, to) moves made. One move per call, so a step is
+    never skipped."""
     step = rel["step"]
     low = FALL_BELOW.get(step)
     if low is not None and rel["trust"] < low:
         rel["step"] = prev_step(step)
+        if rel["step"] == "pact":
+            start_pact(rel, now)
         return [(step, rel["step"])]
+    if step == "pact" and pact_time(rel, now, renew_ok, events):
+        return [("pact", "friendly")]
     if step == "neutral" and rel["trust"] >= FRIENDLY_AT and rel["opinion"] >= 0 and not blocked_by_history(rel, now):
         rel["step"] = "friendly"
         return [(step, "friendly")]
@@ -364,6 +472,33 @@ def on_we_hit(rel: dict, now: float) -> dict:
     return {"change": change, "from": was, "to": rel["step"]}
 
 
+def betray_draw(name: str, day: int) -> bool:
+    """The agent's own dice for one day (deterministic from its name and the day; never the persona's random stream)."""
+    return random.Random(f"{name}:betray:{int(day)}").random() < BETRAY_CHANCE
+
+
+def betray_loot_ok(persona, loot) -> bool:
+    """Is the loot big enough to break a pact for: BETRAY_LOOT_FACTOR times the usual minimum and at least BETRAY_LOOT_FLOOR?"""
+    try:
+        loot = float(loot)
+    except (TypeError, ValueError):
+        return False
+    return loot >= max(BETRAY_LOOT_FACTOR * _num(getattr(persona, "min_loot", 0), 0.0, 0.0), BETRAY_LOOT_FLOOR)
+
+
+def on_we_betray(rel: dict, now: float) -> dict:
+    """We attacked a pact partner on purpose. The normal cost of a raid applies, and then the relationship is wiped like a betrayal
+    on their side: `contact`, trust 0, `betrayed_at` set (BETRAY_COOL blocks every step for 48 hours)."""
+    res = on_we_hit(rel, now)
+    rel["step"] = "contact"
+    rel["trust"] = 0.0
+    rel["opinion"] = min(rel["opinion"], -60.0)
+    rel["betrayed_at"] = now
+    rel["we_betrayed"] += 1
+    rel["pact_until"] = 0.0
+    return {**res, "to": "contact"}
+
+
 def on_cheat(rel: dict, now: float) -> float:
     rel["cheats"] += 1
     rel["opinion"] = max(-100.0, rel["opinion"] - 25.0)
@@ -378,11 +513,12 @@ def on_trade_done(rel: dict, now: float) -> float:
 
 # ---- hard rules ------------------------------------------------------------------------------------------------------------------
 def hard_check(rel: dict | None, proposed: str, now: float, persona=None, *, aggressor_recent: bool = False, revenge_open: bool = False,
-               check_cool: bool = True) -> str | None:
+               check_cool: bool = True, slots_used: int | None = None, pact_info: dict | None = None) -> str | None:
     """Why this step may NOT be proposed or accepted, or None if it may. A language model cannot override this.
 
     `aggressor_recent`: one of their planets attacked us within 12 h (Memory.aggressors); `revenge_open`: we hold a revenge call or a
-    bounty against them."""
+    bounty against them. `slots_used`: pact and alliance partners we have now (None = not checked); `pact_info`: what we know of the
+    partner for a raider (see could_raid)."""
     if rel is None:
         return "no contact yet"
     if now - rel["betrayed_at"] < BETRAY_COOL:
@@ -399,6 +535,11 @@ def hard_check(rel: dict | None, proposed: str, now: float, persona=None, *, agg
         return f"would skip a step ({rel['step']} -> {proposed})"
     if proposed == "pact" and rel["trust"] < PACT_AT:
         return f"trust {rel['trust']:.0f} is below {PACT_AT:.0f} for a pact"
+    if proposed == "pact" and persona is not None:
+        if slots_used is not None and slots_used >= pact_slots(persona):
+            return "pact slots full"
+        if is_raider(persona) and could_raid(persona, pact_info):
+            return "looks like a target"
     if proposed == "alliance":
         if rel["trust"] < ALLIANCE_AT:
             return f"trust {rel['trust']:.0f} is below {ALLIANCE_AT:.0f} for an alliance"

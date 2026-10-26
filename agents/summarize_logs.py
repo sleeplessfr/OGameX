@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import time
 from collections import Counter, defaultdict
@@ -485,7 +486,8 @@ def read_llm_calls(log_dir: Path, since: float = 0.0) -> list[dict]:
 def diplomacy_section(events: list[dict]) -> list[str]:
     """DIPLOMACY: contacts, steps reached, answers (accepted / refused / waited), pacts, alliances, betrayals, the 5 strongest relationships."""
     out = ["DIPLOMACY (first contact and the ladder contact > neutral > friendly > pact > alliance; the rules decide, a language model only helps with words and answers)"]
-    names = ("contact", "diplo_hello", "diplo_answer", "diplo_step", "diplo_trust", "diplo_announce", "diplo_blocked")
+    names = ("contact", "diplo_hello", "diplo_answer", "diplo_step", "diplo_trust", "diplo_announce", "diplo_blocked",
+             "diplo_renewed", "diplo_expired", "diplo_betrayal", "diplo_declined", "diplo_slots")
     ev = [e for e in events if e.get("event") in names]
     if not ev:
         return out + ["  none (needs two or more agents that meet; steps beyond contact need the galaxy board: run_swarm.py --board URL)", ""]
@@ -510,6 +512,7 @@ def diplomacy_section(events: list[dict]) -> list[str]:
     blocked = [e for e in ev if e["event"] == "diplo_blocked"]
     if blocked:
         out.append(f"  raids stopped because the target was a partner: {len(blocked)}")
+    out += pact_lines(ev, steps)
     out.append("  strongest relationships (by trust):")
     top = relations_from_events(events)[:5]
     for r in top:
@@ -517,6 +520,38 @@ def diplomacy_section(events: list[dict]) -> list[str]:
     if not top:
         out.append("    none")
     out.append("")
+    return out
+
+
+def pact_lines(ev: list[dict], steps: list[dict]) -> list[str]:
+    """Pact limits: how many agents hold a pact, pacts formed / renewed / expired / broken on purpose, slots used against slots available,
+    and why pacts were refused or not even proposed (slots full, looks like a target, grudges...)."""
+    formed = sum(1 for e in steps if e.get("to") == "pact")
+    renewed = sum(1 for e in ev if e["event"] == "diplo_renewed")
+    expired = sum(1 for e in ev if e["event"] == "diplo_expired")
+    broken = [e for e in ev if e["event"] == "diplo_betrayal"]
+    out = [f"  pacts: {formed} formed, {renewed} renewed, {expired} expired, {len(broken)} broken on purpose by the agent (betrayal by ambition)"]
+    for e in broken[-3:]:
+        out.append(f"    {clock(e.get('t') or 0)} {e.get('agent')} broke its pact with {e.get('with')} (loot {e.get('loot')}, win chance {e.get('win')})")
+    last: dict[str, dict] = {}
+    for e in ev:
+        if e["event"] == "diplo_slots" and e.get("agent"):
+            last[str(e["agent"])] = e
+    num = lambda v: float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else 0.0
+    if last:
+        used = [num(e.get("used")) for e in last.values()]
+        slots = [num(e.get("slots")) for e in last.values()]
+        with_pact = sum(1 for u in used if u >= 1)
+        out.append(f"  agents with at least one pact or alliance: {with_pact} of {len(last)} ({100 * with_pact // len(last)}%)")
+        out.append(f"  pact slots: {sum(used) / len(used):.1f} used on average of {sum(slots) / len(slots):.1f} available")
+    reasons: Counter = Counter()
+    for e in ev:
+        if e["event"] == "diplo_answer" and e.get("side") == "answerer" and e.get("decision") == "REFUSE" and e.get("step") == "pact":
+            reasons[re.sub(r"\d+", "N", str(e.get("reason") if e.get("source") == "hard rule" else "refused by the model or the rule"))[:50]] += 1
+        elif e["event"] == "diplo_declined":
+            reasons[re.sub(r"\d+", "N", str(e.get("reason")))[:50] + " (not proposed)"] += 1
+    if reasons:
+        out.append("  pact refusals by reason: " + ", ".join(f"{n} {why}" for why, n in reasons.most_common(6)))
     return out
 
 

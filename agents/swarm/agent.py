@@ -25,6 +25,7 @@ from .bounty_agent import BountyMixin
 from .moons_agent import MoonsMixin
 from .llm_agent import VoiceMixin
 from .alliance_agent import AllianceMixin
+from . import diplomacy as D
 from .diplomacy_agent import DiplomacyMixin
 
 
@@ -768,10 +769,14 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
         if pick is None:
             return False
         coord, intel, reason = pick
+        betray = None
         if self._diplo_protected(coord, intel.owner_id):   # a pact or alliance partner is never raided, whatever else says go
-            self.memory.intel.pop(coord, None)
-            self.log("diplo_blocked", at=f"{coord[0]}:{coord[1]}:{coord[2]}", why="pact or alliance partner")
-            return False
+            betray = self._diplo_betrayal_target(coord, intel.owner_id)   # ... except a pact a ruthless agent may break today (diplomacy.py)
+            why = "pact or alliance partner" if betray is None else self._diplo_betray_gate(intel)
+            if why:
+                self.memory.intel.pop(coord, None)
+                self.log("diplo_blocked", at=f"{coord[0]}:{coord[1]}:{coord[2]}", why=why)
+                return False
         if not self.ship_stats:
             self.ship_stats = {s["machine_name"]: s for s in self.client.get("/ships")["ships"]}
         # How much to over-estimate the defenders is learned (bandit.py); its own random stream keeps the agent's other choices unchanged.
@@ -795,6 +800,10 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
             self.memory.intel[coord]["skip_until"] = now + 1800
             self.log("attack_skipped", at=where, loot=intel.loot, why=sim_reason)
             return False
+        if betray is not None and (sim_info.get("win_chance") or 0.0) < D.BETRAY_WIN_CHANCE:   # breaking a pact needs a clear win
+            self.memory.intel[coord]["skip_until"] = now + 1800
+            self.log("attack_skipped", at=where, loot=intel.loot, why=f"no clear win ({sim_info.get('win_chance')}) to break a pact for")
+            return False
         if sim_reason:
             reason = f"{reason}; {sim_reason}"
         try:
@@ -807,7 +816,8 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
             self.log("attack_refused", at=f"{coord[0]}:{coord[1]}:{coord[2]}", code=e.code, msg=e.message[:120])
             return False
         self.memory.attacked[coord] = now
-        self._diplo_we_attacked(intel.owner_id)   # diplomacy: a raid costs trust with that player
+        self._diplo_we_attacked(intel.owner_id, betrayal=betray is not None, at=where, loot=intel.loot,
+                                win=sim_info.get("win_chance"))   # diplomacy: a raid costs trust with that player (a pact broken on purpose: betrayal)
         doctrine.note_attack(self.memory.doctrine, now)
         self.memory.arm_for[coord] = margin
         self.memory.intel.pop(coord, None)

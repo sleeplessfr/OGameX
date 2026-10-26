@@ -202,6 +202,14 @@ def describe(e: dict) -> str:
         return f"{g('with')}: {g('from')} -> {g('to')} (trust {g('trust')}, {g('why')})"
     if k == "diplo_trust":
         return f"trust with {g('with')} {g('delta')} ({g('why')}) now {g('trust')}"
+    if k == "diplo_renewed":
+        return f"pact with {g('with')} renewed"
+    if k == "diplo_expired":
+        return f"pact with {g('with')} expired (back to friendly)"
+    if k == "diplo_betrayal":
+        return f"BROKE its pact with {g('with')} to raid them (loot {g('loot')})"
+    if k == "diplo_declined":
+        return f"no pact with {g('with')}: {g('reason')}"
     if k == "diplo_announce":
         return f"announces: {str(g('text', ''))[:140]}"
     if k == "registered":
@@ -651,9 +659,18 @@ def notices_from(posts: list[dict], limit: int = 6) -> list[dict]:
 def diplomacy_view(events: list[dict], limit: int = 150) -> dict:
     """The relationships table of the Diplomacy tab, from the log events (contact, diplo_step, diplo_trust). Never raises."""
     try:
-        return {"rows": relations_from_events(events)[:limit]}
+        rows = relations_from_events(events)[:limit]
     except Exception:
         return {"rows": []}
+    slots: dict[str, dict] = {}
+    try:        # pact slots used and the next pact expiry per agent (the last `diplo_slots` line of each); fail-soft
+        for e in events:
+            if e.get("event") == "diplo_slots" and e.get("agent"):
+                slots[str(e["agent"])] = {"agent": str(e["agent"]), "used": e.get("used"), "slots": e.get("slots"),
+                                          "next_expiry": e.get("next_expiry"), "t": e.get("t")}
+    except Exception:
+        slots = {}
+    return {"rows": rows, "slots": sorted(slots.values(), key=lambda r: r["agent"])[:limit]} if slots else {"rows": rows}
 
 
 # ---- putting it together ------------------------------------------------------------------------------
@@ -1126,7 +1143,11 @@ function drawDiplo(){
   if(!rows.length){box.appendChild(el("div","empty","No relationships yet. They appear as agents meet (needs the swarm; pacts need the board)."));return}
   const wrap=el("div","tablewrap"),t=el("table"),head=el("tr");["Agent","Other player","Step","Trust","Last change"].forEach(x=>head.appendChild(el("th","",x)));t.appendChild(head);
   rows.forEach(r=>{const tr=el("tr","");tr.append(el("td","",r.agent),el("td","",r.with),el("td","",r.step),el("td","n",String(Math.round(r.trust))),el("td","",r.t?when(r.t):""));t.appendChild(tr)});
-  wrap.appendChild(t);box.appendChild(wrap)}
+  wrap.appendChild(t);box.appendChild(wrap);
+  try{const sl=(S.diplomacy&&S.diplomacy.slots)||[];if(sl.length){const w2=el("div","tablewrap"),t2=el("table"),h2=el("tr");
+    ["Agent","Pact slots used","Next pact expiry"].forEach(x=>h2.appendChild(el("th","",x)));t2.appendChild(h2);
+    sl.forEach(r=>{const tr=el("tr","");tr.append(el("td","",r.agent),el("td","n",`${r.used}/${r.slots}`),el("td","",r.next_expiry?when(r.next_expiry):"-"));t2.appendChild(tr)});
+    w2.appendChild(t2);box.appendChild(w2)}}catch(e){}}
 function draw(){drawMap();drawNews();drawFeed();drawGalaxyBoard();drawDiplo();drawBoard();
   $("status").textContent=`${S.events_in_memory} events - last at ${S.latest_event?when(S.latest_event):"never"} - map ${S.map.available?"ok":"unavailable"}${S.llm?` - LLM ${S.llm.calls} calls${S.llm.failed?` (${S.llm.failed} failed)`:""}, avg ${S.llm.avg_latency} s`:""}`}
 async function load(){try{const r=await fetch("/api/state");const j=await r.json();if(j.error){$("status").textContent="error: "+j.error}else{S=j;draw()}}catch(e){$("status").textContent="cannot reach the observatory"}

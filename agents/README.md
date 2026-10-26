@@ -477,6 +477,29 @@ and no grudge. If the model fails (down, budget used up) the rule answers too. O
 (an `ALLIANCE` post with `announce` set; the model may put it in its own words). Nothing waits for the model: the question is queued (answers get priority
 over greetings) and the result is used on a later round.
 
+**Why peace cannot take over (pact limits).** Left alone, every agent would end up with pacts and nobody would raid any more. Four rules prevent that
+(constants at the top of `swarm/diplomacy.py`):
+
+- **Slots.** Each personality can hold only so many pact and alliance partners at once (`pact_slots`): a raider or other ruthless agent (aggression 0.6 or
+  more) 1, or 2 if it is sociable; a middling one 2 or 3 (balanced: 3); the peaceful ones 4 to 6 (scientist and trader 5, miner and turtle 6). With all slots
+  taken an agent neither proposes nor accepts another pact (reason `pact slots full`). An alliance keeps its slot.
+- **Raiders only pact with someone they could not raid.** An agent with aggression 0.4 or more accepts or proposes a pact only with a partner that is much
+  stronger than itself (score ratio 2 or more) or whose last spy report (at most 24 hours old) shows a defence worth at least twice the loot, or a loot under the
+  agent's own minimum. A weak or rich-looking neighbour is a target (`looks like a target`), and with no information at all a raider refuses.
+- **Pacts expire.** A pact lasts 3 days (`pact_since`, `pact_until`). In its last 12 hours, peaceful time renews it if trust is still 40 or more, there is no grudge
+  and (for a raider) the partner still could not be raided: log `diplo_renewed`. Otherwise it falls back to `friendly` (log `diplo_expired`), the partner is no
+  longer protected and nobody proposes a new pact to that pair for 6 hours. Alliances do not expire (they still fall by the old trust rule) but use a slot. Saved
+  pacts from before this update get their 3 days starting at the first scan.
+- **Betrayal by ambition.** A ruthless agent (aggression 0.6 or more) with a pact (never an alliance step, never a member of its own in-game alliance) has a
+  15% chance on a given day (its own dice from its name and the day, not the personality's random numbers) to consider breaking it. Only then is the partner
+  spied on and open to the raid picker, and only if the loot is at least 8 times its usual minimum and 5000, and the battle simulation says it wins with 90%
+  or more. The raid is logged as `diplo_betrayal`; the partner is back to `contact`, trust 0, for 48 hours nothing is proposed or accepted, and the partner
+  sees a normal betrayal. At most one betrayal per agent per 24 hours.
+
+The report (`summarize_logs.py`, DIPLOMACY) now shows the share of agents holding a pact, pacts formed, renewed, expired and broken, slots used against
+available, and pact refusals by reason. The observatory Diplomacy tab adds a table of slots used and the next pact expiry per agent. New log events:
+`diplo_renewed`, `diplo_expired`, `diplo_betrayal`, `diplo_declined` (a pact not proposed, once a day per reason and partner) and `diplo_slots`.
+
 **How to run it.**
 
 ```

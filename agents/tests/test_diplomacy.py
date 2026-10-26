@@ -502,7 +502,7 @@ class ConversationTests(World):
         ra["coord"] = "1:5:7"
         a.memory.intel[(1, 5, 7)] = {"at": T0, "loot": 5000, "defenders": 1, "owner_id": 12, "ships": {}, "defense": {}}
         a.memory.intel[(1, 6, 6)] = {"at": T0, "loot": 5000, "defenders": 1, "owner_id": 13, "ships": {}, "defense": {}}
-        a._players = (T0, [row(12, system=5, position=7), row(13), row(14)], 100)
+        a._players = (T0, [row(12, system=5, position=7, score=1000), row(13), row(14)], 100)   # a much stronger partner: a raider may pact with it
         self.assertEqual(a._without_allies({12, 13, 14}), {12, 13, 14})
         self.run_round(a)                                     # a proposes the pact
         self.assertEqual(self.board.posts[-1]["data"]["step"], "pact")

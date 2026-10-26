@@ -11,7 +11,11 @@ What happens, in plain words:
     partner's in-game alliance is preferred when applying (`_alli_free`).
 Everything is fail-soft: an exception here is logged once (`diplo_error`) and the agent carries on.
 
-Log events: contact, diplo_hello, diplo_answer, diplo_step, diplo_trust, diplo_announce, diplo_blocked, diplo_error.
+Pact limits (README, Diplomacy): `pact_slots(persona)` caps simultaneous pact and alliance partners, a raider only pacts with someone it could
+not profitably raid, a pact lasts PACT_LIFE (renewed by peaceful time, else back to `friendly`), and a ruthless agent may rarely break one.
+
+Log events: contact, diplo_hello, diplo_answer, diplo_step, diplo_trust, diplo_announce, diplo_blocked, diplo_error, diplo_renewed, diplo_expired,
+diplo_betrayal, diplo_declined, diplo_slots.
 """
 from __future__ import annotations
 
@@ -155,12 +159,19 @@ class DiplomacyMixin:
             self.memory.diplomacy["open"] = None        # no proposal to someone who just fought us
 
     @safe()
-    def _diplo_we_attacked(self, owner_id) -> None:
+    def _diplo_we_attacked(self, owner_id, betrayal: bool = False, **facts) -> None:
         uid = _int(owner_id)
         rel = self._diplo_rel(uid) if uid is not None else None
-        if rel is not None:
-            res = D.on_we_hit(rel, self.now)
-            self._diplo_after(uid, rel, res["change"], "we attacked them", res["from"], res["to"])
+        if rel is None:
+            return
+        if betrayal:       # a deliberate raid on a pact partner: clearly logged, and at most one per BETRAY_EVERY
+            self.memory.diplomacy["betray_at"] = self.now
+            res = D.on_we_betray(rel, self.now)
+            self.log("diplo_betrayal", **{"with": self._diplo_name(uid, rel)}, uid=uid, was=res["from"], **facts)
+            self._diplo_after(uid, rel, res["change"], "we betrayed them", res["from"], res["to"], we_betrayed=True)
+            return
+        res = D.on_we_hit(rel, self.now)
+        self._diplo_after(uid, rel, res["change"], "we attacked them", res["from"], res["to"])
 
     @safe()
     def _diplo_trade(self, partner: str, outcome: str) -> None:
@@ -181,7 +192,42 @@ class DiplomacyMixin:
 
     @safe(set)
     def _diplo_peace_ids(self) -> set[int]:
-        return D.peace_ids(self.memory.diplomacy)
+        """Partners that are never spied on or raided: valid pacts and alliances, except the pact partners a ruthless agent may
+        betray today (see _diplo_betray_open)."""
+        return D.peace_ids(self.memory.diplomacy, self.now) - self._diplo_betray_open()
+
+    @safe(set)
+    def _diplo_betray_open(self) -> set[int]:
+        """Pact partners (never an alliance step, never someone in our in-game alliance) that a ruthless agent may look at for a
+        betrayal today: only on a lucky day (BETRAY_CHANCE, own dice), at most once per BETRAY_EVERY, not while on alert."""
+        st = self.memory.diplomacy
+        if D._num(getattr(self.persona, "aggression", 0.0), 0.0) < D.RUTHLESS_AT or self.now - st["betray_at"] < D.BETRAY_EVERY \
+                or self.now < self.alert_until:
+            return set()
+        day = int(self.now // 86400)
+        rt = self._diplo_rt()
+        if rt.get("betray_day", (None, False))[0] != day:
+            rt["betray_day"] = (day, D.betray_draw(self.name, day))
+        if not rt["betray_day"][1]:
+            return set()
+        allies = self._ally_ids()
+        return {int(k) for k, r in st["rel"].items() if r["step"] == "pact" and D.pact_valid(r, self.now) and int(k) not in allies}
+
+    @safe(None)
+    def _diplo_betrayal_target(self, coord, owner_id) -> int | None:
+        """The pact partner this target belongs to, if we may consider betraying them today."""
+        open_ = self._diplo_betray_open()
+        for key in open_:
+            rel = self._diplo_rel(key)
+            if rel and (_int(owner_id) == key or (coord and rel["coord"] == ":".join(map(str, coord)))):
+                return key
+        return None
+
+    def _diplo_betray_gate(self, intel) -> str | None:
+        """Why this loot does not justify breaking a pact, or None."""
+        if not D.betray_loot_ok(self.persona, intel.loot):
+            return f"loot {intel.loot} is not worth breaking a pact"
+        return None
 
     @safe(set)
     def _diplo_alliance_ids(self) -> set[int]:
@@ -192,7 +238,7 @@ class DiplomacyMixin:
         """True if this target belongs to a pact or alliance partner: never attacked, whatever the target picker or a gamble says."""
         st = self.memory.diplomacy
         for key, rel in st["rel"].items():
-            if rel["step"] in D.PEACE_STEPS and (_int(owner_id) == int(key) or (coord and rel["coord"] == ":".join(map(str, coord)))):
+            if D.pact_valid(rel, self.now) and (_int(owner_id) == int(key) or (coord and rel["coord"] == ":".join(map(str, coord)))):
                 return True
         return False
 
@@ -207,8 +253,29 @@ class DiplomacyMixin:
         self._diplo_settle(uid, rel)
 
     def _diplo_settle(self, uid: int, rel: dict) -> None:
-        for frm, to in D.settle(rel, self.now):
-            self._diplo_stepped(uid, rel, frm, to, "trust")
+        events: list[str] = []
+        renew_ok = True
+        if rel["step"] == "pact" and D.is_raider(self.persona):      # a raider only keeps a pact with someone it could not profitably raid
+            renew_ok = not D.could_raid(self.persona, self._diplo_pact_info(uid, rel))
+        moves = D.settle(rel, self.now, renew_ok, events)
+        name = self._diplo_name(uid, rel)
+        for ev in events:
+            self.log("diplo_renewed" if ev == "renewed" else "diplo_expired", **{"with": name}, uid=uid, trust=round(rel["trust"]),
+                     until=round(rel["pact_until"]) if rel["pact_until"] else None, renewals=rel["renewals"])
+        for frm, to in moves:
+            self._diplo_stepped(uid, rel, frm, to, "pact expired" if "expired" in events else "trust")
+
+    def _diplo_pact_info(self, uid: int, rel: dict) -> dict:
+        """What this raider knows about a possible partner: score ratio (live ranking, else the first impression) and the last spy
+        report (strength and loot of the planet, from Memory.opponents)."""
+        rows, score = self._diplo_cached()
+        ratio = D.standing(score, self._diplo_row(uid, rows), rows)["ratio"]
+        info = {"ratio": ratio if ratio is not None else rel.get("ratio")}
+        coord = coord_of(rel["coord"])
+        rec = self.memory.opponents.get(coord) if coord else None
+        if rec and rec.get("strength") is not None and rec.get("loot") is not None:
+            info.update(strength=rec["strength"], loot=rec["loot"], age=self.now - rec["spied_at"] if rec.get("spied_at") else None)
+        return info
 
     def _diplo_stepped(self, uid: int, rel: dict, frm: str, to: str, why: str, **extra) -> None:
         self.log("diplo_step", **{"with": self._diplo_name(uid, rel)}, uid=uid, trust=round(rel["trust"]), why=why, **{"from": frm, "to": to}, **extra)
@@ -238,7 +305,9 @@ class DiplomacyMixin:
 
     def _diplo_hard(self, uid: int, rel: dict, proposed: str, check_cool: bool = True) -> str | None:
         recent, revenge = self._diplo_flags(uid, rel)
-        return D.hard_check(rel, proposed, self.now, self.persona, aggressor_recent=recent, revenge_open=revenge, check_cool=check_cool)
+        info = self._diplo_pact_info(uid, rel) if proposed == "pact" and D.is_raider(self.persona) else None
+        return D.hard_check(rel, proposed, self.now, self.persona, aggressor_recent=recent, revenge_open=revenge, check_cool=check_cool,
+                            slots_used=D.pact_used(self.memory.diplomacy, self.now), pact_info=info)
 
     def _diplo_threat_count(self) -> int:
         n = sum(1 for stamp in self.memory.aggressors.values() if self.now - stamp < D.HIT_GRUDGE)
@@ -317,6 +386,7 @@ class DiplomacyMixin:
                     rel["coord"] = ":".join(str(mp.get(k)) for k in ("galaxy", "system", "position"))
             change = D.peace_tick(rel, self.now)
             self._diplo_after(uid, rel, change, "peaceful time")
+        self._diplo_log_slots()
         op = st["open"]
         if op and self.now - op["at"] > D.OPEN_TIMEOUT:      # nobody answered: that is a refusal
             rel = self._diplo_rel(op["to"])
@@ -324,6 +394,20 @@ class DiplomacyMixin:
                 rel["cool_until"] = self.now + D.REFUSAL_COOL
             st["open"] = None
             self.log("diplo_answer", side="proposer", decision="TIMEOUT", reason="no answer", step=op["step"], **{"with": op["to_name"]})
+
+    def _diplo_log_slots(self) -> None:
+        """One `diplo_slots` line when the pact picture changes (and at least every 6 hours): slots used, available, expiry times."""
+        st = self.memory.diplomacy
+        pacts = [(k, r) for k, r in st["rel"].items() if D.pact_valid(r, self.now)]
+        partners = [{"name": self._diplo_name(int(k), r), "step": r["step"], "until": round(r["pact_until"]) if r["step"] == "pact" and r["pact_until"] else None}
+                    for k, r in pacts][:D.SLOTS_MAX]
+        sig = (len(pacts), D.pact_slots(self.persona), tuple((p["name"], p["step"]) for p in partners))
+        rt = self._diplo_rt()
+        if rt.get("slots_sig") == sig and self.now - rt.get("slots_at", 0.0) < D.LOG_EVERY:
+            return
+        rt["slots_sig"], rt["slots_at"] = sig, self.now
+        untils = [p["until"] for p in partners if p["until"]]
+        self.log("diplo_slots", used=len(pacts), slots=sig[1], next_expiry=min(untils) if untils else None, partners=partners)
 
     # ---- reading the board -----------------------------------------------------------------------------
     def _diplo_read(self) -> None:
@@ -511,6 +595,8 @@ class DiplomacyMixin:
     def _diplo_advance(self, uid: int, rel: dict, step: str, why: str, announce: bool = False) -> None:
         frm = rel["step"]
         rel["step"] = step
+        if step == "pact":
+            D.start_pact(rel, self.now)
         change = D.bump(rel, D.GAIN["accepted"], self.now)
         rel["opinion"] = min(100.0, rel["opinion"] + 5.0)
         self._diplo_stepped(uid, rel, frm, step, why)
@@ -552,7 +638,12 @@ class DiplomacyMixin:
                 continue
             shared = self._diplo_threat_count() > 0 or self.now - rel["warned_us_at"] < 24 * 3600
             step = D.offer_step(rel, shared)
-            if step is None or rel["opinion"] < -10 or self._diplo_hard(uid, rel, step):
+            if step is None or rel["opinion"] < -10:
+                continue
+            why = self._diplo_hard(uid, rel, step)
+            if why:
+                if step == "pact" and why in ("pact slots full", "looks like a target") and self._logi_note(("diplo_declined", uid, why, int(self.now // 86400))):
+                    self.log("diplo_declined", **{"with": self._diplo_name(uid, rel)}, uid=uid, step=step, reason=why)
                 continue
             score = rel["trust"] + rel["opinion"] / 2.0
             if best is None or score > best[0]:
