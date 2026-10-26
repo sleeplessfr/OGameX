@@ -94,7 +94,8 @@ let D=null,offset=0,cam={x:0,y:0,k:1},hidden=new Set(),hover=null,focusSys=null,
 const COLS=8,GAP=170;
 function pos(s){const col=(s-1)%COLS,row=Math.floor((s-1)/COLS);const h=Math.sin(s*12.9898)*43758.5453;const j=h-Math.floor(h),h2=Math.sin(s*78.233)*12345.678,j2=h2-Math.floor(h2);
   return {x:col*GAP+(j-.5)*50,y:row*GAP+(j2-.5)*50}}
-function planetOff(p){const a=(p-1)/15*Math.PI*2-Math.PI/2;return {x:Math.cos(a)*26,y:Math.sin(a)*26}}
+function orbitR(p){return 12+p*4.6}   // slot 1 is close to the star, slot 15 far away
+function planetOff(p){const a=p*2.4-1;const r=orbitR(p);return {x:Math.cos(a)*r,y:Math.sin(a)*r}}
 function resize(){cv.width=innerWidth*devicePixelRatio;cv.height=innerHeight*devicePixelRatio}
 addEventListener("resize",resize);resize();
 function w2s(x,y){return {x:(x-cam.x)*cam.k+innerWidth/2,y:(y-cam.y)*cam.k+innerHeight/2}}
@@ -102,7 +103,7 @@ function s2w(x,y){return {x:(x-innerWidth/2)/cam.k+cam.x,y:(y-innerHeight/2)/cam
 function fit(){const ss=Object.keys(sysInfo).map(Number);if(!ss.length)return;let a=1e9,b=1e9,c=-1e9,d=-1e9;
   ss.forEach(s=>{const p=pos(s);a=Math.min(a,p.x);b=Math.min(b,p.y);c=Math.max(c,p.x);d=Math.max(d,p.y)});
   cam.x=(a+c)/2;cam.y=(b+d)/2;cam.k=Math.min(3,Math.min(innerWidth*.8/(c-a+200),innerHeight*.8/(d-b+200)))}
-function zoomTo(s){const p=pos(s);cam.x=p.x;cam.y=p.y;cam.k=Math.max(cam.k,4.5);focusSys=s}
+function zoomTo(s){const p=pos(s);cam.x=p.x;cam.y=p.y;cam.k=Math.max(cam.k,3.8);focusSys=s}
 $("fit").onclick=()=>{fit();focusSys=null};
 let drag=null;
 cv.onmousedown=e=>{drag={x:e.clientX,y:e.clientY,cx:cam.x,cy:cam.y,moved:false};cv.classList.add("drag")};
@@ -126,7 +127,7 @@ function bez(A,B,t,bulge){const mx=(A.x+B.x)/2,my=(A.y+B.y)/2,dx=B.x-A.x,dy=B.y-
 function draw(ts){requestAnimationFrame(draw);const dpr=devicePixelRatio;g.setTransform(dpr,0,0,dpr,0,0);g.clearRect(0,0,innerWidth,innerHeight);
   const blink=.65+.35*Math.sin(ts/140);
   g.fillStyle="#fff";for(const st of stars){g.globalAlpha=st.a;g.fillRect((st.x*innerWidth+(-cam.x*cam.k*.02))%innerWidth,st.y*innerHeight,st.r,st.r)}g.globalAlpha=1;
-  if(!D)return;const now=Date.now()/1000+offset;const mix=Math.max(0,Math.min(1,(cam.k-1.6)/1.8));
+  if(!D)return;const now=Date.now()/1000+offset;const mix=Math.max(0,Math.min(1,(cam.k-1.4)/1.6));
   g.save();g.translate(innerWidth/2,innerHeight/2);g.scale(cam.k,cam.k);g.translate(-cam.x,-cam.y);
   const ss=Object.keys(sysInfo).map(Number).sort((a,b)=>a-b);
   g.strokeStyle="#16213f";g.lineWidth=1/cam.k;g.beginPath();ss.forEach((s,i)=>{const p=pos(s);if(i&&ss[i-1]===s-1)g.lineTo(p.x,p.y);else g.moveTo(p.x,p.y)});g.stroke();
@@ -134,12 +135,12 @@ function draw(ts){requestAnimationFrame(draw);const dpr=devicePixelRatio;g.setTr
     const z=1/Math.sqrt(Math.max(.6,cam.k));const rad=(7+Math.min(8,owners.length*1.4))*z;const gr=g.createRadialGradient(p.x,p.y,0,p.x,p.y,rad*2.6);gr.addColorStop(0,col+"cc");gr.addColorStop(.35,col+"44");gr.addColorStop(1,col+"00");
     g.fillStyle=gr;g.beginPath();g.arc(p.x,p.y,rad*2.6,0,7);g.fill();g.fillStyle="#fff";g.beginPath();g.arc(p.x,p.y,2.4*z,0,7);g.fill();
     if(cam.k>.5){g.fillStyle="#9fb2e8";g.font=`${11/cam.k}px system-ui`;g.textAlign="center";g.fillText(""+s,p.x,p.y+rad+13/cam.k)}
-    if(mix>0){g.strokeStyle=`rgba(120,150,220,${.18*mix})`;g.lineWidth=.6/cam.k;g.beginPath();g.arc(p.x,p.y,26,0,7);g.stroke();
+    if(mix>0){g.strokeStyle=`rgba(140,170,240,${.22*mix})`;g.lineWidth=.7/cam.k;for(let q=1;q<=15;q++){g.beginPath();g.arc(p.x,p.y,orbitR(q),0,7);g.stroke()}
       i.slots.forEach(sl=>{const o=planetOff(sl.position);g.globalAlpha=mix;g.fillStyle=sl.owner?(COLORS[sl.persona]||COLORS.other):"#334";
         g.beginPath();g.arc(p.x+o.x,p.y+o.y,(sl.owner?3.2:1.4)*Math.min(1,2.2/Math.pow(cam.k,.45)),0,7);g.fill();
         if(sl.battle){g.strokeStyle="#ff4d4d";g.lineWidth=1.2/cam.k;g.beginPath();g.arc(p.x+o.x,p.y+o.y,5.5+Math.sin(ts/120),0,7);g.stroke()}
         if(sl.colony&&sl.owner){g.fillStyle="#05070f";g.beginPath();g.arc(p.x+o.x,p.y+o.y,1.2,0,7);g.fill()}
-        if(cam.k>3.5){g.fillStyle="#7d8bb0";g.font=`${11/cam.k}px system-ui`;g.textAlign="center";g.fillText(""+sl.position,p.x+o.x*1.4,p.y+o.y*1.4+4/cam.k)}g.globalAlpha=1})}});
+        if(cam.k>3.5){g.fillStyle="#7d8bb0";g.font=`${11/cam.k}px system-ui`;g.textAlign="center";g.fillText(""+sl.position,p.x+o.x*(1+9/orbitR(sl.position)),p.y+o.y*(1+9/orbitR(sl.position))+4/cam.k)}g.globalAlpha=1})}});
   D.fleets.forEach(f=>{if(hidden.has(f.kind))return;const ph=phase(f,now);if(ph.leg==="gone"||ph.leg==="wait")return;
     const [A,B]=ends(f,mix);if(A.x===B.x&&A.y===B.y)return;const L=Math.hypot(B.x-A.x,B.y-A.y);const bulge=Math.min(40,L*.18)*(f.agent&&f.agent.charCodeAt(f.agent.length-1)%2?1:-1);
     const fade=ph.fade==null?1:Math.max(0,ph.fade);const back=ph.leg==="back"||ph.leg==="done"&&f.back;
@@ -152,7 +153,7 @@ function draw(ts){requestAnimationFrame(draw);const dpr=devicePixelRatio;g.setTr
     g.restore()});
   g.restore()}
 function hoverAt(mx,my){const tip=$("tip");if(!D||drag){tip.style.display="none";return}
-  const now=Date.now()/1000+offset;const mix=Math.max(0,Math.min(1,(cam.k-1.6)/1.8));let best=null,bd=14;
+  const now=Date.now()/1000+offset;const mix=Math.max(0,Math.min(1,(cam.k-1.4)/1.6));let best=null,bd=14;
   D.fleets.forEach(f=>{if(hidden.has(f.kind))return;const ph=phase(f,now);if(ph.leg==="gone"||ph.leg==="wait"||ph.leg==="done")return;const [A,B]=ends(f,mix);const q=bez(A,B,ph.p,0),sp=w2s(q.x,q.y),d=Math.hypot(sp.x-mx,sp.y-my);if(d<bd){bd=d;best=[f,ph]}});
   if(best){const [f,ph]=best;tip.style.display="block";tip.style.left=Math.min(innerWidth-310,mx+14)+"px";tip.style.top=(my+14)+"px";
     const left=Math.max(0,Math.round((ph.leg==="back"?ph.p:1-ph.p)*f.secs));tip.innerHTML=`<b style="color:${f.color}">${f.label}</b> ${ph.leg==="back"?"(returning)":ph.leg==="hold"?"(on site)":""}<br>${f.agent} (${f.persona||"?"})<br>${f.from.join(":")} → ${f.to.join(":")}<br>${f.ships?f.ships+" ships, ":""}~${left} s to go`}
