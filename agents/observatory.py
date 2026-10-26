@@ -729,7 +729,7 @@ class Observatory:
             _, self._personas = token_from_state(self.state_path)
         return self.tally.agent(agent)["persona"] or self._personas.get(agent)
 
-    def galaxy(self) -> dict:
+    def galaxy_data(self) -> dict:
         """Data for /galaxy: the scanned systems with their planets and the fleets in flight (see galaxy_page.fleets_from)."""
         st = self.state()
         main_of = {}
@@ -840,7 +840,7 @@ def make_handler(observatory: Observatory):
                 self._send(200, galaxy_page.PAGE.encode("utf-8"), "text/html; charset=utf-8")
             elif path == "/api/galaxy":
                 try:
-                    body = json.dumps(observatory.galaxy()).encode("utf-8")
+                    body = json.dumps(observatory.galaxy_data()).encode("utf-8")
                 except Exception as e:
                     body = json.dumps({"error": str(e)[:200]}).encode("utf-8")
                 self._send(200, body, "application/json")
