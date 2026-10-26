@@ -2271,9 +2271,14 @@ class PlanetService
         // and basic income is unaffected by production factor
         $building_production_total = new Resources();
 
+        // Productions calculated below, keyed by machine name, so the fusion plant check further down
+        // can reuse its value instead of calculating it a second time (planet state is unchanged in between).
+        $calculated_productions = [];
+
         foreach (ObjectService::getGameObjectsWithProduction() as $object) {
             // Retrieve all game objects that have production values.
             $production = $this->getObjectProduction($object->machine_name, null, true);
+            $calculated_productions[$object->machine_name] = $production;
 
             if ($production->energy->get() > 0) {
                 $energy_production_total += $production->energy->get();
@@ -2304,8 +2309,8 @@ class PlanetService
         // than production and there is no deuterium in storage, we need to set the energy production to 0.
         foreach (ObjectService::getGameObjectsWithProduction() as $object) {
             if ($object->machine_name === 'fusion_plant') {
-                // Retrieve the fusion plant production.
-                $production = $this->getObjectProduction($object->machine_name, null, true);
+                // Retrieve the fusion plant production (already calculated in the first loop).
+                $production = $calculated_productions[$object->machine_name];
 
                 // If fusion plant deuterium production is negative (consumption)
                 // and there is no deuterium in storage, we need to set the energy production to 0.
