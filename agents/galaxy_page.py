@@ -91,11 +91,13 @@ button{background:#16203a;color:var(--ink);border:1px solid #2a3558;border-radiu
 const COLORS={miner:"#d9a441",scientist:"#4aa3ff",turtle:"#4fbf7a",raider:"#e5534b",balanced:"#b07cf0",other:"#6b7280"};
 const $=i=>document.getElementById(i),cv=$("c"),g=cv.getContext("2d");
 let D=null,offset=0,cam={x:0,y:0,k:1},hidden=new Set(),hover=null,focusSys=null,sysPos={},sysInfo={},stars=[];
-// The galaxy is an ELLIPTICAL one: a round, dense core that thins out towards the edge. The 499 systems sit on a golden-angle
-// disc, r = A * n^0.65 (so the first systems are the packed core and the last ones the sparse outskirts); close numbers are close in space.
-const A=74,POWER=.65,GOLD=2.399963,MAXSYS=499,POS=[null];
-(function(){for(let n=1;n<=MAXSYS+60;n++){const h=Math.sin(n*12.9898)*43758.5453,j=h-Math.floor(h),h2=Math.sin(n*78.233)*12345.678,j2=h2-Math.floor(h2);
-  const r=A*Math.pow(n,POWER),th=n*GOLD;POS.push({x:Math.cos(th)*r+(j-.5)*34,y:Math.sin(th)*r+(j2-.5)*34})}})();
+// The galaxy is an ELLIPTICAL one: a round, dense core that thins out towards the edge. System 1 is the centre and the numbers wind
+// outwards CLOCKWISE in one tight spiral, so the last systems (near 499) are the outermost. Radius r = A*(n-1)^0.65 (dense core,
+// sparse rim); the angle advances so that neighbours along the path and neighbours between two turns are about equally far apart.
+const A=74,POWER=.65,MAXSYS=499,POS=[null];
+(function(){let th=-Math.PI/2;for(let n=1;n<=MAXSYS+60;n++){const r=n===1?0:A*Math.pow(n-1,POWER);
+  if(n>1){const sp=Math.sqrt(2*Math.PI*POWER)*A*Math.pow(n,POWER-.5);th+=Math.min(1.3,sp/Math.max(r,1))}
+  POS.push({x:Math.cos(th)*r,y:Math.sin(th)*r})}})();   // y points down on the screen: a growing angle turns clockwise
 function pos(s){return POS[Math.max(1,Math.min(POS.length-1,s))]}
 function orbitR(p){return 12+p*4.6}   // slot 1 is close to the star, slot 15 far away
 function planetOff(p){const a=p*2.4-1;const r=orbitR(p);return {x:Math.cos(a)*r,y:Math.sin(a)*r}}
@@ -135,8 +137,9 @@ function draw(ts){requestAnimationFrame(draw);const dpr=devicePixelRatio;g.setTr
   g.save();g.translate(innerWidth/2,innerHeight/2);g.scale(cam.k,cam.k);g.translate(-cam.x,-cam.y);
   const RMAX=A*Math.pow(MAXSYS,POWER)*1.15;const core=g.createRadialGradient(0,0,0,0,0,RMAX);core.addColorStop(0,"rgba(255,214,150,.42)");core.addColorStop(.12,"rgba(255,190,120,.22)");core.addColorStop(.4,"rgba(150,130,200,.09)");core.addColorStop(1,"rgba(0,0,0,0)");g.fillStyle=core;g.beginPath();g.arc(0,0,RMAX,0,7);g.fill();
   g.fillStyle="#6c7fb8";for(let n=1;n<=MAXSYS;n++){if(sysInfo[n])continue;const q=POS[n];g.globalAlpha=.85;g.beginPath();g.arc(q.x,q.y,Math.max(2,3/Math.sqrt(cam.k)),0,7);g.fill()}g.globalAlpha=1;
+  g.strokeStyle="rgba(110,140,220,.10)";g.lineWidth=1/cam.k;g.beginPath();for(let n=1;n<=MAXSYS;n++){const q=POS[n];n===1?g.moveTo(q.x,q.y):g.lineTo(q.x,q.y)}g.stroke();
   const ss=Object.keys(sysInfo).map(Number).sort((a,b)=>a-b);
-  g.strokeStyle="#16213f";g.lineWidth=1/cam.k;if(false){g.beginPath();ss.forEach((s,i)=>{const p=pos(s);if(i&&ss[i-1]===s-1)g.lineTo(p.x,p.y);else g.moveTo(p.x,p.y)});g.stroke()}
+  
   ss.forEach(s=>{const p=pos(s),i=sysInfo[s];const owners=i.slots.filter(x=>x.owner);const col=COLORS[(owners.find(x=>x.persona)||{}).persona]||"#8aa4d8";
     const z=1/Math.sqrt(Math.max(.6,cam.k));const rad=(7+Math.min(8,owners.length*1.4))*Math.max(z,.9/Math.sqrt(cam.k)*1.0)*(cam.k<.5?2.2:1);const gr=g.createRadialGradient(p.x,p.y,0,p.x,p.y,rad*2.6);gr.addColorStop(0,col+"cc");gr.addColorStop(.35,col+"44");gr.addColorStop(1,col+"00");
     g.fillStyle=gr;g.beginPath();g.arc(p.x,p.y,rad*2.6,0,7);g.fill();g.fillStyle="#fff";g.beginPath();g.arc(p.x,p.y,2.4*z,0,7);g.fill();
