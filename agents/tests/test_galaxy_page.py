@@ -15,3 +15,20 @@ class Fleets(unittest.TestCase):
         ev = [{"t": 0, "agent": "a", "event": "attack", "at": "1:5:3", "seconds": 60}]
         self.assertEqual(G.fleets_from(ev, lambda a: [1, 1, 1], 99999), [])
 if __name__ == "__main__": unittest.main()
+
+class PlanetView(unittest.TestCase):
+    def test_split_units(self):
+        d = {"id": 5, "name": "P", "type": "planet", "fields": {"used": 3, "max": 160}, "resources": {"metal": 1},
+             "buildings": {"metal_mine": 4, "crystal_mine": 2}, "units": {"rocket_launcher": 10, "small_cargo": 3},
+             "production_per_hour": {"metal": 9}, "building_queue": []}
+        v = G.planet_view(d)
+        self.assertEqual(v["defence"], {"rocket_launcher": 10}); self.assertEqual(v["ships"], {"small_cargo": 3})
+        self.assertFalse(v["public"]); self.assertEqual(list(v["buildings"]), ["crystal_mine", "metal_mine"])
+
+class Detail(unittest.TestCase):
+    def test_unknown_owner_is_public(self):
+        import tempfile, observatory
+        with tempfile.TemporaryDirectory() as d:
+            o = observatory.Observatory(d, d + "/s.json")
+            out = o.planet_detail(7, "someone", "Home")
+            self.assertTrue(out["public"])

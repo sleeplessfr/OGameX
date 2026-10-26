@@ -62,6 +62,22 @@ def fleets_from(events: list[dict], origin_of, now: float, persona_of=lambda a: 
     return live[:limit]
 
 
+DEFENCE = ("rocket_launcher", "light_laser", "heavy_laser", "gauss_cannon", "ion_cannon", "plasma_turret", "small_shield_dome",
+           "large_shield_dome", "anti_ballistic_missile", "interplanetary_missile")
+
+
+def planet_view(d: dict) -> dict:
+    """The GET /planets/{id} answer, cut into what the map shows: summary, economy, buildings, ships, defence, queues."""
+    units = d.get("units") or {}
+    return {"public": False, "id": d.get("id"), "name": d.get("name"), "type": d.get("type"), "coordinates": d.get("coordinates"),
+            "fields": d.get("fields"), "resources": d.get("resources"), "storage": d.get("storage"),
+            "production": d.get("production_per_hour"), "energy": d.get("energy"),
+            "buildings": dict(sorted((d.get("buildings") or {}).items())),
+            "defence": {k: v for k, v in units.items() if k in DEFENCE},
+            "ships": {k: v for k, v in units.items() if k not in DEFENCE},
+            "building_queue": d.get("building_queue") or [], "unit_queue": d.get("unit_queue") or []}
+
+
 PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Galaxy map</title><style>
 :root{--bg:#05070f;--panel:#0c1222cc;--ink:#dbe4ff;--dim:#7d8bb0;--accent:#6cb4ff}
@@ -77,6 +93,7 @@ header>*{pointer-events:auto}header a{color:var(--accent);text-decoration:none}h
 #list div{padding:4px 0;border-bottom:1px solid #1a2238;cursor:pointer;font-size:13px}#list div:hover{background:#16203a}
 #info{left:14px;bottom:14px;max-width:420px;min-height:40px}
 #tip{position:absolute;pointer-events:none;background:#0c1222f0;border:1px solid #334;border-radius:8px;padding:6px 9px;font-size:12px;display:none;z-index:3;max-width:300px}
+#pl{right:14px;top:48px;width:340px;max-height:80vh;overflow:auto;display:none}#pl h3{margin:0 0 4px}#pl table{width:100%;border-collapse:collapse}#pl td{padding:1px 4px;font-size:12px}#pl td+td{text-align:right}#pl .x{float:right;cursor:pointer;color:var(--dim)}#pl h4{margin:8px 0 2px;font-size:12px;color:var(--accent)}
 #hint{right:14px;bottom:14px;color:var(--dim);font-size:12px}.dim{color:var(--dim)}
 button{background:#16203a;color:var(--ink);border:1px solid #2a3558;border-radius:6px;padding:3px 9px;cursor:pointer}
 </style></head><body>
@@ -86,6 +103,7 @@ button{background:#16203a;color:var(--ink);border:1px solid #2a3558;border-radiu
 <div class="panel" id="list"><b>Fleets in flight</b><div class="dim">loading...</div></div>
 <div class="panel" id="info"><span class="dim">Click a system to zoom in, double-click empty space to fit all.</span></div>
 <div class="panel" id="hint">wheel = zoom, drag = move</div>
+<div class="panel" id="pl"></div>
 <div id="tip"></div>
 <script>
 function loadHidden(){try{const v=localStorage.getItem("galaxyHidden");if(v!==null)return new Set(JSON.parse(v))}catch(e){}return new Set(["spy"])}
@@ -121,7 +139,26 @@ addEventListener("mousemove",e=>{if(drag){const dx=e.clientX-drag.x,dy=e.clientY
 cv.addEventListener("wheel",e=>{e.preventDefault();const b=s2w(e.clientX,e.clientY);cam.k=Math.min(14,Math.max(.06,cam.k*Math.exp(-e.deltaY*.0015)));const a=s2w(e.clientX,e.clientY);cam.x+=b.x-a.x;cam.y+=b.y-a.y},{passive:false});
 cv.ondblclick=()=>{fit();focusSys=null};
 function nearestSys(mx,my,r){let best=null,bd=r;for(const s in sysInfo){const q=w2s(pos(+s).x,pos(+s).y),d=Math.hypot(q.x-mx,q.y-my);if(d<bd){bd=d;best=+s}}return best}
-function clickAt(mx,my){const s=nearestSys(mx,my,28*Math.max(1,cam.k/2));if(s!=null){zoomTo(s);showSys(s)}}
+function planetAt(mx,my){const mix=Math.max(0,Math.min(1,(cam.k-1.4)/1.6));if(mix<.5)return null;let best=null,bd=14;
+  for(const s in sysInfo){const c=pos(+s);sysInfo[s].slots.forEach(sl=>{const o=planetOff(sl.position),q=w2s(c.x+o.x,c.y+o.y),d=Math.hypot(q.x-mx,q.y-my);if(d<bd){bd=d;best={sys:+s,sl}}})}return best}
+const nf=n=>n==null?"-":Number(n).toLocaleString("en"),tt=n=>String(n).replace(/_/g," ");
+function tbl(o){const e=Object.entries(o||{});return e.length?"<table>"+e.map(([k,v])=>`<tr><td>${tt(k)}</td><td>${nf(v)}</td></tr>`).join("")+"</table>":'<span class="dim">none</span>'}
+function queueTxt(q){return q&&q.length?q.map(i=>tt(i.machine_name||i.title||"?")+(i.level_target?" \u2192 "+i.level_target:"")+(i.amount?" x"+i.amount:"")).join(", "):'<span class="dim">empty</span>'}
+async function showPlanet(h){const pl=$("pl");pl.style.display="block";$("list").style.display="none";const sl=h.sl;
+  pl.innerHTML=`<span class="x" onclick="closePlanet()">\u2715</span><h3>${sl.planet||"planet"}</h3><div class="dim">${1}:${h.sys}:${sl.position} - ${sl.owner||"?"}${sl.agent?` (${sl.agent}, ${sl.persona||"?"})`:""}${sl.moon?" - has a moon":""}</div><div class="dim">loading...</div>`;
+  try{const r=await fetch(`/api/planet?id=${sl.planet_id||0}&owner=${encodeURIComponent(sl.owner||"")}&name=${encodeURIComponent(sl.planet||"")}`);const d=await r.json();
+    let html=pl.innerHTML.replace('<div class="dim">loading...</div>',"");
+    if(d.public){html+=`<p class="dim">${d.note||"public information only"}</p>`}
+    else{const f=d.fields||{},rs=d.resources||{},pr=d.production||{},st=d.storage||{};
+      html+=`<h4>Fields</h4>${f.used}/${f.max} used`;
+      html+=`<h4>Resources (stock / hourly production / storage)</h4><table><tr><td>metal</td><td>${nf(rs.metal)} / +${nf(pr.metal)} / ${nf(st.metal)}</td></tr><tr><td>crystal</td><td>${nf(rs.crystal)} / +${nf(pr.crystal)} / ${nf(st.crystal)}</td></tr><tr><td>deuterium</td><td>${nf(rs.deuterium)} / +${nf(pr.deuterium)} / ${nf(st.deuterium)}</td></tr><tr><td>energy</td><td>${nf(d.energy)}</td></tr></table>`;
+      html+=`<h4>Buildings</h4>${tbl(d.buildings)}<h4>Defence</h4>${tbl(d.defence)}<h4>Ships</h4>${tbl(d.ships)}`;
+      html+=`<h4>Building queue</h4>${queueTxt(d.building_queue)}<h4>Unit queue</h4>${queueTxt(d.unit_queue)}`;
+      const a=sl.agent&&D&&D.agents&&D.agents[sl.agent];if(a&&a.last_events&&a.last_events.length)html+="<h4>Latest events of "+sl.agent+"</h4>"+a.last_events.slice(-5).reverse().map(e=>`<div class="dim">${e.text}</div>`).join("")}
+    pl.innerHTML=html}catch(e){pl.innerHTML+='<p class="dim">cannot read the planet</p>'}}
+function closePlanet(){$("pl").style.display="none";$("list").style.display="block"}
+function clickAt(mx,my){const hp=planetAt(mx,my);if(hp){showPlanet(hp);return}
+const s=nearestSys(mx,my,28*Math.max(1,cam.k/2));if(s!=null){zoomTo(s);showSys(s)}}
 function showSys(s){const i=sysInfo[s];if(!i)return;const sl=i.slots.map(x=>`${x.position}: ${x.owner||"empty"}${x.agent?" ("+x.persona+")":""}${x.battle?" ⚔":""}`).join("<br>");$("info").innerHTML=`<b>System ${s}</b><br><span class="dim">${sl}</span>`}
 function ends(f,mix){const a=pos(f.from[1]),b=pos(f.to[1]);const pa=planetOff(f.from[2]),pb=planetOff(f.to[2]);
   return [{x:a.x+pa.x*mix,y:a.y+pa.y*mix},{x:b.x+pb.x*mix,y:b.y+pb.y*mix}]}

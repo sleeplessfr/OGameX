@@ -529,7 +529,7 @@ class Universe:
                 if planet:
                     owner = (planet.get("owner") or {}).get("username")
                     slots.append({"position": num(p.get("position")), "planet": planet.get("name"), "owner": owner,
-                                  "moon": bool(planet.get("has_moon"))})
+                                  "moon": bool(planet.get("has_moon")), "planet_id": num(planet.get("id")) or None})
             self.systems[s] = (self._clock(), slots)
             self._sleep(1.0 / SCAN_RATE)
 
@@ -689,6 +689,37 @@ class Observatory:
         self.lock = threading.Lock()
         self._personas: dict[str, str] = {}
         self._persona_read = 0.0
+        self.base_url = None            # set by main(): the game API, to read one planet on demand
+        self._planet_cache: dict[int, tuple[float, dict]] = {}
+
+    def planet_detail(self, planet_id: int, owner: str | None, name: str = "") -> dict:
+        """One planet, read live from the game with the token of the agent that owns it (the API only shows your own planets).
+        A planet of someone who is not one of our agents gives public facts only. Cached for 30 s; read only."""
+        hit = self._planet_cache.get(planet_id)
+        if hit and time.time() - hit[0] < 30:
+            return hit[1]
+        agent = None
+        with self.lock:
+            for n, a in self.tally.agents.items():
+                if owner and a.get("username") == owner:
+                    agent = n
+        token = None
+        if agent:
+            try:
+                token = (json.loads(Path(self.state_path).read_text(encoding="utf-8")).get(agent) or {}).get("token")
+            except (OSError, ValueError):
+                token = None
+        if not token or not self.base_url:
+            out = {"public": True, "name": name, "owner": owner, "agent": agent,
+                   "note": "Not one of our agents: the game only shows its owner and name." if not agent else "No token for this agent."}
+        else:
+            try:
+                out = galaxy_page.planet_view(ReadOnlyClient(self.base_url, token).get(f"/planets/{int(planet_id)}"))
+                out.update(owner=owner, agent=agent, persona=self._persona_of(agent))
+            except (ApiError, OSError, ValueError) as e:
+                out = {"public": True, "name": name, "owner": owner, "agent": agent, "note": f"cannot read the planet: {str(e)[:100]}"}
+        self._planet_cache[planet_id] = (time.time(), out)
+        return out
 
     def ingest(self) -> None:
         with self.lock:
@@ -744,6 +775,7 @@ class Observatory:
         fleets = galaxy_page.fleets_from(events, lambda ag: main_of.get(user_of.get(ag)), now,
                                          lambda ag: (st["agents"].get(ag) or {}).get("persona"))
         return {"now": now, "systems": st["map"]["systems"], "fleets": fleets,
+                "agents": {n: {"last_events": a.get("last_events", [])[-6:]} for n, a in st["agents"].items()},
                 "missions": {k: [v[0], v[1]] for k, v in galaxy_page.MISSIONS.items()}}
 
     def state(self) -> dict:
@@ -781,7 +813,7 @@ class Observatory:
                         planets_owned[sl["owner"]] = planets_owned.get(sl["owner"], 0) + 1
                         owner_at[coord] = sl["owner"]
                     is_colony = coord in colony_spots or (sl["owner"] in main_of and main_of[sl["owner"]] != coord)
-                    slots.append({"position": sl["position"], "planet": sl["planet"], "owner": sl["owner"], "agent": agent,
+                    slots.append({"position": sl["position"], "planet": sl["planet"], "owner": sl["owner"], "agent": agent, "planet_id": sl.get("planet_id"),
                                   "persona": agents[agent]["persona"] if agent else None, "colony": bool(is_colony and agent),
                                   "moon": sl["moon"], "battle": coord in recent})
                 if slots:
@@ -843,6 +875,15 @@ def make_handler(observatory: Observatory):
                     body = json.dumps(observatory.galaxy_data()).encode("utf-8")
                 except Exception as e:
                     body = json.dumps({"error": str(e)[:200]}).encode("utf-8")
+                self._send(200, body, "application/json")
+            elif path == "/api/planet":
+                try:
+                    q = dict(x.split("=", 1) for x in (self.path.split("?", 1)[1] if "?" in self.path else "").split("&") if "=" in x)
+                    from urllib.parse import unquote
+                    body = json.dumps(observatory.planet_detail(int(q.get("id", "0")), unquote(q.get("owner", "")) or None,
+                                                                unquote(q.get("name", "")))).encode("utf-8")
+                except Exception as e:
+                    body = json.dumps({"public": True, "note": str(e)[:200]}).encode("utf-8")
                 self._send(200, body, "application/json")
             elif path == "/api/state":
                 try:
@@ -908,6 +949,7 @@ def main() -> int:
     token, _ = token_from_state(args.state)
     client = ReadOnlyClient(args.base_url, token) if token else None
     obs = Observatory(args.logs, args.state, client, args.galaxy, args.news_hours, args.refresh, BoardReader(args.board))
+    obs.base_url = args.base_url
     stop = threading.Event()
     threading.Thread(target=scan_loop, args=(obs, stop), daemon=True).start()
     try:
