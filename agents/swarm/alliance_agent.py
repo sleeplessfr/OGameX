@@ -180,7 +180,7 @@ class AllianceMixin:
 
         candidates = []
         for a in alliances:
-            if not a.get("open") or int(a.get("member_count", 0)) >= A.MAX_MEMBERS:
+            if not a.get("open") or int(a.get("member_count", 0)) >= A.ABSOLUTE_MAX:
                 continue
             if self.now - float(st["applied"].get(str(a["id"]), -1e18)) < A.REAPPLY_AFTER:
                 continue
@@ -189,10 +189,14 @@ class AllianceMixin:
         # Each agent now looks at its own shuffled order (by name and hour), the bigger ones a little first, and skips the
         # ones with one place left (others are surely applying to them too).
         jitter = random.Random(f"{self.name}:alli:{int(self.now // 3600)}")
-        candidates = [a for a in candidates if int(a.get("member_count", 0)) < A.MAX_MEMBERS - 1] or candidates
+        ads_all = self._alli_adverts() if candidates else {}
+        def _room(a):   # places left under the cap of that alliance's purpose (its advert says what it is for; unknown = the default cap)
+            return A.max_members((ads_all.get(int(a["id"])) or {}).get("purpose")) - int(a.get("member_count", 0))
+        candidates = [a for a in candidates if _room(a) >= 1]
+        candidates = [a for a in candidates if _room(a) >= 2] or candidates
         candidates.sort(key=lambda a: -(int(a.get("member_count", 0)) + jitter.uniform(0, 4)))
         detailed = []
-        ads = self._alli_adverts() if candidates else {}
+        ads = ads_all
         for a in candidates[:4]:
             info = self.client.get(f"/alliances/{a['id']}")["alliance"]
             ids = [int(m["user_id"]) for m in info.get("members", [])]
@@ -478,7 +482,8 @@ class AllianceMixin:
                 continue
             uid = int(app["user_id"])
             ok, why = A.decide_application(member_count=left, applicant_coord=self._alli_coord(rows.get(uid)), opponents=self.memory.opponents,
-                                           aggressors=self.memory.aggressors, attackers=st["attackers"], now=self.now)
+                                           aggressors=self.memory.aggressors, attackers=st["attackers"], now=self.now,
+                                           limit=A.max_members(st.get("purpose")))
             path = f"/alliance/applications/{app['id']}/" + ("accept" if ok else "reject")
             st["handled"] = (st["handled"] + [int(app["id"])])[-50:]
             try:
@@ -494,7 +499,7 @@ class AllianceMixin:
                 self.log("alliance_accepted", alliance=st["tag"], applicant=uid, members=left, text=str(app.get("text") or "")[:80])
             else:
                 self.log("alliance_rejected", alliance=st["tag"], applicant=uid, why=why)
-        if mine.get("open") and left < A.MAX_MEMBERS:
+        if mine.get("open") and left < A.max_members(st.get("purpose")):
             self._alli_advertise(st["tag"], st["id"], coord, left, mine.get("name"))
 
     def _alli_advertise(self, tag, alliance_id, coord, members: int, name: str | None = None) -> None:
@@ -505,7 +510,7 @@ class AllianceMixin:
         st["ad_at"] = self.now + A.AD_EVERY
         near = A.fmt_coord(coord)
         charter = self._alli_charter()
-        head = f"{name or tag} [{tag}] takes members near {near} ({members}/{A.MAX_MEMBERS}): "
+        head = f"{name or tag} [{tag}] takes members near {near} ({members}/{A.max_members(self.memory.alliance.get('purpose'))}): "
         text = (head + charter)[:200]                      # the board allows 200 characters; the full charter is in the data
         try:
             self._board_post("ALLIANCE", text, {"tag": tag, "alliance_id": alliance_id, "at": near, "members": members, "name": name or tag,

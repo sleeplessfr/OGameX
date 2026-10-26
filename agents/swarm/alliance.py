@@ -18,7 +18,14 @@ import zlib
 
 Coord = tuple[int, int, int]
 
-MAX_MEMBERS = 8            # a leader stops accepting at this size
+MAX_MEMBERS = 8            # the size of an alliance whose purpose is not known
+# A leader stops accepting at a size that depends on what the alliance is for: a few big peaceful ones and small raiding bands.
+MAX_BY_PURPOSE = {"mining": 12, "research": 12, "defense": 12, "trade": 10, "mixed": 8, "raiding": 5}
+ABSOLUTE_MAX = max(MAX_BY_PURPOSE.values())
+
+
+def max_members(purpose: str | None) -> int:
+    return MAX_BY_PURPOSE.get(purpose or "", MAX_MEMBERS)
 FOUNDER_BAR = 0.6          # sociability needed to found an alliance
 FOUND_MIN_POINTS = 300     # score needed to found one
 FOUND_MIN_AGE = 1800.0     # seconds an agent has been playing before it founds
@@ -136,7 +143,7 @@ def pick_alliance(my_persona: str, my_coord: Coord, candidates: list[dict], oppo
     Closed or full ones, and any with a member who attacked us or beat us, are out."""
     best = None
     for cand in candidates:
-        if not cand.get("open", True) or cand.get("member_count", 0) >= MAX_MEMBERS:
+        if not cand.get("open", True) or cand.get("member_count", 0) >= max_members(cand.get("purpose")):
             continue
         if any(grudge(opponents, aggressors, c, now) for c in cand.get("coords", [])):
             continue
@@ -468,7 +475,7 @@ def choice_prompt(facts: dict) -> str:
 def choice_facts(*, name: str, tag: str, charter: str | None, purpose: str | None, members: int, fit: float, traits: list[str],
                  persona_name: str) -> dict:
     return {"ALLIANCE": f"{name} [{tag}]", "CHARTER": charter or "unknown (no advert found)",
-            "ITS PURPOSE": PURPOSE_WORDS.get(purpose or "", "") or "unknown", "MEMBERS": f"{members} of {MAX_MEMBERS}",
+            "ITS PURPOSE": PURPOSE_WORDS.get(purpose or "", "") or "unknown", "MEMBERS": f"{members} of {max_members(purpose)}",
             "FIT": f"{fit:.2f} (0 = poor, 1 = ideal; from distance and like-minded members)", "ME": f"a {persona_name}, {', '.join(traits)}",
             "RULES": "open, room left, no attacker among its members"}
 
@@ -501,9 +508,9 @@ def application_text(persona_name: str, agent_name: str, coord: Coord) -> str:
 
 
 # ---- letting people in ----------------------------------------------------------------------------------------------
-def decide_application(*, member_count: int, applicant_coord: Coord | None, opponents: dict, aggressors: dict, attackers: dict, now: float) -> tuple[bool, str]:
+def decide_application(*, member_count: int, applicant_coord: Coord | None, opponents: dict, aggressors: dict, attackers: dict, now: float, limit: int = MAX_MEMBERS) -> tuple[bool, str]:
     """A leader's answer to one application. Never lets in someone who attacked us or any member, or beat us in a fight."""
-    if member_count >= MAX_MEMBERS:
+    if member_count >= limit:
         return False, "alliance full"
     why = grudge(opponents, aggressors, applicant_coord, now, attackers)
     if why:

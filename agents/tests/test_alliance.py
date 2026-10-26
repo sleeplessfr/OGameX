@@ -583,3 +583,12 @@ class SummaryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PurposeCap(unittest.TestCase):
+    def test_caps(self):
+        self.assertEqual(A.max_members("raiding"), 5); self.assertEqual(A.max_members("mining"), 12)
+        self.assertEqual(A.max_members(None), A.MAX_MEMBERS); self.assertEqual(A.ABSOLUTE_MAX, 12)
+        base = dict(member_count=5, applicant_coord=None, opponents={}, aggressors={}, attackers={}, now=0.0)
+        self.assertFalse(A.decide_application(**base, limit=A.max_members("raiding"))[0])
+        self.assertTrue(A.decide_application(**base, limit=A.max_members("mining"))[0])
