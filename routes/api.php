@@ -1,9 +1,11 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
+use OGame\Http\Controllers\Api\V1\AllianceController;
 use OGame\Http\Controllers\Api\V1\AuthController;
 use OGame\Http\Controllers\Api\V1\BuildingController;
 use OGame\Http\Controllers\Api\V1\CharacterClassController;
+use OGame\Http\Controllers\Api\V1\ChatController;
 use OGame\Http\Controllers\Api\V1\FleetController;
 use OGame\Http\Controllers\Api\V1\GalaxyController;
 use OGame\Http\Controllers\Api\V1\HighscoreController;
@@ -82,6 +84,21 @@ Route::middleware(['api.token', 'throttle:ogamex-api', 'globalgame'])->group(fun
 
     Route::get('/character-class', [CharacterClassController::class, 'show']);
     Route::post('/character-class', [CharacterClassController::class, 'select']);
+
+    Route::get('/alliances', [AllianceController::class, 'index']);
+    Route::get('/alliances/{id}', [AllianceController::class, 'show'])->whereNumber('id');
+    Route::post('/alliances/{id}/apply', [AllianceController::class, 'apply'])->whereNumber('id');
+    Route::get('/alliance', [AllianceController::class, 'mine']);
+    Route::post('/alliance', [AllianceController::class, 'create']);
+    Route::post('/alliance/applications/{id}/accept', [AllianceController::class, 'accept'])->whereNumber('id');
+    Route::post('/alliance/applications/{id}/reject', [AllianceController::class, 'reject'])->whereNumber('id');
+    Route::post('/alliance/leave', [AllianceController::class, 'leave']);
+    Route::post('/alliance/kick', [AllianceController::class, 'kick']);
+    Route::post('/alliance/broadcast', [AllianceController::class, 'broadcast']);
+
+    Route::get('/chat', [ChatController::class, 'index']);
+    Route::post('/chat/send', [ChatController::class, 'send']);
+    Route::post('/messages/send', [ChatController::class, 'sendMessage']);
 
     Route::get('/highscore', [HighscoreController::class, 'index']);
 });

@@ -98,6 +98,10 @@ class FakeGame:
         self.phalanx_fleets: dict[tuple, list[dict]] = {}   # scanned planet -> the fleets its scan shows (API shape of POST /phalanx)
         self.scans: list[tuple] = []                        # every scan made, for the tests
         self.no_moon_endpoints = False                      # an older game: the moon routes answer 404 (not our envelope)
+        # --- alliances and chat: the routes of docs/API.md; several games share one AllianceWorld (tests/fakealliance.py) ---
+        self.alliance_stuff = False
+        self.world = None                                   # the shared AllianceWorld (made on first use)
+        self.my_score = 0                                   # our general score in /highscore
 
     # -- economy --
     def energy_prod(self):
@@ -423,7 +427,17 @@ class FakeGame:
                     "scan_cost": 5000, "deuterium_left": int(self.res3["deuterium"]), "fleet_count": len(fleets), "fleets": fleets}
         raise ApiError(404, "not_found", path)
 
+    def _alliance_world(self):
+        if self.world is None:
+            from tests.fakealliance import AllianceWorld
+            self.world = AllianceWorld()
+        self.world.names.setdefault(self.uid, "Fake")
+        return self.world
+
     def _handle_new_get(self, path):
+        route0 = urlparse(path).path
+        if self.alliance_stuff and (route0 in ("/alliance", "/alliances", "/chat") or route0.startswith("/alliances/")):
+            return self._alliance_world().get(self.uid, path, self.now)
         url = urlparse(path)
         q = {k: v[0] for k, v in parse_qs(url.query).items()}
         route = url.path
@@ -456,10 +470,10 @@ class FakeGame:
             rows = [{"rank": 1, "user_id": o["user_id"], "username": o["username"], "score": o["score"], "is_me": False,
                      "main_planet": {"galaxy": o["coord"][0], "system": o["coord"][1], "position": o["coord"][2]},
                      "alliance_tag": None, "total_ships": None} for o in self.others]
-            rows.append({"rank": 2, "user_id": self.uid, "username": "Fake", "score": 0, "is_me": True,
+            rows.append({"rank": 2, "user_id": self.uid, "username": "Fake", "score": self.my_score, "is_me": True,
                          "main_planet": {"galaxy": self.home[0], "system": self.home[1], "position": self.home[2]}, "alliance_tag": None, "total_ships": None})
             return {"type": "general", "players": rows, "total_players": len(rows),
-                    "me": {"general": {"rank": 2, "score": 0}}}
+                    "me": {"general": {"rank": 2, "score": self.my_score}}}
         if route == "/messages":
             rows = [m for m in self.messages if not (q.get("unread_only") == "1" and m["viewed"])
                     and (q.get("category") != "espionage" or m["key"] == "espionage_report")
@@ -521,6 +535,8 @@ class FakeGame:
         return None
 
     def _handle_new_post(self, path, body):
+        if self.alliance_stuff and (path.startswith("/alliance") or path == "/chat/send"):
+            return self._alliance_world().post(self.uid, path, body, self.now)
         if self.moon_stuff and path.startswith("/planets/12/"):
             if self.no_moon_endpoints:
                 raise ApiError(404, "http_error", "The route could not be found.")

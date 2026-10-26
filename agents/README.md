@@ -165,6 +165,32 @@ them answers 404 once and the agent never asks again.
 - Events: `moon_seen`, `phalanx_built`, `phalanx_scan`, `phalanx_warning`, `phalanx_skipped`, `moon_fed`. Report section: MOONS.
 - Not done: the jump gate (the API has it, agents do not use it), scanning to find new raid targets, building the moon's own defence.
 
+## Alliances (agents with sociability)
+
+Rules are in `swarm/alliance.py` (pure) and `swarm/alliance_agent.py` (the calls, mixed into `Agent`). Needs the alliance and chat
+endpoints of the game (`/alliance`, `/alliances`, `/chat`, see `docs/API.md`, "Alliances and chat"). A game without them answers 404 to
+`GET /alliance`: the agent writes `alliance_skipped`, never asks again, and plays as before. Persona field `sociability` (0 = no alliances):
+miner, scientist and turtle 0.8-0.9, trader 0.7, balanced 0.5, raider 0.15 (drawn last in `make_persona`, from its own stream, so nothing else changes).
+
+- **Founding:** sociability 0.6+, 300+ points, playing 30+ minutes, at most one alliance per 5 agents (at least one), 35% chance per look.
+  Tag and name come from the personality and the agent's number (`MINE07`, "Quiet Miners 7"), unique among the existing ones.
+- **Applying:** after 15 minutes, to the open, not full alliance whose members are the best fit: neighbours in the galaxy and similar
+  personalities (`compat`), never one with a member who attacked this agent or beat it in a fight. A short text says who and where.
+- **Accepting:** the founder answers within one look: max 8 members, rejects a grudge (attacked it, or beat it in a fight in the
+  opponents memory) and anyone who attacked another member (members tell the chat when they are attacked).
+- **Allies are never targets:** their ids are taken out of `_allowed_target_ids`, and spy reports on their planets are forgotten.
+- **Sharing:** members use the alliance chat in a fixed format: `INTEL T=1:2:3 O=45 L=12000 D=3 A=120` (target, owner, loot, defenders,
+  age) at most once in 4 minutes, `WARN AT=1:3:8 FROM=1:5:5 ETA=300` when an attack is on its way (once per mission, 1 a minute).
+  Attacking agents turn fresh `INTEL` of allies into targets (`intel_used`); a `WARN` makes everybody remember the raider.
+  The circular message `/alliance/broadcast` is not used: it needs a rank with a permission that new members do not have.
+- **Leaving:** a member leaves after an ally attacked it, or when nobody has said anything for 12 hours (no way back to the same alliance
+  for 4 hours; the game also has its own cooldown). A founder cannot leave, so it kicks a member that attacked it.
+- **Board:** a founder with room left posts an `ALLIANCE` note to the galaxy board once an hour (nothing without `--board`).
+- Events: `alliance_founded`, `alliance_applied`, `alliance_accepted` (written by the leader), `alliance_rejected`, `alliance_joined`,
+  `alliance_left`, `alliance_kicked`, `intel_shared`, `intel_used`, `ally_warned`, `alliance_skipped`. Report section: ALLIANCES.
+  The observatory leaderboard shows each player's alliance tag from `/highscore`.
+- Not done: ranks, alliance texts, voting, a leader handing over, joint attacks, resource help between allies, members beyond the top 100 of the highscore.
+
 ## Learning
 
 - **Memory per agent** (`memory/<name>.json`): risk scale, avoid list, aggressors, merchant cooldown, colony goal.
@@ -367,7 +393,7 @@ The server address may be any `http://` address (it is not limited to this compu
 
 ## Not built yet
 
-The scrap merchant, alliances (the board has an ALLIANCE kind but no agent uses it yet), jump gate use by agents, defending colonies, other retaliation than the revenge join, and LLM-driven
+The scrap merchant, jump gate use by agents, defending colonies, other retaliation than the revenge join, and LLM-driven
 decisions (the LLM so far only writes text: see the inner voice). The brain is rule-based; the personas are the knobs; learning so far is the risk lesson, opponent memory and the
 fight margin bandit above.
 
