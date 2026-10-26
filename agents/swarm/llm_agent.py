@@ -57,9 +57,10 @@ class VoiceMixin:
     voice_grace = GRACE
     voice_every = VOICE_EVERY
     voice_clock = staticmethod(time.time)
+    voiced = True           # False (run_swarm --llm-voices N, for the agents beyond the first N): template texts, no diary, no rewrite
 
     def _voice_on(self) -> bool:
-        return bool(getattr(self.llm, "enabled", False))
+        return bool(getattr(self.llm, "enabled", False)) and bool(self.voiced)
 
     def _voice_state(self) -> dict:
         v = self.memory.voice

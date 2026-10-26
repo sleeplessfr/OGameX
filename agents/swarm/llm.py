@@ -6,7 +6,8 @@ The language model is SLOW and SHARED: every agent lives in the same process and
   talk go before routine chatter). Agents never wait for it: they `submit()` a request with a callback and carry on;
   the answer is picked up on a later round.
 * A request that waited too long in the queue is dropped (its callback gets None).
-* A global budget of requests per hour (`max_per_hour`).
+* A global budget of requests per hour (`max_per_hour`) and, optionally, a quota per agent per hour (`per_agent_hour`, 0 = off):
+  an over-quota request is refused at once (submit() gives False, the callers carry on with their template text) and logged.
 * EVERY failure (server down, timeout, bad JSON, empty answer, budget used up) gives None. Nothing here raises.
 * Every call is logged, one JSON line, in `<log_dir>/llm.jsonl`. These lines carry "kind": "llm_call" and no "event" key on
   purpose, so the observatory and summarize_logs do not mistake them for agent events (they read the file themselves).
@@ -27,6 +28,7 @@ from pathlib import Path
 HIGH, NORMAL = 0, 5            # priorities: lower goes first
 DEFAULT_TIMEOUT = 60.0
 DEFAULT_MAX_PER_HOUR = 120
+DEFAULT_PER_AGENT_HOUR = 0     # 0 = no limit per agent
 DEFAULT_MAX_WAIT = 600.0       # a queued request older than this is dropped
 QUEUE_LIMIT = 200
 FAKE = "fake"
@@ -36,13 +38,16 @@ class LLMClient:
     enabled = True
 
     def __init__(self, url: str, model: str = "", timeout: float = DEFAULT_TIMEOUT, max_per_hour: int = DEFAULT_MAX_PER_HOUR,
-                 log_dir: str | Path | None = "logs", max_wait: float = DEFAULT_MAX_WAIT, clock=time.time):
+                 log_dir: str | Path | None = "logs", max_wait: float = DEFAULT_MAX_WAIT, clock=time.time,
+                 per_agent_hour: int = DEFAULT_PER_AGENT_HOUR):
         self.url = url.rstrip("/")
         self.fake = self.url == FAKE
         self.model = model or "local-model"
         self.timeout = float(timeout)
         self.max_per_hour = int(max_per_hour)
         self.max_wait = float(max_wait)
+        self.per_agent_hour = max(0, int(per_agent_hour))     # most requests one agent may queue per hour (0 = off)
+        self._by_agent: dict[str, list[float]] = {}
         self.clock = clock
         self.log_path = Path(log_dir) / "llm.jsonl" if log_dir else None
         self._cv = threading.Condition()
@@ -52,7 +57,7 @@ class LLMClient:
         self._worker: threading.Thread | None = None
         self._stop = False
         self._log_lock = threading.Lock()
-        self.counts = {"ok": 0, "failed": 0, "dropped": 0}
+        self.counts = {"ok": 0, "failed": 0, "dropped": 0, "quota": 0}
         self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))   # the server lives on this computer
 
     # ---- the public door ---------------------------------------------------------------------------------------
@@ -61,6 +66,12 @@ class LLMClient:
         try:
             with self._cv:
                 if self._stop or len(self._heap) >= QUEUE_LIMIT:
+                    return False
+                if not self._quota_ok(agent):
+                    self.counts["quota"] += 1
+                    self.counts["dropped"] += 1
+                    self._log(agent, purpose, prompt, None, 0.0, None, f"quota: {agent} already used its {self.per_agent_hour} requests this hour",
+                              priority=priority)
                     return False
                 heapq.heappush(self._heap, (priority, next(self._seq), self.clock(), self.max_wait if max_wait is None else max_wait,
                                             agent, purpose, system, prompt, callback))
@@ -71,6 +82,19 @@ class LLMClient:
             return True
         except Exception:
             return False
+
+    def _quota_ok(self, agent: str) -> bool:
+        """Per-agent hourly quota, so a few chatty agents cannot use up the budget everybody shares. Takes a slot when it says yes."""
+        if self.per_agent_hour <= 0:
+            return True
+        now = self.clock()
+        used = [t for t in self._by_agent.get(agent, ()) if now - t < 3600]
+        if len(used) >= self.per_agent_hour:
+            self._by_agent[agent] = used
+            return False
+        used.append(now)
+        self._by_agent[agent] = used
+        return True
 
     def ask(self, agent: str, purpose: str, system: str, prompt: str, priority: int = NORMAL, wait: float | None = None) -> str | None:
         """Blocking convenience (tests, tools): submit and wait for the answer. None on any failure or when `wait` runs out."""
@@ -221,6 +245,6 @@ def fake_answer(system: str, prompt: str) -> str:
 
 
 def make_llm(url: str | None, model: str = "", timeout: float = DEFAULT_TIMEOUT, max_per_hour: int = DEFAULT_MAX_PER_HOUR,
-             log_dir: str | Path | None = "logs"):
+             log_dir: str | Path | None = "logs", per_agent_hour: int = DEFAULT_PER_AGENT_HOUR):
     """A client for `url`, or None when the feature is off (url empty)."""
-    return LLMClient(url, model, timeout, max_per_hour, log_dir) if url else None
+    return LLMClient(url, model, timeout, max_per_hour, log_dir, per_agent_hour=per_agent_hour) if url else None

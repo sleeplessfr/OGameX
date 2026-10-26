@@ -3,3 +3,5 @@ agents_state.json
 logs/
 STOP
 __pycache__/
+bench_state.json
+agents_state.json.p*

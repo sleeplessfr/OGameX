@@ -484,6 +484,125 @@ Log events: `contact` (who, how), `diplo_hello` (who, step, text), `diplo_answer
 a digest of the facts, `raw` = what the model said), `diplo_step` (from, to, trust, why; `betrayal` set when a pact was broken), `diplo_trust` (delta, why, trust;
 only changes of 5 or more, or a small one every 6 hours per pair), `diplo_announce`, `diplo_blocked` (a raid on a partner was stopped), `diplo_error`.
 
+## Scaling up: from 20 agents to thousands
+
+A real universe has thousands of players, but each one is online only a small part of the day (typically 5-10 %). The
+tools below let you copy that: a big population of agents, of which only a few are playing at any moment. Everything is
+off by default; a plain `python run_swarm.py --count 20` behaves as before.
+
+### The order to try things
+
+1. **Measure the game first** (`bench.py`, below). It tells you how many requests a second your server can take.
+2. **Turn on the online routine** (`--routine real`): the agents then make requests only while "online". This is the big win:
+   with 7 % online, 1000 agents cost about as much as 70 playing all day.
+3. **Add processes** (`--procs N`) when one run of `run_swarm.py` is no longer enough (the computer shows one core at 100 %,
+   or agents react late).
+4. Only then raise the number of agents, one step at a time, and look at `python summarize_logs.py` after each step.
+
+### 1. The benchmark: how much can my server take?
+
+```
+python bench.py --base-url http://localhost/api/v1 --agents 50 --seconds 60 --max-rate 50
+python bench.py --dry-run                      (try the tool itself on a pretend server; no game needed)
+```
+
+It makes throwaway accounts named `bench0001`, `bench0002`... (remembered in `bench_state.json`, so the second run makes no
+new accounts; delete the file to start over) and then only **reads**, the way agents do: status, buildings, galaxy view,
+fleet, highscore, messages. It builds, researches, attacks and posts nothing. Do not run it while a real swarm is playing:
+the two would add up.
+
+How to read the result: a table per call with how many requests, the typical answer time (p50), the slow ones (p95 = 19 of
+20 answers were faster than this, p99 = 99 of 100), and the counts of `429` (the game refused: its own rate limit),
+`502` (the web server lost its PHP workers: overloaded) and other errors. The last line is the verdict in plain words, e.g.
+"the server handled 120 req/s with p95 80 ms; ... supports about 1200 agents online at the same time". Rules of thumb:
+
+- **Healthy**: no 429/502, p95 under 1 second. If the verdict says "the test itself was the limit", raise `--max-rate`
+  (and `--agents`) and run again until it stops saying that: that is the real limit.
+- **Struggling**: errors above a few percent or p95 over 1 second. The number printed is then your ceiling; stay clearly below it
+  (half is comfortable).
+- 429 for every call right from the start means the game's per-minute limit: raise `OGAMEX_API_RATE_LIMIT` in the game's `.env`
+  (it counts per account, or per address if the game cannot tell the accounts apart; many agents on one address can hit it).
+- `--typical-interval 10` is how many seconds pass between two requests of one real agent (a round of about 5 calls every 45 s);
+  change it if your agents are slower or faster. `--pace S` makes each simulated agent wait S seconds between calls instead of
+  going as fast as `--max-rate` allows.
+
+### 2. Online routines: `--routine`
+
+```
+python run_swarm.py --count 500 --routine real --max-rate 20
+python run_swarm.py --count 20 --routine light --time-scale 24      (a "day" lasts one real hour: to watch it work)
+```
+
+Each agent gets a fixed daily timetable, worked out from its name (the same every run; it does not disturb the personalities):
+a few online sessions a day, at the hours typical for a time zone chosen per agent (so the swarm is not all online together),
+and **no requests at all** in between. Its planets keep producing and its fleets keep flying on the server. Miners and turtles
+look in more often for a short time, raiders play in the evening, scientists have fewer, longer sessions.
+
+- `--routine off` (default) always playing; `light` about 45 % of the day online; `real` about 5-10 % (2-5 sessions of 5-40 minutes).
+- `--time-scale 24` compresses the day (one routine day per real hour); `--speedup` still just shortens the pauses. With a
+  routine, `--ticks N` counts only online rounds, so a run with `--ticks` can wait a long time for an offline agent.
+- The log gets one `online` and one `offline` event per session; `summarize_logs.py` shows the share of agents online.
+- The stop file and Ctrl+C work while agents are offline (they look at the stop file at least once a minute).
+- At the start the agents are spread out by `--stagger` seconds each; for thousands of agents use a small value
+  (`--stagger 0.2`): registering 10 000 accounts at 2 s each would take 5 hours.
+
+### 3. The language model with many agents: `--llm-voices`, `--llm-per-agent-hour`
+
+One local model answers one request at a time, so it cannot give thousands of agents a voice.
+
+- `--llm-voices 20`: only agents number 1 to 20 write a diary and have their board texts rewritten in their own words.
+  All the others use the plain template texts. Diplomacy decisions (accept / refuse a pact) still go through the model
+  for every agent when the hourly budget allows; if not, the fixed rules decide. Default 0 = every agent has a voice.
+- `--llm-per-agent-hour 6`: no agent may make more than 6 model requests an hour, so a few chatty agents cannot eat the
+  budget (`--llm-max-per-hour`) that everybody shares. An over-quota request is refused and written in `logs/llm.jsonl`
+  with the reason "quota: ...". Default 0 = no limit.
+
+### 4. More processes: `--procs`
+
+```
+python run_swarm.py --count 2000 --procs 4 --routine real --max-rate 40 --stagger 0.2
+```
+
+One Python process can only use about one processor core. `--procs 4` splits agent numbers 1..2000 into four slices and starts
+four `run_swarm.py` processes, one per slice. What changes:
+
+- the request pace `--max-rate` (and `--llm-max-per-hour`) is divided by 4, so the total stays what you asked for;
+- every process keeps accounts in its own file, `agents_state.json.p1` ... `.p4` (two processes writing one file would corrupt it);
+  existing accounts are copied into them at the start, and at the end they are merged back into `agents_state.json`;
+- the board (`--board`) and the model (`--llm`) addresses are shared by all of them; `--llm-voices` counts agent numbers over the
+  whole swarm, so it keeps working. The model still answers one request at a time: it does not get faster with more processes;
+- Ctrl+C in the main window, or the `STOP` file, stops all of them; the main process waits and prints when all have finished.
+  The screen shows the lines of all processes mixed; each agent's own log file in `logs/` stays clean.
+
+A good number of processes is the number of CPU cores minus one, and one process for about every 300-500 agents.
+
+### What to change in the game's Docker setup
+
+Only you can see what your setup does, so look at these in order, one at a time, and run `bench.py` after each change:
+
+- **The number of PHP workers** (PHP-FPM). Each request occupies one worker; if all are busy, new requests wait or the web
+  server answers 502. The benchmark's 502 count is the sign. More workers use more memory.
+- **The database** (MariaDB/MySQL). Most game work ends up there. Check that it has enough memory for its caches
+  (the buffer pool) and that the database container is not starved of CPU or limited by Docker.
+- **The queue and scheduler** (the game processes building and fleet arrivals in background jobs). If these fall behind, buildings
+  finish late for everybody: watch that the queue worker is running, give it more workers if the game offers it.
+- **The game's rate limit**: `OGAMEX_API_RATE_LIMIT` in `.env` (per account per minute) and the container CPU / memory limits.
+- Run the swarm on another computer, or at least keep an eye on CPU: the game, the database and the agents compete for the same cores.
+
+### Stages and goals
+
+| Stage | Agents | Settings (a start) | Online at once | Requests/s to expect | What to check before the next stage |
+|---|---|---|---|---|---|
+| 1 | 20 | defaults | 20 | 2-4 | works as today |
+| 2 | 100 | `--routine real --max-rate 8` | 5-10 | about 1 | `bench.py` p95 under 1 s; report looks sane |
+| 3 | 500 | `--routine real --max-rate 20 --stagger 0.5` | 30-60 | 3-6 | no `api_error` bursts in the report; 1 process is fine |
+| 4 | 2000 | `--routine real --procs 4 --max-rate 40 --stagger 0.2 --llm-voices 20` | 150-250 | 15-25 | PHP workers and database tuned; bench shows no 502 |
+| 5 | 10 000 | `--routine real --procs 8-16 --max-rate 100 --stagger 0.1 --llm-voices 20`, probably the agents on a second computer | 700-1200 | 70-120 | the server holds that rate for hours; the game's own jobs keep up |
+
+These numbers are estimates from "about 7 % online and one request every 10 s per online agent", not measurements:
+trust your own `bench.py` run over this table. Also expect that thousands of agents fill the universe (galaxies and
+systems have a limited number of free planet slots) and that logs and memory files grow (one file per agent): watch the disk.
+
 ## Tests
 
 ```

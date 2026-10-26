@@ -14,6 +14,7 @@ from swarm.boardclient import is_local_url, make_board
 from swarm.client import ApiClient, ApiError
 from swarm.llm import make_llm
 from swarm.personas import PRESETS, ROTATION, make_persona
+from swarm.routine import MODES, make_routine
 
 
 def main() -> int:
@@ -44,7 +45,23 @@ def main() -> int:
     ap.add_argument("--llm-model", default="", help="model name to send (LM Studio: the one that is loaded)")
     ap.add_argument("--llm-timeout", type=float, default=60.0, help="seconds to wait for one answer (default 60)")
     ap.add_argument("--llm-max-per-hour", type=int, default=120, help="most requests per hour all agents together (default 120)")
+    ap.add_argument("--llm-voices", type=int, default=0, metavar="N",
+                    help="only agents number 1..N get the diary and the rewritten board texts; the others use plain template text. "
+                         "Diplomacy answers still go through the model for everybody. Default 0 = every agent has a voice")
+    ap.add_argument("--llm-per-agent-hour", type=int, default=0, metavar="N",
+                    help="most model requests one agent may make per hour, so chatty agents cannot use up the shared budget (default 0 = no limit)")
+    ap.add_argument("--routine", choices=MODES, default="off",
+                    help="online hours like a real player: off = always playing (default), light = about half the day, real = about 5-15%% of the day. "
+                         "An offline agent makes no requests at all")
+    ap.add_argument("--time-scale", type=float, default=1.0,
+                    help="compress the routine day: 24 = one routine day passes in one real hour (for testing; default 1)")
+    ap.add_argument("--procs", type=int, default=1, metavar="N",
+                    help="split the agents over N processes (one Python process fills about one processor core). Default 1")
     args = ap.parse_args()
+    if args.time_scale <= 0:
+        ap.error("--time-scale must be above 0")
+    if args.procs < 1:
+        ap.error("--procs must be at least 1")
     if args.llm and args.llm != "fake" and not args.llm.startswith(("http://", "https://")):
         ap.error("--llm must be 'fake' or an address like http://localhost:1234/v1")
     if args.board and not is_local_url(args.board):
@@ -61,6 +78,15 @@ def main() -> int:
         print(f"Cannot reach the API at {args.base_url}: {e}", file=sys.stderr)
         return 1
 
+    if args.procs > 1 and args.count > 1:
+        from swarm.multiproc import run_children
+        return run_children(args, sys.argv[1:])
+    if args.count > 200:
+        try:
+            threading.stack_size(512 * 1024)     # thousands of threads: a small stack each keeps the memory down
+        except (ValueError, RuntimeError):
+            pass
+
     ApiClient.shared_interval = 1.0 / args.max_rate if args.max_rate > 0 else 0.0
     store = TokenStore(args.state)
     stop = threading.Event()
@@ -72,6 +98,8 @@ def main() -> int:
         agents.append(Agent(f"{args.prefix}{number:04d}", persona, args.base_url, store, rng,
                             log_dir=args.log_dir, email_domain=args.email_domain,
                             attack_humans=args.attack_humans, memory_dir=args.memory_dir))
+        agents[-1].routine = make_routine(args.routine, agents[-1].name, persona.name, args.time_scale)
+        agents[-1].voiced = args.llm_voices <= 0 or number <= args.llm_voices
 
     if args.board:
         for a in agents:
@@ -79,10 +107,17 @@ def main() -> int:
         up = agents[0].board.read(limit=1)["ok"] if agents else True
         print(f"Galaxy board: {args.board} ({'reachable' if up else 'NOT reachable yet: agents play without it until it is'})")
     if args.llm:
-        shared = make_llm(args.llm, args.llm_model, args.llm_timeout, args.llm_max_per_hour, args.log_dir)
+        shared = make_llm(args.llm, args.llm_model, args.llm_timeout, args.llm_max_per_hour, args.log_dir, args.llm_per_agent_hour)
         for a in agents:
             a.llm = shared      # one client for the whole process: one request at a time, one budget
         print(f"Language model: {args.llm} (model {args.llm_model or 'default'}, at most {args.llm_max_per_hour} requests an hour, log {args.log_dir}/llm.jsonl)")
+        if args.llm_voices > 0:
+            print(f"Voices: agents 1..{args.llm_voices} write in their own words, {sum(1 for a in agents if not a.voiced)} of these {len(agents)} use template text")
+        if args.llm_per_agent_hour > 0:
+            print(f"Quota: at most {args.llm_per_agent_hour} model requests per agent per hour")
+    if args.routine != "off":
+        online = sum(1 for a in agents if a.routine and a.routine.online(time.time()))
+        print(f"Routine {args.routine} (time scale {args.time_scale:g}): {online} of {len(agents)} agents are online right now; the others wait for their next session")
     threads = []
     print(f"Starting {len(agents)} agents on {args.base_url}. Ctrl+C or create a file named {args.stop_file} to stop.")
     for agent in agents:

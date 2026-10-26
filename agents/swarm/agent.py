@@ -932,6 +932,8 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
             if stop_file and Path(stop_file).exists():
                 self.log("stop_file_found")
                 return
+            if self.routine is not None and self._routine_offline(stop, speedup):
+                continue                       # offline: no API calls; we slept (at most a minute) and look at the stop file again
             try:
                 if not self.client.token:
                     self.ensure_session()
@@ -955,7 +957,43 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
                 return
             if max_ticks and self.stats["ticks"] >= max_ticks:
                 return
+            if self.routine is not None:
+                delay = self._routine_delay(delay)
             stop.wait(delay / max(speedup, 0.01))
+
+    # ---- activity routine (routine.py; off unless run_swarm.py gives the agent one) -----------------------------------
+    routine = None                  # a swarm.routine.Routine, or None = always online (the default)
+    routine_clock = staticmethod(time.time)
+    _routine_was_online = False
+    _routine_announced = False
+    ROUTINE_CHUNK = 60.0            # an offline agent wakes at least this often (real seconds) to look at the stop file
+
+    def _routine_offline(self, stop: threading.Event, speedup: float) -> bool:
+        """True if the agent is offline right now (it then sleeps and makes no API call). Never raises: a broken routine = online."""
+        try:
+            now = self.routine_clock()
+            if self.routine.online(now):
+                if not self._routine_was_online:
+                    self._routine_was_online = True
+                    self.log("online", minutes=round((self.routine.session_end(now) - now) / 60.0, 1))
+                return False
+            if self._routine_was_online or not self._routine_announced:
+                self._routine_was_online = False
+                self._routine_announced = True
+                self.log("offline", back_in_min=round(self.routine.seconds_until_online(now) / 60.0, 1))
+            wait = min(self.routine.seconds_until_online(now) + 0.01, self.ROUTINE_CHUNK)
+            stop.wait(max(wait, 0.01) / max(speedup, 0.01))
+            return True
+        except Exception:
+            return False
+
+    def _routine_delay(self, delay: float) -> float:
+        """The pause after a round: unchanged inside the session; if it would outlast the session, only up to the end of it
+        (the loop then sees the agent is offline and sleeps until the next session)."""
+        try:
+            return self.routine.clip(self.routine_clock(), delay)
+        except Exception:
+            return delay
 
 
 def _r(x):

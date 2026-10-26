@@ -96,6 +96,10 @@ class DiplomacyMixin:
     def _diplo_on(self) -> bool:
         return bool(getattr(self.llm, "enabled", False))
 
+    def _diplo_voiced(self) -> bool:
+        """The model may put hello / announce texts in the agent's own words (not for agents beyond --llm-voices; answers still use it)."""
+        return self._diplo_on() and bool(getattr(self, "voiced", True))
+
     def _diplo_standing(self, uid: int) -> dict:
         rows, score = self._diplo_cached()
         return D.standing(score, self._diplo_row(uid, rows), rows)
@@ -569,7 +573,7 @@ class DiplomacyMixin:
         name = self._diplo_name(uid, rel)
         template = D.hello_template(self.name, name, step)
         job = {"kind": "hello", "uid": uid, "step": step, "template": template, "started": self.diplo_clock(), "done": False, "answer": None}
-        if self._diplo_on() and self._diplo_ask(job, "hello", V.system_prompt(self._voice_state()["sheet"]), D.hello_prompt(template, step), L.NORMAL):
+        if self._diplo_voiced() and self._diplo_ask(job, "hello", V.system_prompt(self._voice_state()["sheet"]), D.hello_prompt(template, step), L.NORMAL):
             return          # posted by _diplo_collect when the text is ready (or after JOB_WAIT in plain words)
         job["done"] = True
         self._diplo_send_hello(job)
@@ -600,7 +604,7 @@ class DiplomacyMixin:
         name = self._diplo_name(uid, rel)
         template = D.announce_template(self.name, name, step)
         job = {"kind": "announce", "uid": uid, "step": step, "template": template, "started": self.diplo_clock(), "done": False, "answer": None}
-        if self._diplo_on() and self._diplo_ask(job, "announce", V.system_prompt(self._voice_state()["sheet"]), D.announce_prompt(template), L.NORMAL):
+        if self._diplo_voiced() and self._diplo_ask(job, "announce", V.system_prompt(self._voice_state()["sheet"]), D.announce_prompt(template), L.NORMAL):
             return
         job["done"] = True
         self._diplo_send_announce(job)

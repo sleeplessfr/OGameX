@@ -67,6 +67,8 @@ def summarize(events: list[dict], personas: dict[str, str] | None = None, llm_ca
         out.append(f"  {agent} {persona}: {shown or 'nothing yet'}")
     out.append("")
 
+    out += activity_section(events, first, last)
+
     # Battles, from each agent's point of view as attacker
     out.append("ATTACKS BY EACH AGENT (what it lost, what it destroyed, what it looted)")
     any_attack = False
@@ -575,6 +577,38 @@ def moons_section(events: list[dict]) -> list[str]:
         out.append(f"    skipped {n}x: {why}")
     out.append("")
     return out
+
+
+def activity_section(events: list[dict], first: float, last: float) -> list[str]:
+    """ACTIVITY: only with --routine on run_swarm.py. Share of agents online now and over the whole period, from online/offline events."""
+    ev = sorted((e for e in events if e["event"] in ("online", "offline")), key=lambda e: e["t"])
+    if not ev:
+        return []
+    span = max(last - first, 1)
+    state: dict[str, tuple[bool, float]] = {}     # agent -> (online?, since)
+    seconds: dict[str, float] = defaultdict(float)
+    sessions: Counter = Counter()
+    for e in ev:
+        a, on = e.get("agent", "?"), e["event"] == "online"
+        was = state.get(a)
+        if was and was[0] and not on:
+            seconds[a] += e["t"] - was[1]
+        if on and not (was and was[0]):
+            sessions[a] += 1
+        if not (was and was[0] == on):
+            state[a] = (on, e["t"])
+        elif a not in state:
+            state[a] = (on, e["t"])
+    for a, (on, since) in state.items():
+        if on:
+            seconds[a] += last - since
+    agents = sorted(state)
+    now_on = sum(1 for a in agents if state[a][0])
+    mean = sum(seconds[a] / span for a in agents) / len(agents)
+    return ["ACTIVITY (agents with an online routine are online only part of the day; offline = no requests)",
+            f"  {now_on} of {len(agents)} agents with a routine are online at the end of this period ({100 * now_on / len(agents):.0f}%)",
+            f"  on average each was online {100 * mean:.1f}% of the period, {sum(sessions.values())} sessions in all "
+            f"({sum(sessions.values()) / len(agents):.1f} per agent)", ""]
 
 
 def alliances_section(events: list[dict]) -> list[str]:
