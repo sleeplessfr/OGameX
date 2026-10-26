@@ -33,6 +33,23 @@ def _total(ships) -> int:
         return 0
 
 
+def _fleet_of(e: dict, kind: str) -> dict:
+    """The composition of the fleet as far as the log says: {ship type: amount}."""
+    ships = e.get("ships")
+    if isinstance(ships, dict):
+        return {str(k): int(v or 0) for k, v in ships.items() if isinstance(v, (int, float)) and v}
+    try:
+        if kind == "spy":
+            return {"espionage_probe": int(e.get("probes") or 0)} if e.get("probes") else {}
+        if kind == "recycle_sent":
+            return {"recycler": int(ships or 0)} if ships else {}
+        if kind == "colony_sent":
+            return {"colony_ship": 1}
+    except (TypeError, ValueError):
+        pass
+    return {}
+
+
 def fleets_from(events: list[dict], origin_of, now: float, persona_of=lambda a: None, limit: int = 300) -> list[dict]:
     """Fleet movements from the agent logs, newest first. `origin_of(agent)` -> [g, s, p] or None."""
     out = []
@@ -55,7 +72,8 @@ def fleets_from(events: list[dict], origin_of, now: float, persona_of=lambda a: 
         hold = float(e.get("hours") or 0) * 3600.0 if kind == "expedition_sent" else 0.0
         out.append({"agent": e.get("agent"), "persona": persona_of(e.get("agent")), "kind": kind, "label": label, "color": color,
                     "from": frm, "to": to, "t": e["t"], "secs": secs, "back": bool(comes_back), "hold": min(hold, 7200.0),
-                    "ships": _total(e.get("ships")),
+                    "ships": _total(e.get("ships")) or (int(e.get("probes") or 0) if kind == "spy" else 0),
+                    "fleet": _fleet_of(e, kind),
                     "dodged": kind == "attack" and False})
     out.sort(key=lambda f: -f["t"])
     live = [f for f in out if now <= f["t"] + (2 * f["secs"] + f["hold"] if f["back"] else f["secs"]) + GHOST_S]
@@ -246,7 +264,7 @@ function draw(ts){requestAnimationFrame(draw);const dpr=devicePixelRatio;g.setTr
         if(sl.colony&&sl.owner){g.fillStyle="#05070f";g.beginPath();g.arc(p.x+o.x,p.y+o.y,1.2,0,7);g.fill()}
         if(cam.k>3.5){g.fillStyle="#7d8bb0";g.font=`${11/cam.k}px system-ui`;g.textAlign="center";g.fillText(""+sl.position,p.x+o.x*(1+9/orbitR(sl.position)),p.y+o.y*(1+9/orbitR(sl.position))+4/cam.k)}g.globalAlpha=1})}});
   D.fleets.forEach(f=>{if(hidden.has(f.kind))return;const ph=phase(f,now);if(ph.leg==="gone"||ph.leg==="wait"||(!showBack&&(ph.leg==="back"||ph.leg==="hold"||ph.leg==="done"&&f.back)))return;
-    const [A,B]=ends(f,mix);if(A.x===B.x&&A.y===B.y)return;const L=Math.hypot(B.x-A.x,B.y-A.y);const bulge=Math.min(40,L*.18)*(f.agent&&f.agent.charCodeAt(f.agent.length-1)%2?1:-1);
+    const [A,B]=ends(f,mix);if(A.x===B.x&&A.y===B.y)return;const L=Math.hypot(B.x-A.x,B.y-A.y);const bulge=bulgeOf(f,A,B);
     const fade=ph.fade==null?1:Math.max(0,ph.fade);const back=ph.leg==="back"||ph.leg==="done"&&f.back;
     g.save();g.globalAlpha=(back?.55:.9)*fade;g.strokeStyle=f.color;g.lineWidth=(back?1.2:1.8)/Math.max(1,cam.k*.7);g.setLineDash([6/cam.k*1.4,5/cam.k*1.4]);g.lineDashOffset=-(ts/45)/cam.k*(back?-1:1);
     g.beginPath();g.moveTo(A.x,A.y);const m=bez(A,B,.5,bulge);g.quadraticCurveTo(m.cx,m.cy,B.x,B.y);g.stroke();g.setLineDash([]);
@@ -256,12 +274,17 @@ function draw(ts){requestAnimationFrame(draw);const dpr=devicePixelRatio;g.setTr
     else if(ph.leg==="hold"){g.globalAlpha=blink;g.fillStyle=f.color;g.beginPath();g.arc(B.x,B.y,4/Math.max(1,cam.k*.6),0,7);g.fill()}
     g.restore()});
   g.restore()}
+function bulgeOf(f,A,B){const L=Math.hypot(B.x-A.x,B.y-A.y);return Math.min(40,L*.18)*(f.agent&&f.agent.charCodeAt(f.agent.length-1)%2?1:-1)}
+function nearCurve(f,A,B,mx,my){const bl=bulgeOf(f,A,B);let bd=1e9;for(let i=0;i<=28;i++){const q=bez(A,B,i/28,bl),sp=w2s(q.x,q.y),d=Math.hypot(sp.x-mx,sp.y-my);if(d<bd)bd=d}return bd}
 function hoverAt(mx,my){const tip=$("tip");if(!D||drag){tip.style.display="none";return}
-  const now=Date.now()/1000+offset;const mix=Math.max(0,Math.min(1,(cam.k-1.4)/1.6));let best=null,bd=14;
-  D.fleets.forEach(f=>{if(hidden.has(f.kind))return;const ph=phase(f,now);if(ph.leg==="gone"||ph.leg==="wait"||ph.leg==="done"||(!showBack&&(ph.leg==="back"||ph.leg==="hold")))return;const [A,B]=ends(f,mix);const q=bez(A,B,ph.p,0),sp=w2s(q.x,q.y),d=Math.hypot(sp.x-mx,sp.y-my);if(d<bd){bd=d;best=[f,ph]}});
-  if(best){const [f,ph]=best;tip.style.display="block";tip.style.left=Math.min(innerWidth-310,mx+14)+"px";tip.style.top=(my+14)+"px";
-    const left=Math.max(0,Math.round((ph.leg==="back"?ph.p:1-ph.p)*f.secs));tip.innerHTML=`<b style="color:${f.color}">${f.label}</b> ${ph.leg==="back"?"(returning)":ph.leg==="hold"?"(on site)":""}<br>${f.agent} (${f.persona||"?"})<br>${f.from.join(":")} → ${f.to.join(":")}<br>${f.ships?f.ships+" ships, ":""}~${left} s to go`}
-  else tip.style.display="none"}
+  const now=Date.now()/1000+offset;const mix=Math.max(0,Math.min(1,(cam.k-1.4)/1.6));let best=null,bd=9;
+  D.fleets.forEach(f=>{if(hidden.has(f.kind))return;const ph=phase(f,now);if(ph.leg==="gone"||ph.leg==="wait"||ph.leg==="done"||(!showBack&&(ph.leg==="back"||ph.leg==="hold")))return;
+    const [A,B]=ends(f,mix);if(A.x===B.x&&A.y===B.y)return;const d=nearCurve(f,A,B,mx,my);if(d<bd){bd=d;best=[f,ph]}});
+  if(!best){tip.style.display="none";return}
+  const [f,ph]=best;const left=Math.max(0,Math.round((ph.leg==="back"?ph.p:1-ph.p)*f.secs));
+  const rows=Object.entries(f.fleet||{}).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<tr><td>${tt(k)}</td><td style="text-align:right;padding-left:14px">${nf(v)}</td></tr>`).join("");
+  tip.style.display="block";tip.style.left=Math.min(innerWidth-300,mx+16)+"px";tip.style.top=Math.min(innerHeight-40,my+16)+"px";
+  tip.innerHTML=`<b style="color:${f.color}">${f.label}</b> ${ph.leg==="back"?"(returning)":ph.leg==="hold"?"(on site)":""}<br>${f.agent} (${f.persona||"?"})<br>${f.from.join(":")} \u2192 ${f.to.join(":")}<br>${rows?`<table style="margin-top:4px">${rows}</table><div class="dim">${nf(Object.values(f.fleet).reduce((a,b)=>a+b,0))} ships</div>`:(f.ships?f.ships+" ships":"composition not logged")}<div class="dim">~${left} s to go</div>`}
 function fmtLeft(f,now){const ph=phase(f,now);return ph}
 function lists(){const now=Date.now()/1000+offset;const box=$("list");box.innerHTML="<b>Fleets in flight</b>";let n=0;
   D.fleets.forEach(f=>{if(hidden.has(f.kind))return;const ph=phase(f,now);if(ph.leg==="gone"||ph.leg==="done"||ph.leg==="wait"||(!showBack&&(ph.leg==="back"||ph.leg==="hold"))||n>=40)return;n++;

@@ -48,3 +48,12 @@ class Assets(unittest.TestCase):
         root = pathlib.Path(__file__).resolve().parent.parent / "assets"
         self.assertEqual(len(list((root / "planets").glob("*.png"))), 70)
         self.assertEqual(len(list((root / "moons").glob("*.gif"))), 5)
+
+class Composition(unittest.TestCase):
+    def test_fleet_dicts(self):
+        ev = [{"t": 1000, "agent": "a", "event": "attack", "at": "1:5:3", "seconds": 60, "ships": {"light_fighter": 7, "small_cargo": 106}},
+              {"t": 1000, "agent": "a", "event": "spy", "at": "1:6:3", "probes": 3},
+              {"t": 1000, "agent": "a", "event": "recycle_sent", "at": "1:7:3", "ships": 12, "seconds": 60}]
+        out = {f["kind"]: f for f in G.fleets_from(ev, lambda a: [1, 2, 4], 1010)}
+        self.assertEqual(out["attack"]["fleet"], {"light_fighter": 7, "small_cargo": 106})
+        self.assertEqual(out["spy"]["fleet"], {"espionage_probe": 3}); self.assertEqual(out["recycle_sent"]["fleet"], {"recycler": 12})
