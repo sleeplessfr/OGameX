@@ -8,7 +8,7 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass, field
 
-from . import alliance, expedition, moons, social
+from . import alliance, doctrine, expedition, moons, social
 from .bounty import focus_for
 from .bandit import Bandit
 from .brain import RESOURCES
@@ -61,6 +61,7 @@ class Memory:
     social: dict = field(default_factory=social.new_state)  # galaxy board: cursor, post budget, trade offers and deals, reputation (social.py)
     voice: dict = field(default_factory=dict)  # character sheet and diary (last 20 lines); stays empty without --llm (voice.py)
     alliance: dict = field(default_factory=alliance.new_state)  # alliance: id, allies, chat cursor, what was shared, who attacked members (alliance.py)
+    doctrine: dict = field(default_factory=doctrine.new_state)  # recent hopeless skips / attacks, last ship choice and army share (doctrine.py)
 
     # Saved to disk so a restart does not make the agent forget (JSON cannot have tuple keys, so coordinates become "g:s:p").
     _COORD_MAPS = ("spied", "attacked", "pending", "intel", "avoid_until", "aggressors", "opponents", "arm_for", "debris")
@@ -72,7 +73,7 @@ class Memory:
                      "colony_until": self.colony_until, "bandit": self.bandit.to_dict(),
                      "expedition": self.expedition,
                      "supply_next_at": self.supply_next_at, "away": self.away, "social": self.social, "moons": self.moons,
-                     "alliance": self.alliance}
+                     "alliance": self.alliance, "doctrine": self.doctrine}
         if self.voice:
             out["voice"] = {"sheet": dict(self.voice.get("sheet") or {}), "diary": list(self.voice.get("diary") or [])}
         for name in self._COORD_MAPS:
@@ -126,6 +127,7 @@ class Memory:
                        if isinstance(raw.get("diary"), list) else []}
         m.moons = moons.clean_state(data.get("moons"))
         m.alliance = alliance.clean_state(data.get("alliance"))
+        m.doctrine = doctrine.clean_state(data.get("doctrine"))
         battles = data.get("battles")
         m.battles = battles if isinstance(battles, list) else []
         return m
@@ -397,10 +399,12 @@ def pick_attack(persona: Persona, rng: random.Random, memory: Memory, now: float
 # ---- what to build --------------------------------------------------------------------------------------------
 def choose_units(
     persona: Persona, rng: random.Random, units: list[dict], have: dict, ships_here: dict[str, int],
-    want_cargo: bool = False,
+    want_cargo: bool = False, ranking: list[tuple[str, float]] | None = None, share: float | None = None,
 ) -> tuple[str, int] | None:
-    """Pick one ship or defense type to order and how many, spending at most `army_share` of what is spare."""
-    if persona.army_share <= 0 and persona.probes_wanted <= 0:
+    """Pick one ship or defense type to order and how many, spending at most `share` of what is spare (default: the persona's `army_share`).
+    `ranking` (doctrine.rank_ships) replaces the persona's fixed liking for warships with the simulator's scores."""
+    share = persona.army_share if share is None else share
+    if share <= 0 and persona.probes_wanted <= 0:
         return None
     usable = {u["machine_name"]: u for u in units if u["requirements_met"] and u["character_class_met"] and u["max_buildable"] > 0}
 
@@ -409,9 +413,13 @@ def choose_units(
     if probes < persona.probes_wanted and "espionage_probe" in usable:
         return "espionage_probe", min(persona.probes_wanted - probes, usable["espionage_probe"]["max_buildable"])
 
-    if persona.army_share <= 0:
+    if share <= 0:
         return None
-    weighted = [(persona.unit_weights.get(n, 0) * (1 + persona.randomness * (rng.random() * 2 - 1)), n) for n in usable]
+    noisy = [(persona.unit_weights.get(n, 0), 1 + persona.randomness * (rng.random() * 2 - 1), n) for n in usable]   # one draw per unit, as always
+    if ranking:   # the doctrine decides which warship; cargo ships, defence and the rest keep the persona's weights
+        wanted = doctrine.warship_weights(persona, ranking, usable)
+        noisy = [(wanted.get(n, 0.0) if n in doctrine.WARSHIPS else w, f, n) for w, f, n in noisy]
+    weighted = [(w * f, n) for w, f, n in noisy]
     weighted = [(w, n) for w, n in weighted if w > 0 and n != "espionage_probe"]
     if want_cargo:  # worthwhile loot is lying around but the fleet cannot carry it: cargo ships first
         cargos = [(w, n) for w, n in weighted if n in CARGOS] or [(1.0, n) for n in CARGOS if n in usable]
@@ -422,7 +430,7 @@ def choose_units(
     weighted.sort(reverse=True)
     name = weighted[0][1]
     cost = usable[name]["cost_per_unit"]
-    share = max(persona.army_share, CARGO_SHARE) if want_cargo and name in CARGOS else persona.army_share
+    share = max(share, CARGO_SHARE) if want_cargo and name in CARGOS else share
     limits = [int(have.get(r, 0) * share // cost[r]) for r in RESOURCES if cost.get(r, 0) > 0]
     amount = min([usable[name]["max_buildable"], *limits]) if limits else 0
     if want_cargo and name in CARGOS:

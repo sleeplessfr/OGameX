@@ -98,6 +98,7 @@ class Choice:
     reason: str
     goal_cost: dict | None = None  # when waiting: what the item we are waiting for costs (the merchant logic uses it)
     full: bool = False             # nothing to build because the planet has no free fields (ships and defence still work)
+    forced: bool = False           # waiting for a must-do item (low energy, a goal...), not just saving up by choice
 
 
 def seconds_to_afford(cost: dict, have: dict, production_per_hour: dict) -> float | None:
@@ -261,7 +262,7 @@ def _forced(item: dict, have: dict, production: dict, why: str) -> Choice:
     """A must-do item: build it if payable, otherwise wait for it (never buy something else instead)."""
     if bool(item.get("can_afford", True)) and can_pay(item["cost"], have):
         return Choice(item["machine_name"], None, f"{why}: {item['machine_name']}")
-    return Choice(None, seconds_to_afford(item["cost"], have, production), f"{why}: waiting for {item['machine_name']}", item["cost"])
+    return Choice(None, seconds_to_afford(item["cost"], have, production), f"{why}: waiting for {item['machine_name']}", item["cost"], forced=True)
 
 
 

@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 from .brain import choose_building, choose_research, fields_left, pay
-from . import colonise, expedition, recycle
+from . import colonise, doctrine, expedition, recycle
 from .combat import tech_from_research
 import random as _random
 from .bandit import outcome_of
@@ -84,9 +84,12 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
         self.ship_stats: dict[str, dict] = {}
         self._players: tuple[float, list[dict], int] | None = None  # (fetched at, highscore rows, own score)
         self._economy_saving = False
+        self._economy_forced = False       # ... and the wait is for a must-do item (solar plant, a goal), not a choice to save up
+        self._economy_reserve: dict = {}   # cost of the item the economy is saving for: military purchases must leave it alone
         self._last_battle_check = -1e12
         self.my_tech = None  # (weapons, shields, armour) levels, from /status
         self.planets_owned = 1
+        self.memory_levels: dict = {}   # research levels from the latest /status (for the doctrine)
         self.alert_until = 0.0           # server time until which a hostile fleet keeps us alert
         self.defend_cooldown_until = 0.0
         self._seen_threats: set[int] = set()
@@ -194,10 +197,12 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
             if planet is home:
                 self._prepare_defense(home, have, threats)   # before the economy spends the stock the raider is after
             self._economy_saving = False
+            self._economy_reserve = {}
+            self._economy_forced = False
             hints += self._plan_buildings(planet, have, research_busy, goals=goal_buildings if planet is home else None)
             if planet is home:
                 hints += self._plan_research(planet, have, research_queue, goals=goal_research)
-                hints += self._plan_military(status, planet, have, self._economy_saving)
+                hints += self._plan_military(status, planet, have, self._economy_saving, self._economy_reserve)
                 hints += self._plan_recycle(status, planet, have)
                 hints += self._plan_expedition(status, planet)
                 hints += self._plan_colony(status, planet, have, goal_research)
@@ -217,6 +222,8 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
                                  research_busy=research_busy, units_busy=bool(planet["unit_queue"]), have=have, goals=goals)
         if choice.machine_name is None:
             self._economy_saving = not choice.full   # a full planet is not saving for anything: ships and defence still work
+            self._economy_reserve = dict(choice.goal_cost or {}) if self._economy_saving else {}
+            self._economy_forced = bool(choice.forced) and self._economy_saving
             self.log("wait", planet=planet["id"], why=choice.reason, hint=_r(choice.wait_seconds), cost=choice.goal_cost,
                      store=planet.get("storage"))
             if self._maybe_trade(planet, choice, have):
@@ -350,7 +357,7 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
         return []
 
     # ---- military ------------------------------------------------------------------------------------
-    def _plan_military(self, status: dict, home: dict, have: dict, saving: bool) -> list[float]:
+    def _plan_military(self, status: dict, home: dict, have: dict, saving: bool, reserve: dict | None = None) -> list[float]:
         p = self.persona
         if max(p.aggression, p.scout_interest, p.army_share, p.probes_wanted) <= 0:
             return []
@@ -376,10 +383,68 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
 
         # Ships are bought from what is spare. While the economy is saving up for something, a militarily minded
         # agent still spends on its army some of the time (army_share), otherwise it would never get to it.
+        # A fighting persona (doctrine.py) spends from the SURPLUS instead: what the item it is saving for does not need.
+        # The reserve is never touched, and it no longer sits on a rich stock because one thing is dear.
+        if doctrine.applies(p):
+            ranking = self._doctrine_ranking(status["research"].get("levels") or {})
+            share = self._army_share(now)
+            if ranking:
+                self._doctrine_note(ranking, units, now)
+            budget = have
+            if saving and doctrine.is_poor(have):
+                if self.rng.random() >= p.army_share:   # a planet just starting up has no real surplus: the old coin flip
+                    return hints
+            elif saving:
+                # Waiting for a must-do item: only the surplus may be spent. Saving up by choice: the old coin flip
+                # (army_share) may spend from the whole stock; when it says no the surplus is spent anyway.
+                lucky = (not self._economy_forced) and self.rng.random() < p.army_share
+                budget = have if lucky else doctrine.surplus(have, reserve)
+            if not home["unit_queue"]:
+                hints += self._build_units(home, units, have, ships_here, budget=budget, share=share, ranking=ranking)
+            return hints
         may_buy = (not saving) or self.rng.random() < p.army_share
         if may_buy and not home["unit_queue"]:
             hints += self._build_units(home, units, have, ships_here)
         return hints
+
+    # ---- doctrine (swarm/doctrine.py) ----------------------------------------------------------------
+    def _doctrine_ranking(self, research_levels: dict) -> list[tuple[str, float]] | None:
+        """Warships ranked by the battle simulator against the defence the spy reports showed. None = the old fixed weights:
+        used until some report showed a defence or targets have been out of reach."""
+        if not doctrine.applies(self.persona):
+            return None
+        defenders, source = self._doctrine_defenders()
+        if not source.startswith("average") and doctrine.pressure(self.memory.doctrine, self.now) < doctrine.MIN_SKIPS:
+            return None
+        their = next((tech_from_research(i.get("research")) for i in sorted(self.memory.intel.values(), key=lambda i: -i.get("at", 0))
+                      if isinstance(i, dict) and i.get("research")), None)
+        return doctrine.rank_ships(doctrine.candidates(self.persona), defenders, tech_from_research(research_levels), their)
+
+    def _doctrine_defenders(self) -> tuple[dict, str]:
+        return doctrine.typical_defenders(self.memory.intel, self.now)
+
+    def _army_share(self, now: float) -> float:
+        """The persona's army_share, raised while its targets are out of reach (army_push event when it goes up)."""
+        st = self.memory.doctrine
+        share, why = doctrine.army_share_now(self.persona, st, now)
+        if share > self.persona.army_share and abs(share - (st.get("share") or self.persona.army_share)) >= 0.05:
+            self.log("army_push", share=share, base=self.persona.army_share, why=why)
+        st["share"] = share
+        return share
+
+    def _doctrine_note(self, ranking: list[tuple[str, float]], units: list[dict], now: float) -> None:
+        """Log `doctrine` when the best buildable ship or the ship to aim for changes."""
+        st = self.memory.doctrine
+        usable = {u["machine_name"] for u in units if u["requirements_met"] and u["character_class_met"]}
+        chosen = next((s for s, _ in ranking if s in usable), None)
+        aim = doctrine.aim_ship(ranking, self.memory_levels)
+        if (chosen, aim) == (st.get("choice"), st.get("aim")):
+            return
+        defenders, source = self._doctrine_defenders()
+        st.update(choice=chosen, aim=aim, table=[[s, sc] for s, sc in ranking])
+        mix = ", ".join(f"{n} {k}" for k, n in sorted(defenders.items(), key=lambda kv: -kv[1])[:4])
+        self.log("doctrine", chosen=chosen, aim=aim, table=[[s, sc] for s, sc in ranking],
+                 why=f"against {mix} ({source}): best ship that can be built now is {chosen}, best to aim for is {aim}")
 
     # ---- expeditions ---------------------------------------------------------------------------------
     def _plan_expedition(self, status: dict, home: dict) -> list[float]:
@@ -465,9 +530,19 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
         m = self.memory
         b2, r2 = recycle.goals(self.persona, m.debris, self.now, status["research"].get("levels") or {})
         b1, r1 = self._colony_goals_only(status, home)
-        if b1 is None and not (b2 or r2):
+        levels = status["research"].get("levels") or {}
+        self.memory_levels = levels
+        # fighters whose targets stay out of reach also work towards the best warship and better weapons (doctrine.py)
+        b3, r3 = doctrine.research_goals(self.persona, m.doctrine, self.now, self._doctrine_ranking(levels), levels)
+        if b1 is None and not (b2 or r2) and not (b3 or r3):
             return None, None
-        return {**(b2 or {}), **(b1 or {})}, {**(r2 or {}), **(r1 or {})}
+        buildings = {**(b2 or {}), **(b1 or {})}
+        research = {**(r2 or {}), **(r1 or {})}
+        for name, lv in b3.items():
+            buildings[name] = max(lv, buildings.get(name, 0))
+        for name, lv in r3.items():
+            research[name] = max(lv, research.get(name, 0))
+        return buildings, research
 
     def _colony_goals_only(self, status: dict, home: dict) -> tuple[dict | None, dict | None]:
         m = self.memory
@@ -701,6 +776,8 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
             return False
         self.memory.need_cargo = False
         if not go:
+            if doctrine.out_of_reach(sim_reason):
+                doctrine.note_skip(self.memory.doctrine, now)   # counted: a run of these makes a raider spend more on its army
             self.memory.intel[coord]["skip_until"] = now + 1800
             self.log("attack_skipped", at=where, loot=intel.loot, why=sim_reason)
             return False
@@ -716,6 +793,7 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
             self.log("attack_refused", at=f"{coord[0]}:{coord[1]}:{coord[2]}", code=e.code, msg=e.message[:120])
             return False
         self.memory.attacked[coord] = now
+        doctrine.note_attack(self.memory.doctrine, now)
         self.memory.arm_for[coord] = margin
         self.memory.intel.pop(coord, None)
         self.stats["attacks"] += 1
@@ -724,8 +802,11 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
                  saw_research=intel.research)
         return True
 
-    def _build_units(self, home: dict, units: list[dict], have: dict, ships_here: dict) -> list[float]:
-        pick = choose_units(self.persona, self.rng, units, have, ships_here, want_cargo=self.memory.need_cargo)
+    def _build_units(self, home: dict, units: list[dict], have: dict, ships_here: dict, *, budget: dict | None = None,
+                     share: float | None = None, ranking: list | None = None) -> list[float]:
+        """Order ships. `budget` (default: all of `have`) is what may be spent: a saving agent passes only its surplus."""
+        pick = choose_units(self.persona, self.rng, units, have if budget is None else budget, ships_here,
+                            want_cargo=self.memory.need_cargo, ranking=ranking, share=share)
         if pick is None:
             return []
         name, amount = pick
