@@ -22,4 +22,8 @@ return [
 
     // Maximum register/login requests per minute, per IP address.
     'auth_rate_limit_per_minute' => (int) env('OGAMEX_API_AUTH_RATE_LIMIT', 30),
+
+    // Performance profiler for /api/v1 (see docs/PROFILING.md). When true, one JSON line per request is
+    // appended to storage/logs/api-profile.jsonl. Leave false in normal operation.
+    'profile' => (bool) env('API_PROFILE', false),
 ];

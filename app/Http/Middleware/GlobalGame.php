@@ -34,11 +34,14 @@ class GlobalGame
                 return $next($request);
             }
 
+            ApiProfiler::mark('gg_start');
             // Load current player and make it available as a request singleton via PlayerService.
             $player = resolve(PlayerService::class, ['player_id' => $user->id]);
 
             /** @var PlayerService $player */
             app()->instance(PlayerService::class, $player);
+
+            ApiProfiler::mark('gg_player_loaded');
 
             // Check if current planet change querystring parameter exists, if so, change current planet.
             if (!empty($request->query('cp'))) {
@@ -47,6 +50,7 @@ class GlobalGame
 
             // Update player.
             $player->update();
+            ApiProfiler::mark('gg_player_updated');
 
             // Update current planet of player.
             // TODO: due to how planet update locking works, in the "load player" call above
@@ -56,9 +60,11 @@ class GlobalGame
             // planet objects are loaded for the first time. This would save one select call to the database.
             // So it's not a big deal, but it's a small performance improvement that could be done.
             $player->planets->current()->update();
+            ApiProfiler::mark('gg_planet_updated');
 
             // Update all fleet missions of player that are associated with any of the player's planets.
             $player->updateFleetMissions();
+            ApiProfiler::mark('gg_fleet_updated');
 
             // Process any due planet moves.
             $planetMoveService = resolve(PlanetMoveService::class);
@@ -75,6 +81,7 @@ class GlobalGame
             // Share planet_move_in_progress for all views.
             $activeMove = $planetMoveService->getActiveMoveForPlanet($player->planets->current());
             view()->share('planet_move_in_progress', $activeMove !== null);
+            ApiProfiler::mark('gg_end');
         }
 
         return $next($request);

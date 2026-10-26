@@ -5,6 +5,7 @@ use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use OGame\Exceptions\ApiException;
 use OGame\Http\Middleware\Admin;
+use OGame\Http\Middleware\ApiProfiler;
 use OGame\Http\Middleware\AuthenticateApiToken;
 use OGame\Http\Middleware\CheckBanned;
 use OGame\Http\Middleware\CheckFirstLogin;
@@ -35,6 +36,9 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->web(append: [Locale::class]);
         // JSON API (/api/v1): always answer with JSON, never with HTML or redirects.
         $middleware->api(prepend: [ForceJsonResponse::class]);
+        // API profiler (docs/PROFILING.md). Registered always because config is not loaded yet at this
+        // point; it checks config('ogamex_api.profile') itself and does nothing when that is false.
+        $middleware->api(prepend: [ApiProfiler::class]);
         $middleware->alias([
             'api.token' => AuthenticateApiToken::class,
             'globalgame' => GlobalGame::class,
