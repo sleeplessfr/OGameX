@@ -235,6 +235,26 @@ def summarize(events: list[dict], personas: dict[str, str] | None = None, llm_ca
         out.append("  none")
     out.append("")
 
+    out.append("DOCTRINE (doctrine = the warship an agent buys and the one it aims for, from simulated fights; army_push = it spends more on ships because its targets are out of reach)")
+    doc = [e for e in events if e["event"] == "doctrine"]
+    push = [e for e in events if e["event"] == "army_push"]
+    if doc or push:
+        for agent in sorted({e["agent"] for e in doc + push}):
+            mine = [e for e in doc if e["agent"] == agent]
+            pushes = [e for e in push if e["agent"] == agent]
+            if mine:
+                last = mine[-1]
+                table = ", ".join(f"{r[0]} {r[1]}" for r in (last.get("table") or [])[:4] if isinstance(r, (list, tuple)) and len(r) == 2)
+                out.append(f"  {agent}: buys {last.get('chosen')}, aims for {last.get('aim')} ({len(mine)} change{'s' if len(mine) != 1 else ''})")
+                out.append(f"    why: {last.get('why')}")
+                if table:
+                    out.append(f"    scores: {table}")
+            if pushes:
+                out.append(f"    army push: {len(pushes)} time{'s' if len(pushes) != 1 else ''}, share now {pushes[-1].get('share')} (normally {pushes[-1].get('base')}): {pushes[-1].get('why')}")
+    else:
+        out.append("  none")
+    out.append("")
+
     out.append("EXPEDITIONS (sent, what came back, net resources and dark matter found, ships found and lost)")
     exp_events = [e for e in events if e["event"] in ("expedition_sent", "expedition_result", "expedition_refused", "expedition_skipped")]
     if exp_events:

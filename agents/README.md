@@ -234,6 +234,31 @@ shielding 2; the agent just waits until the game allows it). It dry-runs the tri
 worth at least twice the fuel, sends `recycle` to the `debris_field`, and the ships unload the haul when they come home.
 Log events: `recycle_sent`, `recycle_skipped`, `units` (what=recycler); see RECYCLING in the report. Rules: `swarm/recycle.py`.
 
+## Military doctrine (raider, balanced, General class)
+
+Rules are in `swarm/doctrine.py` (pure, with a plain-language description at the top); the calls are in `Agent._plan_military`.
+Raiders that only bought light fighters found out the hard way that mass fighters cannot beat hundreds of rocket launchers
+(a whole night with zero attacks, "simulated fight: win chance 0%"). Fighting personas now work out what to buy:
+
+- **Which ship.** The battle simulator (`swarm/combat.py`, with rapid fire and technology) lets a batch of each warship type
+  (light and heavy fighter, cruiser, battle ship, bomber, destroyer, battlecruiser, and the reaper for the General class), worth the
+  same money, fight a typical defender: the average of the recent spy reports that showed a defence (rocket launchers if none did).
+  Score = value destroyed / (own losses + a quarter of the batch price), at 3:2:1 prices. The ranking replaces the fixed `unit_weights`
+  for warships in `choose_units` (cargo ships, probes and defence keep theirs). It is used once a report showed a defence or targets
+  have been out of reach; before that the old weights apply. Other personas never use it. Event `doctrine` (best ship that can be built now,
+  best ship to aim for, score table, why), logged when the answer changes.
+- **More money for the army.** Every skip with a simulated win chance of 10% or less is counted (`Memory.doctrine`, saved with the memory).
+  With 3 or more in the last 4 hours (attacks that went out count against them twice) the agent raises the share of spare resources
+  it spends on ships from `army_share` towards 0.8, and lets it fall back as the skips age or attacks resume. Event `army_push`.
+- **Research.** In the same situation the fighter works through goals (like colony or recycler goals): the shipyard, lab, drives and
+  technologies the aimed ship needs (the whole chain), and weapons 6, armour 5, shielding 4.
+- **Surplus spending.** When the economy waits for a must-do item (a solar plant, a goal), a fighting persona spends only what is
+  *above* that item's price (`Choice.goal_cost`), on every resource, so the reserve is never touched. When it merely saves up by choice
+  the old coin flip still applies, and when it fails the surplus is spent anyway. A planet whose whole stock is worth under 20,000
+  (3:2:1) is still starting up and keeps the old coin flip. Peaceful personas keep the old coin flip.
+
+Report section: DOCTRINE.
+
 ## Observatory
 
 ```
