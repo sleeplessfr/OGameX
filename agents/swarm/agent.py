@@ -13,7 +13,7 @@ from .brain import FIELD_ALARM, choose_building, choose_research, fields_left, p
 from . import colonise, doctrine, expedition, fullplanet, recycle
 from .combat import tech_from_research
 import random as _random
-from . import buildlearn, targetlearn
+from . import buildlearn, calibrate, targetlearn
 from .bandit import outcome_of
 from .military import (Memory, choose_strike, judge_trade, summarize_battle, choose_units, coord_of, pick_attack, pick_target, summarize_report)
 from .client import ApiClient, ApiError
@@ -836,14 +836,17 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
                 if margin is not None:
                     outcome = outcome_of(verdict, b["loot"] + b["their_loss"], b["my_loss"])
                     self.memory.bandit.update(margin, outcome)
-            tkey = ratio = None
+            tkey = ratio = pred = won = None
             if b["role"] == "attacker" and b["coord"] and None not in b["coord"]:
                 tf = self.memory.target_for.pop(tuple(b["coord"]), None)
                 if tf:
                     tkey, ratio = tf["key"], targetlearn.ratio_of(b["loot"], b["their_loss"], b["my_loss"], tf["loot"])
                     targetlearn.update(self.memory.targets, tkey, ratio)
+                    pred = tf.get("pred")
+                    won = calibrate.won_battle(b["loot"], b["their_loss"], b["my_loss"])
+                    calibrate.update(self.memory.calib, pred, won)
             self.log("battle", at=b["at"], role=b["role"], margin=margin, outcome=outcome, tkey=tkey,
-                     ratio=None if ratio is None else round(ratio, 2), group=targetlearn.group_of(self.name), my_loss=b["my_loss"], their_loss=b["their_loss"],
+                     ratio=None if ratio is None else round(ratio, 2), pred=pred, won=won, group=targetlearn.group_of(self.name), my_loss=b["my_loss"], their_loss=b["their_loss"],
                      loot=b["loot"], debris=b["debris"], rounds=b["rounds"], verdict=verdict,
                      mine=b["my_units"], theirs=b["their_units"], their_id=b["their_id"], report=row["id"])
             self._bounty_battle(b)   # galaxy board: end a joined revenge, claim a bounty (the referee reads the line above)
@@ -885,7 +888,8 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
         margin = self.memory.bandit.choose(_random.Random(f"{self.name}:{self.memory.bandit.pulls}"))
         sim_info: dict = {}
         strike, go, sim_reason, kind = choose_strike(self.persona, self.rng, ships_here, self.ship_stats, intel,
-                                                     self.my_tech, self.memory.risk_scale, margin, info=sim_info)
+                                                     self.my_tech, self.memory.risk_scale, margin, info=sim_info,
+                                                     calib=self.memory.calib if group == "learned" else None)
         where = f"{coord[0]}:{coord[1]}:{coord[2]}"
         if strike is None:
             return False
@@ -923,7 +927,7 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
         doctrine.note_attack(self.memory.doctrine, now)
         self.memory.arm_for[coord] = margin
         tkey = targetlearn.key_of(intel.loot, intel.defenders, intel.ally is not None)
-        self.memory.target_for[coord] = {"key": tkey, "loot": int(intel.loot)}
+        self.memory.target_for[coord] = {"key": tkey, "loot": int(intel.loot), "pred": sim_info.get("win_chance")}
         self.memory.intel.pop(coord, None)
         self.stats["attacks"] += 1
         self.log("attack", at=f"{coord[0]}:{coord[1]}:{coord[2]}", margin=margin, tkey=tkey, group=group, why=reason, ships=strike,

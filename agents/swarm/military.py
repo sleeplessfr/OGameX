@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 
 from . import alliance, diplomacy, doctrine, expedition, moons, social
 from .bounty import focus_for
-from . import buildlearn, targetlearn
+from . import buildlearn, calibrate, targetlearn
 from .bandit import Bandit
 from .brain import RESOURCES
 from .combat import Estimate, Tech, estimate_battle, tech_from_research, unit_value
@@ -53,6 +53,7 @@ class Memory:
     arm_for: dict[Coord, float] = field(default_factory=dict)  # which margin each attack in flight was planned with
     targets: dict = field(default_factory=targetlearn.new_book)  # learned worth of each target class (targetlearn.py)
     build: dict = field(default_factory=buildlearn.new_state)  # learned building style and its results (buildlearn.py)
+    calib: dict = field(default_factory=calibrate.new_state)  # predicted win chance vs what happened (calibrate.py)
     target_for: dict[Coord, dict] = field(default_factory=dict)  # target class and announced loot of each attack in flight
     trade_cooldown_until: float = 0.0  # no new merchant call before this server time (dark matter is scarce)
     class_done: bool = False           # the character class has been chosen (or cannot be)
@@ -78,7 +79,7 @@ class Memory:
         out: dict = {"need_cargo": self.need_cargo, "risk_scale": self.risk_scale, "battles": self.battles,
                      "trade_cooldown_until": self.trade_cooldown_until, "expanding": self.expanding, "class_done": self.class_done,
                      "colony_sent_at": self.colony_sent_at, "colony_planets_before": self.colony_planets_before,
-                     "colony_until": self.colony_until, "bandit": self.bandit.to_dict(), "targets": self.targets, "build": self.build,
+                     "colony_until": self.colony_until, "bandit": self.bandit.to_dict(), "targets": self.targets, "build": self.build, "calib": self.calib,
                      "expedition": self.expedition,
                      "supply_next_at": self.supply_next_at, "away": self.away, "social": self.social, "moons": self.moons,
                      "alliance": self.alliance, "doctrine": self.doctrine, "diplomacy": self.diplomacy}
@@ -128,6 +129,7 @@ class Memory:
         m.bandit = Bandit.from_dict(data.get("bandit"))
         m.targets = targetlearn.clean_book(data.get("targets"))
         m.build = buildlearn.clean_state(data.get("build"))
+        m.calib = calibrate.clean_state(data.get("calib"))
         m.expedition = expedition.clean_state(data.get("expedition"))
         m.social = social.clean_state(data.get("social"))
         raw = data.get("voice")
@@ -330,7 +332,8 @@ def required_win_chance(persona: Persona, risk_scale: float = 1.0) -> float:
 
 
 def judge_fight(persona: Persona, rng: random.Random, strike: dict[str, int], intel: Intel, my_tech: Tech | None,
-                haul: int, risk_scale: float = 1.0, margin: float = DEFENDER_MARGIN) -> tuple[bool, str, Estimate | None]:
+                haul: int, risk_scale: float = 1.0, margin: float = DEFENDER_MARGIN,
+                calib: dict | None = None) -> tuple[bool, str, Estimate | None]:
     """Simulate the fight with the fleet we would really send. Returns (go, reason, estimate). When the report did not
     show the defenders' composition, a big garrison is simulated as rocket launchers (cheap and strong against light
     fighters: the worst usual case); a small one has nothing to simulate: (True, '', None) and the old rules decide."""
@@ -347,10 +350,12 @@ def judge_fight(persona: Persona, rng: random.Random, strike: dict[str, int], in
     else:
         defenders = {n: int(-(-v * margin // 1)) for n, v in intel.all_defenders().items()}
     est = estimate_battle(strike, defenders, rng, my_tech or (0, 0, 0), tech_from_research(intel.research))
-    gain = est.win_chance * haul + 0.5 * est.their_loss_value - est.my_loss_value
-    facts = f"win chance {est.win_chance:.0%}, expected loss {est.my_loss_value:,.0f} for loot {haul:,}{assumed}"
+    win = est.win_chance if not calib else calibrate.corrected(calib, est.win_chance)   # learned: what this agent's predictions really came to
+    gain = win * haul + 0.5 * est.their_loss_value - est.my_loss_value
+    shown = f"{est.win_chance:.0%}" if win == est.win_chance else f"{est.win_chance:.0%} (corrected to {win:.0%} by past results)"
+    facts = f"win chance {shown}, expected loss {est.my_loss_value:,.0f} for loot {haul:,}{assumed}"
     need = required_win_chance(persona, risk_scale)
-    if est.win_chance < need:
+    if win < need:
         return False, f"simulated fight: {facts}; wants at least {need:.0%}", est
     if gain <= 0:
         return False, f"simulated fight: {facts}; not worth it", est
@@ -359,7 +364,7 @@ def judge_fight(persona: Persona, rng: random.Random, strike: dict[str, int], in
 
 def choose_strike(persona: Persona, rng: random.Random, ships_here: dict[str, int], ship_stats: dict[str, dict],
                   intel: Intel, my_tech: Tech | None, risk_scale: float = 1.0, margin: float = DEFENDER_MARGIN,
-                  info: dict | None = None) -> tuple[dict[str, int] | None, bool, str, str]:
+                  info: dict | None = None, calib: dict | None = None) -> tuple[dict[str, int] | None, bool, str, str]:
     """The smallest fleet that is sure enough to win and not worth too much compared to the loot.
     Returns (strike, go, reason, kind) where kind is 'nofleet', 'cargo' (cannot carry the loot) or 'fight'.
     Sending everything every time loses whole fleets for small loot when the estimate is wrong.
@@ -381,7 +386,7 @@ def choose_strike(persona: Persona, rng: random.Random, ships_here: dict[str, in
         if exposed > MAX_EXPOSURE * haul:
             last = (strike, False, f"fleet worth {exposed:,} for a loot of {haul:,}: too much to risk", "fight")
             break   # bigger fleets only get more exposed
-        go, why, est = judge_fight(persona, rng, strike, intel, my_tech, haul, risk_scale, margin)
+        go, why, est = judge_fight(persona, rng, strike, intel, my_tech, haul, risk_scale, margin, calib)
         if info is not None:
             info["win_chance"] = None if est is None else round(est.win_chance, 3)
         if go:

@@ -222,6 +222,21 @@ def summarize(events: list[dict], personas: dict[str, str] | None = None, llm_ca
         out.append("  none yet")
     out.append("")
 
+    out.append("FIGHT ESTIMATE CHECK (predicted win chance of the simulator vs what really happened; all raiders)")
+    edges = (0.0, 0.3, 0.6, 0.8, 0.95, 1.0001)
+    cal = [[0, 0] for _ in range(len(edges) - 1)]
+    for e in events:
+        if e["event"] == "battle" and e.get("pred") is not None and e.get("won") is not None:
+            i = max(j for j in range(len(edges) - 1) if float(e["pred"]) >= edges[j])
+            cal[i][0] += 1; cal[i][1] += 1 if e["won"] else 0
+    if any(n for n, _ in cal):
+        for i, (n, w) in enumerate(cal):
+            if n:
+                out.append(f"  predicted {edges[i]:.0%}-{min(edges[i + 1], 1):.0%}: {n} attacks, {w} won ({w / n:.0%})")
+    else:
+        out.append("  none yet")
+    out.append("")
+
     out.append("LEARNED BUILDING STYLE (one result per 6 h epoch: growth of the agent's goal; advantage = growth minus the average growth; learned vs control)")
     sty: dict = defaultdict(lambda: defaultdict(lambda: [0, 0.0, 0.0]))
     for e in events:
