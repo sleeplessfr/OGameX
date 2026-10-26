@@ -108,6 +108,18 @@ left it heads for the terraformer (energy technology 12, a nanite factory, then 
 5 fields per level); with 3 or fewer it stops upgrading minor buildings (stores, shipyard, research lab). On a full
 planet it builds nothing, does not count that as "saving", and keeps buying ships and defence.
 
+**Full planets (`swarm/fullplanet.py`).** The terraformer needs a free field itself (so do the robot factory levels and the
+nanite factory before it), so a planet that is allowed to fill up completely can never build it: an agent used to sit on
+"no free building fields" for hours with huge stores. Now: (1) with 30 or fewer fields left and the chain still fitting, the
+fields it needs (robot factory 10, nanite factory, one terraformer level, plus the shipyard 4 / research lab 3 of a colony
+ship) are reserved, ordinary upgrades may not touch them, and the robot factory and nanite factory are built first; research
+is no longer skipped by a low `research_share`. (2) With no field left, or when the chain no longer fits, the planet is
+"full": the agent founds colonies whatever its `expansion` and planet limit (up to 8 planets; a failed search widens the
+radius by 6 systems, astrophysics is researched as needed), researches every useful technology and turns 40% of the spare stock
+into ships and defence per order (at most 250 units, a colony ship's price is kept back, the colony ship is ordered first).
+(3) Once an hour and planet it logs `full_planet_plan` (decision: terraformer path / expanding / spending / nothing, and why);
+`summarize_logs.py` shows them in FULL PLANETS. Other planets behave as before.
+
 ## Character classes
 
 Each agent takes the free first choice of a character class once, by personality: miner and turtle are Collectors, raider

@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import json
 import random
+from dataclasses import replace
 import secrets
 import threading
 import time
 from pathlib import Path
 
-from .brain import choose_building, choose_research, fields_left, pay
-from . import colonise, doctrine, expedition, recycle
+from .brain import FIELD_ALARM, choose_building, choose_research, fields_left, pay
+from . import colonise, doctrine, expedition, fullplanet, recycle
 from .combat import tech_from_research
 import random as _random
 from .bandit import outcome_of
@@ -90,6 +91,10 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
         self.memory = self._load_memory()
         self.ship_stats: dict[str, dict] = {}
         self._players: tuple[float, list[dict], int] | None = None  # (fetched at, highscore rows, own score)
+        self._spend_mode = False           # the home planet is full (or its terraformer chain is out of reach): surplus goes to ships, defence, colonies
+        self._buildings_seen: dict[int, list] = {}   # latest building list per planet (the full-planet plan reads the chain from it)
+        self._plan_logged: dict[int, float] = {}     # planet -> server time of its last full_planet_plan event
+        self._colony_radius = colonise.SEARCH_SYSTEMS   # systems searched either side of home; grows when nothing was free
         self._economy_saving = False
         self._economy_forced = False       # ... and the wait is for a must-do item (solar plant, a goal), not a choice to save up
         self._economy_reserve: dict = {}   # cost of the item the economy is saving for: military purchases must leave it alone
@@ -200,6 +205,7 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
             hints.append(PEACE_WATCH_SECONDS)
         hints += self._save_fleet(status, planets, threats)   # logistics: dodge a raid we cannot win, bring the fleet home later
 
+        self._spend_mode = self._full_home(home, status)
         for planet in planets:
             have = dict(planet["resources"])
             if planet is home:
@@ -210,10 +216,15 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
             hints += self._plan_buildings(planet, have, research_busy, goals=goal_buildings if planet is home else None)
             if planet is home:
                 hints += self._plan_research(planet, have, research_queue, goals=goal_research)
+                colony_first = self._spend_mode and self.memory.expanding   # the colony ship comes before the ships that would block the shipyard
+                if colony_first:
+                    hints += self._plan_colony(status, planet, have, goal_research)
                 hints += self._plan_military(status, planet, have, self._economy_saving, self._economy_reserve)
                 hints += self._plan_recycle(status, planet, have)
                 hints += self._plan_expedition(status, planet)
-                hints += self._plan_colony(status, planet, have, goal_research)
+                if not colony_first:
+                    hints += self._plan_colony(status, planet, have, goal_research)
+        self._note_full_planets(status, planets, home)
         hints += self._plan_supply(status, planets)   # logistics: feed a starved colony from the richest planet
 
         return self._sleep_time(hints)
@@ -224,6 +235,7 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
             return [q["seconds_remaining"] for q in queue if q.get("active")] or []
         data = self.client.get(f"/planets/{planet['id']}/buildings")
         self._remember_lab(planet, data["buildings"])
+        self._buildings_seen[planet["id"]] = data["buildings"]
         if data["queue_full"]:
             return []
         choice = choose_building(self.persona, self.rng, planet, data["buildings"],
@@ -238,6 +250,31 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
                 return [5.0]  # we just got what was missing: look again at once
             return [choice.wait_seconds if choice.wait_seconds else IDLE_RECHECK]
         return self._act("build", planet, choice, data["buildings"], have, f"/planets/{planet['id']}/buildings")
+
+    # ---- full planets (swarm/fullplanet.py) -----------------------------------------------------------
+    def _full_home(self, home: dict, status: dict) -> bool:
+        """True when the home planet can grow no more by building: no free field, or the terraformer chain no longer fits."""
+        left = fields_left(home)
+        if left is None:
+            return False
+        if left <= 0:
+            return True
+        buildings = self._buildings_seen.get(home["id"])
+        return left <= FIELD_ALARM and bool(buildings) and fullplanet.chain_exists(buildings) and not fullplanet.reachable(buildings, left)
+
+    def _note_full_planets(self, status: dict, planets: list[dict], home: dict) -> None:
+        """Once an hour and planet (running low or full): the full_planet_plan event, saying what the agent decided about it."""
+        for planet in planets:
+            left = fields_left(planet)
+            buildings = self._buildings_seen.get(planet["id"])
+            if left is None or left > FIELD_ALARM or buildings is None or self.now - self._plan_logged.get(planet["id"], -1e12) < fullplanet.PLAN_EVERY:
+                continue
+            self._plan_logged[planet["id"]] = self.now
+            plan = fullplanet.plan(left=left, buildings=buildings, research_levels=status["research"].get("levels") or {},
+                                   planets_owned=self.planets_owned, expanding=bool(self.memory.expanding),
+                                   spending=self._spend_mode and planet is home)
+            self.log("full_planet_plan", planet=planet["id"], free=left, decision=plan["decision"], reachable=plan["reachable"],
+                     need=plan["need"], planets=self.planets_owned, why=plan["why"])
 
     # ---- defence -------------------------------------------------------------------------------------
     def _watch(self) -> list:
@@ -330,7 +367,9 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
     def _plan_research(self, planet: dict, have: dict, research_queue: list, goals: dict | None = None) -> list[float]:
         if research_queue:
             return [q["seconds_remaining"] for q in research_queue if q.get("active")] or []
-        if self.rng.random() > self.persona.research_share and not goals:
+        left = fields_left(planet)
+        urgent = left is not None and left <= FIELD_ALARM   # running out of fields (or full): research is the way out, whatever the persona's taste
+        if self.rng.random() > self.persona.research_share and not goals and not urgent:
             return []
         if self.lab_level is None:
             self._remember_lab(planet, self.client.get(f"/planets/{planet['id']}/buildings")["buildings"])
@@ -367,13 +406,16 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
     # ---- military ------------------------------------------------------------------------------------
     def _plan_military(self, status: dict, home: dict, have: dict, saving: bool, reserve: dict | None = None) -> list[float]:
         p = self.persona
-        if max(p.aggression, p.scout_interest, p.army_share, p.probes_wanted) <= 0:
+        spend = self._spend_mode
+        if max(p.aggression, p.scout_interest, p.army_share, p.probes_wanted) <= 0 and not spend:
             return []
+        buyer = replace(p, unit_weights=fullplanet.spending_weights(p.unit_weights)) if spend else p   # a full planet also buys defence
         now = float(status["server_time"])
         self.my_tech = tech_from_research(status["research"].get("levels"))
         units = self.client.get(f"/planets/{home['id']}/units")["units"]
         ships_here = {u["machine_name"]: u["amount"] for u in units if u["amount"] > 0 and u["category"] != "defense"}
         hints: list[float] = []
+        keep = self._colony_ship_reserve(units, ships_here) if spend else None   # what a full planet keeps back for its colony ship
 
         hints += self._read_intel(now)
         self._read_battles(now)
@@ -396,6 +438,8 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
         if doctrine.applies(p):
             ranking = self._doctrine_ranking(status["research"].get("levels") or {})
             share = self._army_share(now)
+            if spend:
+                share = max(share, fullplanet.FULL_SHARE)
             if ranking:
                 self._doctrine_note(ranking, units, now)
             budget = have
@@ -407,13 +451,26 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
                 # (army_share) may spend from the whole stock; when it says no the surplus is spent anyway.
                 lucky = (not self._economy_forced) and self.rng.random() < p.army_share
                 budget = have if lucky else doctrine.surplus(have, reserve)
+            if keep:
+                budget = doctrine.surplus(budget, keep)
             if not home["unit_queue"]:
-                hints += self._build_units(home, units, have, ships_here, budget=budget, share=share, ranking=ranking)
+                hints += self._build_units(home, units, have, ships_here, budget=budget, share=share, ranking=ranking, persona=buyer)
             return hints
         may_buy = (not saving) or self.rng.random() < p.army_share
         if may_buy and not home["unit_queue"]:
-            hints += self._build_units(home, units, have, ships_here)
+            hints += self._build_units(home, units, have, ships_here, share=fullplanet.FULL_SHARE if spend else None, persona=buyer,
+                                       budget=doctrine.surplus(have, keep) if keep else None)
         return hints
+
+    def _colony_ship_reserve(self, units: list[dict], ships_here: dict) -> dict | None:
+        """Twice the price of a colony ship, kept out of the ship spending while a full planet is about to build one."""
+        m = self.memory
+        if not m.expanding or m.colony_sent_at or ships_here.get("colony_ship", 0) >= 1:
+            return None
+        item = next((u for u in units if u["machine_name"] == "colony_ship"), None)
+        if item is None:
+            return None
+        return {r: 2 * int((item.get("cost_per_unit") or {}).get(r, 0)) for r in ("metal", "crystal", "deuterium")}
 
     # ---- doctrine (swarm/doctrine.py) ----------------------------------------------------------------
     def _doctrine_ranking(self, research_levels: dict) -> list[tuple[str, float]] | None:
@@ -554,14 +611,22 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
 
     def _colony_goals_only(self, status: dict, home: dict) -> tuple[dict | None, dict | None]:
         m = self.memory
-        if m.colony_sent_at or self.persona.expansion <= 0:
+        full = fields_left(home) is not None and fields_left(home) <= 0
+        if m.colony_sent_at or (self.persona.expansion <= 0 and not full):
             return None, None
         if not m.expanding:
-            if self.now < m.colony_until or not colonise.wants_colony(self.persona, home, self.planets_owned, self.rng):
+            if self.now < m.colony_until:
+                return None, None
+            if full:    # nothing else to grow with: colonies, whatever the persona's appetite and planet limit
+                if not colonise.wants_colony_full(home, self.planets_owned):
+                    return None, None
+                why = "no free fields on the home planet: a colony is the way to grow"
+            elif colonise.wants_colony(self.persona, home, self.planets_owned, self.rng):
+                why = f"only {fields_left(home)} free fields on the home planet"
+            else:
                 return None, None
             m.expanding = True
-            self.log("expand", why=f"only {fields_left(home)} free fields on the home planet", planets=self.planets_owned,
-                     astrophysics_needed=colonise.astro_needed(self.planets_owned))
+            self.log("expand", why=why, planets=self.planets_owned, astrophysics_needed=colonise.astro_needed(self.planets_owned))
         return colonise.goals(self.planets_owned, status["research"].get("levels") or {})
 
     def _plan_colony(self, status: dict, home: dict, have: dict, missing_research: dict | None) -> list[float]:
@@ -601,7 +666,7 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
         home_coord = (c["galaxy"], c["system"], c["position"])
         astro = int((status["research"].get("levels") or {}).get("astrophysics", 0))
         views = []
-        for g, s in colonise.systems_to_scan(home_coord):
+        for g, s in colonise.systems_to_scan(home_coord, self._colony_radius):
             try:
                 views.append(self.client.get(f"/galaxy/{g}/{s}"))
             except ApiError:
@@ -609,7 +674,8 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
         pick = colonise.pick_target(self.persona, self.rng, home_coord, views, astro)
         if pick is None:
             m.colony_until = self.now + 3600
-            self.log("colony_failed", why="no free position near home")
+            self._colony_radius = min(self._colony_radius + 6, 36)   # look further next time
+            self.log("colony_failed", why=f"no free position within {self._colony_radius - 6 if self._colony_radius > 6 else 6} systems of home")
             return []
         (g, s, p), why = pick
         try:
@@ -830,13 +896,15 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
         return True
 
     def _build_units(self, home: dict, units: list[dict], have: dict, ships_here: dict, *, budget: dict | None = None,
-                     share: float | None = None, ranking: list | None = None) -> list[float]:
+                     share: float | None = None, ranking: list | None = None, persona: Persona | None = None) -> list[float]:
         """Order ships. `budget` (default: all of `have`) is what may be spent: a saving agent passes only its surplus."""
-        pick = choose_units(self.persona, self.rng, units, have if budget is None else budget, ships_here,
+        pick = choose_units(persona or self.persona, self.rng, units, have if budget is None else budget, ships_here,
                             want_cargo=self.memory.need_cargo, ranking=ranking, share=share)
         if pick is None:
             return []
         name, amount = pick
+        if self._spend_mode:
+            amount = min(amount, fullplanet.FULL_BATCH)   # a short queue: the shipyard must soon be free for the colony ship / nanite factory
         try:
             self.client.post(f"/planets/{home['id']}/units", {"machine_name": name, "amount": amount})
         except ApiError as e:

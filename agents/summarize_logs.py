@@ -431,13 +431,22 @@ def summarize(events: list[dict], personas: dict[str, str] | None = None, llm_ca
     out.append("")
 
     out.append("FULL PLANETS (no free building fields)")
-    full = Counter(e["agent"] for e in events if e["event"] == "wait" and "no free fields" in str(e.get("why", "")))
+    full = Counter(e["agent"] for e in events if e["event"] == "wait" and ("no free fields" in str(e.get("why", "")) or "no spare fields" in str(e.get("why", ""))))
     heading = Counter(e["agent"] for e in events if e["event"] == "wait" and "free fields left" in str(e.get("why", "")))
     if full or heading:
         for a in sorted(set(full) | set(heading)):
             out.append(f"  {a}: {heading[a]} waits on the way to the terraformer, {full[a]} waits with a full planet")
     else:
         out.append("  none")
+    plans = [e for e in events if e["event"] == "full_planet_plan"]
+    if plans:
+        decided = Counter((e["agent"], str(e.get("decision"))) for e in plans)
+        out.append("  decisions (full_planet_plan, once an hour and planet): " + ", ".join(f"{a} {d} x{n}" for (a, d), n in sorted(decided.items())))
+        last = {}
+        for e in plans:
+            last[(e["agent"], e.get("planet"))] = e
+        for (a, pl), e in sorted(last.items(), key=lambda kv: str(kv[0])):
+            out.append(f"    {clock(e['t'])} {a} planet {pl}: {e.get('free')} free fields, {e.get('decision')}: {str(e.get('why'))[:200]}")
     out.append("")
 
     out += diplomacy_section(events)
