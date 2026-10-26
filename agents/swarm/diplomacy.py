@@ -24,6 +24,7 @@ All times are server seconds (like the rest of Memory).
 """
 from __future__ import annotations
 
+import os
 import random
 import re
 import zlib
@@ -47,6 +48,10 @@ FALL_BELOW = {"friendly": 10.0, "pact": 25.0, "alliance": 40.0}   # trust under 
 ALLIANCE_MIN_SOCIABILITY = 0.3   # the in-game alliance mechanics need a sociable persona
 
 GAIN = {"trade": 8.0, "warning": 3.0, "accepted": 6.0, "peace_hour": 1.0}
+try:       # test runs: `run_swarm.py --trust-speed 20` makes peaceful time and warnings build trust that many times faster
+    TRUST_SPEED = max(1.0, min(200.0, float(os.environ.get("OGAMEX_TRUST_SPEED", "1") or 1)))
+except ValueError:
+    TRUST_SPEED = 1.0
 DAY_CAP = 6.0                # trust from peaceful time and warnings together, per day
 LOSS = {"raided_us": 40.0, "we_raided": 25.0, "cheat": 30.0, "spied": 3.0, "spy_lie": 30.0}
 SPY_COOL = 3 * 3600.0       # a probe costs trust at most this often per pair
@@ -354,7 +359,7 @@ def bump(rel: dict, delta: float, now: float, *, soft: bool = False) -> float:
         day = int(now // 86400)
         if rel["day"] != day:
             rel["day"], rel["day_gain"] = day, 0.0
-        delta = min(delta, max(0.0, DAY_CAP - rel["day_gain"]))
+        delta = min(delta * TRUST_SPEED, max(0.0, DAY_CAP * TRUST_SPEED - rel["day_gain"]))
         rel["day_gain"] += delta
     before = rel["trust"]
     rel["trust"] = max(0.0, min(100.0, before + delta))

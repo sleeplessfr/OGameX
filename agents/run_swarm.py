@@ -4,6 +4,7 @@
 Example:  python run_swarm.py --count 5
 """
 import argparse
+import os
 import random
 import sys
 import threading
@@ -50,6 +51,8 @@ def main() -> int:
                          "Diplomacy answers still go through the model for everybody. Default 0 = every agent has a voice")
     ap.add_argument("--llm-per-agent-hour", type=int, default=0, metavar="N",
                     help="most model requests one agent may make per hour, so chatty agents cannot use up the shared budget (default 0 = no limit)")
+    ap.add_argument("--trust-speed", type=float, default=1.0,
+                    help="test runs: trust from peaceful time and warnings grows this many times faster (default 1; try 20 to see pacts within hours)")
     ap.add_argument("--routine", choices=MODES, default="off",
                     help="online hours like a real player: off = always playing (default), light = about half the day, real = about 5-15%% of the day. "
                          "An offline agent makes no requests at all")
@@ -58,6 +61,8 @@ def main() -> int:
     ap.add_argument("--procs", type=int, default=1, metavar="N",
                     help="split the agents over N processes (one Python process fills about one processor core). Default 1")
     args = ap.parse_args()
+    if args.trust_speed != 1.0:
+        os.environ["OGAMEX_TRUST_SPEED"] = str(args.trust_speed)   # read by swarm/diplomacy.py (also in --procs child processes)
     if args.time_scale <= 0:
         ap.error("--time-scale must be above 0")
     if args.procs < 1:

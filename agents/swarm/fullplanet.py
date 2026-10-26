@@ -124,7 +124,7 @@ def plan(*, left: int | None, buildings: list[dict], research_levels: dict, plan
             parts.append("colony blocked: " + ", ".join(f"{n} {lv[n]}/{dict(EXPANSION_BUILDINGS)[n]}" for n in blocked)
                          + " and no field to raise it")
         else:
-            parts.append(f"founding colony number {planets_owned} of up to {FULL_PLANET_CAP - 1}" + (" (colony ship under way)" if expanding else ""))
+            parts.append(f"founding colony number {planets_owned + 1} of up to {FULL_PLANET_CAP - 1}" + (" (colony ship under way)" if expanding else ""))
     else:
         parts.append(f"already {planets_owned} planets (cap {FULL_PLANET_CAP})")
     if spending:

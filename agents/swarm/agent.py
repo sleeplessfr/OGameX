@@ -264,6 +264,7 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
 
     def _note_full_planets(self, status: dict, planets: list[dict], home: dict) -> None:
         """Once an hour and planet (running low or full): the full_planet_plan event, saying what the agent decided about it."""
+        self._any_planet_full = any((fields_left(pl) is not None and fields_left(pl) <= 0) for pl in planets)   # a full colony also wants a new colony
         for planet in planets:
             left = fields_left(planet)
             buildings = self._buildings_seen.get(planet["id"])
@@ -611,16 +612,17 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
 
     def _colony_goals_only(self, status: dict, home: dict) -> tuple[dict | None, dict | None]:
         m = self.memory
-        full = fields_left(home) is not None and fields_left(home) <= 0
+        full = (fields_left(home) is not None and fields_left(home) <= 0) or getattr(self, "_any_planet_full", False)
         if m.colony_sent_at or (self.persona.expansion <= 0 and not full):
             return None, None
         if not m.expanding:
             if self.now < m.colony_until:
                 return None, None
             if full:    # nothing else to grow with: colonies, whatever the persona's appetite and planet limit
-                if not colonise.wants_colony_full(home, self.planets_owned):
+                if self.planets_owned >= colonise.FULL_PLANET_CAP:
                     return None, None
-                why = "no free fields on the home planet: a colony is the way to grow"
+                why = ("no free fields on the home planet" if fields_left(home) is not None and fields_left(home) <= 0
+                       else "a colony planet has no free field") + ": a colony is the way to grow"
             elif colonise.wants_colony(self.persona, home, self.planets_owned, self.rng):
                 why = f"only {fields_left(home)} free fields on the home planet"
             else:
