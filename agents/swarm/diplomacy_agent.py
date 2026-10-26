@@ -145,7 +145,7 @@ class DiplomacyMixin:
             return
         if b.get("role") == "defender":
             if b.get("probes_only"):
-                rel["spied_us"] += 1
+                self._diplo_spied(uid, rel)
                 return
             robbed = int(b.get("loot") or 0) >= 1000 or int(b.get("my_loss") or 0) >= 1000
             res = D.on_hit(rel, self.now, robbed)
@@ -241,6 +241,14 @@ class DiplomacyMixin:
             if D.pact_valid(rel, self.now) and (_int(owner_id) == int(key) or (coord and rel["coord"] == ":".join(map(str, coord)))):
                 return True
         return False
+
+    def _diplo_spied(self, uid: int, rel: dict) -> None:
+        """A spy probe on us: a small trust loss, a big one (and a step back) if they had asked for peace and spy anyway."""
+        res = D.on_spied(rel, self.now)
+        if res["lie"]:
+            self._diplo_after(uid, rel, res["change"], "LIE: they spied on us while at " + res["from"], res["from"], res["to"])
+        elif res["change"]:
+            self._diplo_after(uid, rel, res["change"], "spy probe")
 
     # ---- shared bookkeeping ------------------------------------------------------------------------------
     def _diplo_after(self, uid: int, rel: dict, change: float, why: str, frm: str | None = None, to: str | None = None, **extra) -> None:
@@ -364,7 +372,7 @@ class DiplomacyMixin:
             self._diplo_contact(uid, "attack seen" if t.is_attack else "spy probe seen")
             rel = self._diplo_rel(uid)
             if rel is not None and not t.is_attack:
-                rel["spied_us"] += 1
+                self._diplo_spied(uid, rel)
 
     def _diplo_scan(self) -> None:
         st = self.memory.diplomacy

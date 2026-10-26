@@ -48,7 +48,8 @@ ALLIANCE_MIN_SOCIABILITY = 0.3   # the in-game alliance mechanics need a sociabl
 
 GAIN = {"trade": 8.0, "warning": 3.0, "accepted": 6.0, "peace_hour": 1.0}
 DAY_CAP = 6.0                # trust from peaceful time and warnings together, per day
-LOSS = {"raided_us": 40.0, "we_raided": 25.0, "cheat": 30.0}
+LOSS = {"raided_us": 40.0, "we_raided": 25.0, "cheat": 30.0, "spied": 3.0, "spy_lie": 30.0}
+SPY_COOL = 3 * 3600.0       # a probe costs trust at most this often per pair
 LOG_BIG = 5.0                # a trust change this big is always logged
 LOG_EVERY = 6 * 3600.0       # smaller ones at most this often per pair
 
@@ -82,7 +83,7 @@ def new_rel(now: float, how: str = "") -> dict:
             "imp": False, "role": "", "ratio": None, "rank": None, "hit_us": 0, "spied_us": 0, "last_hit_at": 0.0, "robbed_at": 0.0,
             "betrayed_at": 0.0, "betrayals": 0, "cool_until": 0.0, "trades": 0, "cheats": 0, "warned_us_at": 0.0,
             "peace_at": float(now), "day": 0, "day_gain": 0.0, "log_at": 0.0, "warn_at": 0.0,
-            "pact_since": 0.0, "pact_until": 0.0, "renewals": 0, "we_betrayed": 0}
+            "pact_since": 0.0, "pact_until": 0.0, "renewals": 0, "we_betrayed": 0, "spied_at": 0.0, "spy_lies": 0}
 
 
 def _num(value, default: float, lo: float | None = None, hi: float | None = None) -> float:
@@ -120,7 +121,7 @@ def clean_rel(raw, now: float = 0.0) -> dict | None:
             rel[key] = _num(value, 0.0) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
         elif key == "rank":
             rel[key] = int(value) if isinstance(value, int) and not isinstance(value, bool) else None
-        elif key in ("hit_us", "spied_us", "betrayals", "trades", "cheats", "day", "renewals", "we_betrayed"):
+        elif key in ("hit_us", "spied_us", "betrayals", "trades", "cheats", "day", "renewals", "we_betrayed", "spy_lies"):
             rel[key] = int(_num(value, 0, 0))
         else:
             rel[key] = _num(value, float(default), 0.0)
@@ -499,6 +500,29 @@ def on_we_betray(rel: dict, now: float) -> dict:
     return {**res, "to": "contact"}
 
 
+def on_spied(rel: dict, now: float) -> dict:
+    """They sent a spy probe at us. From a stranger it is normal OGame: a small trust loss, at most every SPY_COOL. From someone who
+    holds a friendly / pact / alliance step with us (they asked for peace, then spied) it is a LIE: big trust and opinion loss, the
+    step falls one rung, and `spy_lies` counts it for the prompts."""
+    was = rel["step"]
+    rel["spied_us"] += 1
+    if step_index(was) >= step_index("friendly"):
+        rel["spy_lies"] += 1
+        rel["spied_at"] = now
+        change = bump(rel, -LOSS["spy_lie"], now)
+        rel["opinion"] = max(-100.0, rel["opinion"] - 30.0)
+        rel["step"] = prev_step(was)
+        if was == "pact":
+            rel["pact_until"] = 0.0
+        return {"change": change, "lie": True, "from": was, "to": rel["step"]}
+    if now - rel["spied_at"] < SPY_COOL:
+        return {"change": 0.0, "lie": False, "from": was, "to": was}
+    rel["spied_at"] = now
+    change = bump(rel, -LOSS["spied"], now)
+    rel["opinion"] = max(-100.0, rel["opinion"] - 2.0)
+    return {"change": change, "lie": False, "from": was, "to": was}
+
+
 def on_cheat(rel: dict, now: float) -> float:
     rel["cheats"] += 1
     rel["opinion"] = max(-100.0, rel["opinion"] - 25.0)
@@ -576,7 +600,7 @@ def build_facts(rel: dict, proposed: str, now: float, *, standing_: dict | None 
     s = standing_ or {}
     since_hit = None if not rel["last_hit_at"] else round((now - rel["last_hit_at"]) / 3600, 1)
     return {"proposer": proposer, "answerer": answerer, "proposed": proposed, "step": rel["step"], "trust": round(rel["trust"]), "opinion": round(rel["opinion"]),
-            "spied_us": rel["spied_us"], "hit_us": rel["hit_us"], "hours_since_hit": since_hit, "trades": rel["trades"], "cheats": rel["cheats"],
+            "spied_us": rel["spied_us"], "spy_lies": rel.get("spy_lies", 0), "hit_us": rel["hit_us"], "hours_since_hit": since_hit, "trades": rel["trades"], "cheats": rel["cheats"],
             "betrayals": rel["betrayals"], "ratio": s.get("ratio"), "role": s.get("role", "unknown"), "rank": s.get("rank"),
             "my_rank": s.get("my_rank"), "my_score": my_score, "their_score": their_score, "threats": int(threats)}
 
@@ -598,7 +622,7 @@ def facts_text(f: dict) -> str:
         f"PROPOSAL: {f['proposed']} ({PHRASE.get(f['proposed'], f['proposed'])})",
         f"RELATION NOW: {f['step']}",
         f"TRUST: {f['trust']}", f"OPINION: {f['opinion']}",
-        f"SPIED_ON_US: {f['spied_us']} times", f"ATTACKED_US: {f['hit_us']} times (last: {since})", f"BETRAYALS: {f['betrayals']}",
+        f"SPIED_ON_US: {f['spied_us']} times (while we were friendly: {f.get('spy_lies', 0)})", f"ATTACKED_US: {f['hit_us']} times (last: {since})", f"BETRAYALS: {f['betrayals']}",
         f"TRADES: {f['trades']} completed honestly, {f['cheats']} cheats",
         f"STRENGTH: they are {f['role']} than us (score ratio {f['ratio']}, their rank {f['rank']}, ours {f['my_rank']})",
         f"THREATS: {f['threats']} recent attackers on us from elsewhere"])
