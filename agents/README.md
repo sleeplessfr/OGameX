@@ -290,7 +290,7 @@ python run_swarm.py --count 6 --personas miner,turtle,raider,trader --board http
 python observatory.py --board http://localhost:8765   (optional: adds a Board tab and a newspaper section)
 ```
 
-Posts have a kind: `OFFER`, `WANT`, `BOUNTY`, `WARNING`, `REVENGE`, `TAUNT`, `ALLIANCE`, `CLAIM`, `VERDICT`, a text of at most 200 characters and a small
+Posts have a kind: `OFFER`, `WANT`, `BOUNTY`, `WARNING`, `REVENGE`, `TAUNT`, `ALLIANCE`, `CLAIM`, `VERDICT`, `HELLO`, `REPLY` (the last two are diplomacy, below), a text of at most 200 characters and a small
 `data` object. `POST /post`, `GET /posts?since=<id>&kind=OFFER,WANT&limit=50`, `GET /health` (JSON). Safety: it listens on 127.0.0.1 only
 and refuses other peers, posts expire (30 min to 12 h by kind, at most a day), only the newest 2,000 are kept, every agent may post
 20 times an hour (agents limit themselves to 6), request bodies are capped. The client (`swarm/boardclient.py`) has a 2 second timeout
@@ -382,7 +382,8 @@ does anything.
 
 Off by default. With it on, each agent gets a short **character sheet** (a name, temperament words taken from its personality
 knobs, a one-line backstory; always the same for the same agent) and a small **voice**. The language model NEVER touches the
-game: it cannot build, attack or trade, and the rules decide everything exactly as before. It only writes text:
+game: it cannot build, attack or trade, and the rules decide everything exactly as before. It only writes text (the one exception, answering a
+diplomatic proposal, is fenced in by hard rules: see Diplomacy):
 
 1. **Board posts**: when the rules have decided a WARNING, REVENGE, BOUNTY, OFFER, TAUNT or CLAIM post, the model may put
    its `text` in the agent's own words (25 words at most). The structured `data` is never changed. An answer is thrown away if it is
@@ -418,9 +419,70 @@ The server address may be any `http://` address (it is not limited to this compu
 
 ## Not built yet
 
-The scrap merchant, jump gate use by agents, defending colonies, other retaliation than the revenge join, and LLM-driven
-decisions (the LLM so far only writes text: see the inner voice). The brain is rule-based; the personas are the knobs; learning so far is the risk lesson, opponent memory and the
+The scrap merchant, jump gate use by agents, defending colonies, and other retaliation than the revenge join. The only decision the
+language model makes is the answer to a diplomatic proposal (see Diplomacy); everything else is rule-based. The brain is rule-based; the personas are the knobs; learning so far is the risk lesson, opponent memory and the
 fight margin bandit above.
+
+## Diplomacy: first contact, trust, pacts (optional, needs the board; a language model makes it livelier)
+
+Rules are in `swarm/diplomacy.py` (pure) and `swarm/diplomacy_agent.py` (the calls, mixed into `Agent`).
+
+**What it is.** In the Stellaris style, an agent does not know another player until they meet. A meeting ("contact") is: a spy report on
+them, a battle with them, a post of theirs on the galaxy board, a spy probe or fleet seen coming from them, or living within 2 systems of one
+of its planets. Only other agents count; humans are never part of it. From then on each pair has a **relationship** that climbs a ladder, one
+step at a time, and can fall back down it:
+
+```
+unknown -> contact -> neutral -> friendly -> pact -> alliance
+```
+
+- `contact -> neutral`: one agent posts a HELLO on the board, the other answers (below).
+- `neutral -> friendly`: automatic once trust is 20 or more and the opinion is not negative.
+- `friendly -> pact`: a proposal, only with trust 40 or more. A **pact** is a non-aggression pact: neither side raids the other (the raid target
+  picker skips the partner, and a last check in `_try_attack` stops even a gamble).
+- `pact -> alliance`: a proposal, only with trust 65 or more, a shared threat (someone attacked us lately, or the partner warned us) and a sociable
+  persona. The agent then prefers the in-game alliance of its partner when it looks for one; the existing alliance code does the rest.
+
+Every pair has **trust** (0 to 100) and **opinion** (-100 to 100). They only move by events: a completed trade (+8), an accepted proposal (+6), a warning
+shared (+3) and peaceful time (+1 an hour; peace and warnings together at most +6 a day) go up; a raid on us (-40), a raid by us (-25) and a cheat in a trade (-30)
+go down. If a partner attacks us under a pact it is a **betrayal**: back to `contact`, trust 0, and for 48 hours nothing is proposed or accepted. The first
+opinion comes from the highscore (a much stronger neighbour is respected, a much weaker one is a target or nuisance, more so for aggressive agents) and the
+personality (aggression, caution, trade interest, sociability). Category scores are used when the highscore has them, and everything works without them.
+
+**Hard rules the language model cannot override** (checked in code, on both sides): no step with anyone who attacked us in the last 12 hours or who robbed
+us (48 hours), nor against whom we hold an open revenge call or bounty; no skipping a step; after a refusal 6 hours of silence for that pair; a pact needs
+trust 40 and an alliance 65. A proposal that breaks one is refused before the model is even asked.
+
+**How a proposal goes.** An agent in `contact` (or ready for the next step) posts a HELLO (`to_id`, `step`) at most once every ~3 hours, one open at a time; the
+text is written by the language model if there is one (else a fixed sentence). The addressed agent reads it, checks the hard rules, then asks the model
+with the facts (trust, opinion, how often they spied on or attacked us, score gap and rank, honest trades, threats). The model must start its answer with
+one word: `ACCEPT`, `REFUSE` or `WAIT` (the first word decides, capitals do not matter, anything else counts as WAIT), then optionally a short reason. The
+reply is posted as a REPLY. WAIT is silent: the agent asks again after 30 minutes, at most twice more, and then treats it as a refusal; a proposal nobody
+answers in 2 hours counts as refused. **Without a model** (no `--llm`) a deterministic rule answers: accept if trust is high enough, the opinion not bad
+and no grudge. If the model fails (down, budget used up) the rule answers too. On a pact or an alliance the accepting agent posts a one-line announcement
+(an `ALLIANCE` post with `announce` set; the model may put it in its own words). Nothing waits for the model: the question is queued (answers get priority
+over greetings) and the result is used on a later round.
+
+**How to run it.**
+
+```
+python board.py
+python run_swarm.py --count 20 --board http://localhost:8765 --llm fake                    (canned, repeatable answers: try this first)
+python run_swarm.py --count 20 --board http://localhost:8765 --llm http://localhost:1234/v1 --llm-model <name>   (a real model)
+python run_swarm.py --count 20 --board http://localhost:8765                                (no model: the rule answers)
+```
+
+Without `--board` the agents still meet and keep their grudges, but never get beyond `contact` (no way to talk). HELLO and REPLY posts count towards the
+agent's 6 board posts an hour.
+
+**How to see it.** The observatory has a **Diplomacy** tab (agent, other player, step, trust; read only, from the logs) and the Board tab shows HELLO and REPLY
+cards next to each other; the LLM page names the calls `hello`, `answer` and `announce`. `python summarize_logs.py` has a DIPLOMACY section: contacts, proposals,
+accepted / refused / waited, steps reached, pacts, alliances, betrayals and the 5 strongest relationships. State is saved in the agent's memory file
+(`diplomacy`); delete the key (or the file) to start over.
+
+Log events: `contact` (who, how), `diplo_hello` (who, step, text), `diplo_answer` (side answerer / proposer, decision, reason, source llm / rule / hard rule,
+a digest of the facts, `raw` = what the model said), `diplo_step` (from, to, trust, why; `betrayal` set when a pact was broken), `diplo_trust` (delta, why, trust;
+only changes of 5 or more, or a small one every 6 hours per pair), `diplo_announce`, `diplo_blocked` (a raid on a partner was stopped), `diplo_error`.
 
 ## Tests
 

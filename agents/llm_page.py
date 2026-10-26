@@ -42,7 +42,7 @@ def _read_lines(path: Path, keep_bytes: int = TAIL_BYTES) -> list[dict]:
 
 
 def used_texts(folder: Path) -> set[tuple[str, str]]:
-    """{(agent, text)} of every board rewrite and diary line that was really used."""
+    """{(agent, text)} of every board rewrite, diary line, hello, announcement and diplomacy answer that was really used."""
     used: set[tuple[str, str]] = set()
     try:
         files = sorted(folder.glob("agent*.jsonl"))
@@ -50,8 +50,10 @@ def used_texts(folder: Path) -> set[tuple[str, str]]:
         return used
     for p in files:
         for e in _read_lines(p, 1_000_000):
-            if e.get("event") in ("voice_post", "diary") and e.get("text"):
+            if e.get("event") in ("voice_post", "diary", "diplo_hello", "diplo_announce") and e.get("text"):
                 used.add((str(e.get("agent") or p.stem), _norm(e["text"])))
+            elif e.get("event") == "diplo_answer" and e.get("raw"):      # the model's own words that decided a diplomacy answer
+                used.add((str(e.get("agent") or p.stem), _norm(e["raw"])))
     return used
 
 
@@ -135,7 +137,9 @@ const $=id=>document.getElementById(id);
 let D=null,last='',opened=new Set();
 function el(t,c,x){const e=document.createElement(t);if(c)e.className=c;if(x!=null)e.textContent=x;return e}
 function age(t){const s=Math.max(0,Math.round(Date.now()/1000-t));if(s<60)return s+" s ago";if(s<3600)return Math.round(s/60)+" min ago";if(s<86400)return (s/3600).toFixed(1)+" h ago";return Math.round(s/86400)+" d ago"}
-function opts(sel,label,list){const cur=sel.value;sel.replaceChildren();const o=el("option","",label);o.value="";sel.appendChild(o);list.forEach(x=>{const e=el("option","",x);e.value=x;sel.appendChild(e)});if(list.includes(cur))sel.value=cur}
+function opts(sel,label,list,name){const cur=sel.value;sel.replaceChildren();const o=el("option","",label);o.value="";sel.appendChild(o);list.forEach(x=>{const e=el("option","",name?name(x):x);e.value=x;sel.appendChild(e)});if(list.includes(cur))sel.value=cur}
+const PURPOSE={hello:"hello (diplomacy)",answer:"answer (diplomacy)",announce:"announcement (diplomacy)",diary:"diary"};
+function purposeName(p){return PURPOSE[p]||(String(p).startsWith("rewrite:")?"rewrite "+String(p).slice(8):p)}
 function stat(label,v){const s=el("div","stat");s.append(el("b","",String(v)),el("small","",label));return s}
 function draw(){
   const T=D.totals||{};const st=$("stats");st.replaceChildren();
@@ -147,7 +151,7 @@ function draw(){
     if(fa&&c.agent!==fa)return;if(fp&&c.purpose!==fp)return;if(fs&&fs!==state)return;
     if(q&&!((c.answer||"")+" "+c.prompt+" "+c.agent+" "+(c.error||"")).toLowerCase().includes(q))return;
     n++;const box=el("div","call "+(state==="used"?"ok":state));
-    const top=el("div","top");top.append(el("span","who",c.agent),el("span","tag",c.purpose),el("span","tag",age(c.t)));
+    const top=el("div","top");top.append(el("span","who",c.agent),el("span","tag",purposeName(c.purpose)),el("span","tag",age(c.t)));
     if(c.latency!=null)top.appendChild(el("span","tag",c.latency+" s"));
     if(c.tokens!=null)top.appendChild(el("span","tag",c.tokens+" tokens"));
     top.appendChild(el("span","badge",state==="used"?"USED":state==="fail"?"FAILED":"NOT USED"));box.appendChild(top);
@@ -161,7 +165,7 @@ function draw(){
 async function load(){
   try{const r=await fetch("/api/llm?limit=200",{cache:"no-store"});const j=await r.json();$("err").textContent="";
     const sig=JSON.stringify([j.totals,(j.calls[0]||{}).t,j.calls.length]);$("live").textContent=" - live";if(sig===last&&D)return;last=sig;D=j;
-    opts($("fa"),"all agents",D.agents||[]);opts($("fp"),"all purposes",D.purposes||[]);draw()}
+    opts($("fa"),"all agents",D.agents||[]);opts($("fp"),"all purposes",D.purposes||[],purposeName);draw()}
   catch(e){$("err").textContent="Cannot reach the server: "+e;$("live").textContent=""}}
 ["fa","fp","fs"].forEach(i=>$(i).onchange=()=>D&&draw());$("q").oninput=()=>D&&draw();
 load();setInterval(load,6000);

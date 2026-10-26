@@ -35,7 +35,7 @@ class AllianceMixin:
 
     def _without_allies(self, ids: set[int] | None) -> set[int] | None:
         """The target ids an agent may attack, minus its allies. None (anyone) stays None while there are no allies."""
-        allies = self._ally_ids()
+        allies = self._ally_ids() | self._diplo_peace_ids()    # allies, and partners of a diplomatic pact or alliance (diplomacy.py)
         if not allies:
             return ids
         if ids is None:
@@ -127,9 +127,12 @@ class AllianceMixin:
         for a in candidates[:4]:
             info = self.client.get(f"/alliances/{a['id']}")["alliance"]
             ids = [int(m["user_id"]) for m in info.get("members", [])]
-            detailed.append({"id": a["id"], "tag": a["tag"], "open": True, "member_count": len(ids),
+            detailed.append({"id": a["id"], "tag": a["tag"], "open": True, "member_count": len(ids), "ids": ids,
                              "coords": [c for c in (self._alli_coord(rows.get(u)) for u in ids) if c],
                              "personas": [personas.get(u) for u in ids]})
+        partners = self._diplo_alliance_ids()      # diplomacy: prefer the alliance a partner at the `alliance` step belongs to
+        if partners:
+            detailed = [d for d in detailed if partners & set(d["ids"])] or detailed
         pick = A.pick_alliance(me_persona, coord, detailed, self.memory.opponents, self.memory.aggressors, self.now,
                                bar=A.APPLY_MIN_SCORE - 0.1 * self.persona.sociability)
         if pick is not None:

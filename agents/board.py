@@ -40,9 +40,10 @@ from pathlib import Path
 from board_page import PAGE
 from urllib.parse import parse_qs, urlparse
 
-KINDS = ("OFFER", "WANT", "BOUNTY", "WARNING", "REVENGE", "TAUNT", "ALLIANCE", "CLAIM", "VERDICT")
+KINDS = ("OFFER", "WANT", "BOUNTY", "WARNING", "REVENGE", "TAUNT", "ALLIANCE", "CLAIM", "VERDICT", "HELLO", "REPLY")
 DEFAULT_TTL = {"OFFER": 3600, "WANT": 3600, "BOUNTY": 6 * 3600, "WARNING": 2 * 3600, "REVENGE": 6 * 3600,
-               "TAUNT": 1800, "ALLIANCE": 12 * 3600, "CLAIM": 6 * 3600, "VERDICT": 12 * 3600}
+               "TAUNT": 1800, "ALLIANCE": 12 * 3600, "CLAIM": 6 * 3600, "VERDICT": 12 * 3600,
+               "HELLO": 3 * 3600, "REPLY": 6 * 3600}
 MAX_TTL = 24 * 3600
 MAX_TEXT = 200
 MAX_DATA_BYTES = 600

@@ -9,10 +9,10 @@ PAGE = r"""<!doctype html>
 <title>Galaxy Board</title>
 <style>
 :root{--bg:#0b0f1a;--panel:#131a2b;--panel2:#18213a;--line:#25304f;--ink:#e8ecf7;--dim:#8d99b8;
-  --offer:#3ddc97;--want:#4cc9f0;--warning:#ffb703;--revenge:#ff4d6d;--bounty:#f9c74f;--claim:#ff9f43;--verdict:#43d9ad;--taunt:#c77dff;--alliance:#7b9cff;
+  --offer:#3ddc97;--want:#4cc9f0;--warning:#ffb703;--revenge:#ff4d6d;--bounty:#f9c74f;--claim:#ff9f43;--verdict:#43d9ad;--taunt:#c77dff;--alliance:#7b9cff;--hello:#5eead4;--reply:#f472b6;
   --metal:#b8c2d6;--crystal:#6ee7f9;--deuterium:#7dd87d}
 @media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--bg:#f3f5fb;--panel:#fff;--panel2:#f0f3fb;--line:#d9dfef;--ink:#16203a;--dim:#5b6685;
-  --offer:#0a9b64;--want:#1479a8;--warning:#b36b00;--revenge:#cc1f44;--bounty:#8a6500;--claim:#b25400;--verdict:#0b7a5f;--taunt:#8a3fcf;--alliance:#3b5bd6;
+  --offer:#0a9b64;--want:#1479a8;--warning:#b36b00;--revenge:#cc1f44;--bounty:#8a6500;--claim:#b25400;--verdict:#0b7a5f;--taunt:#8a3fcf;--alliance:#3b5bd6;--hello:#0f8a7a;--reply:#c0307a;
   --metal:#667089;--crystal:#0e96ab;--deuterium:#3c9a3c}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
@@ -55,8 +55,8 @@ h1{font-size:26px;margin:0;letter-spacing:-.02em}
 <div id="feed"></div>
 </div>
 <script>
-const KINDS=["OFFER","WANT","WARNING","REVENGE","BOUNTY","CLAIM","VERDICT","TAUNT","ALLIANCE"];
-const COL={OFFER:"var(--offer)",WANT:"var(--want)",WARNING:"var(--warning)",REVENGE:"var(--revenge)",BOUNTY:"var(--bounty)",CLAIM:"var(--claim)",VERDICT:"var(--verdict)",TAUNT:"var(--taunt)",ALLIANCE:"var(--alliance)"};
+const KINDS=["OFFER","WANT","WARNING","REVENGE","BOUNTY","CLAIM","VERDICT","TAUNT","ALLIANCE","HELLO","REPLY"];
+const COL={OFFER:"var(--offer)",WANT:"var(--want)",WARNING:"var(--warning)",REVENGE:"var(--revenge)",BOUNTY:"var(--bounty)",CLAIM:"var(--claim)",VERDICT:"var(--verdict)",TAUNT:"var(--taunt)",ALLIANCE:"var(--alliance)",HELLO:"var(--hello)",REPLY:"var(--reply)"};
 const $=id=>document.getElementById(id);
 let posts=[],now=0,filter=null,fetched=0;
 function el(tag,cls,text){const e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=text;return e}
@@ -85,6 +85,9 @@ function card(p,isReply){
   if(p.kind==="VERDICT"){const v=el("span","tag",d.ok===true?"CONFIRMED":"REJECTED");v.style.color=d.ok===true?"var(--offer)":"var(--revenge)";v.style.fontWeight="700";meta.appendChild(v);
     if(d.why)meta.appendChild(el("span","tag",String(d.why)));if(d.claimant)meta.appendChild(el("span","tag","claimant "+d.claimant))}
   if(p.kind==="REVENGE"&&d.reply_to)meta.appendChild(el("span","tag","joins the call #"+d.reply_to));
+  if(p.kind==="HELLO"){if(d.to_name)meta.appendChild(el("span","tag","to "+d.to_name));if(d.step)meta.appendChild(el("span","tag","proposes: "+d.step))}
+  if(p.kind==="REPLY"){const v=el("span","tag",String(d.decision||"").toUpperCase());v.style.fontWeight="700";v.style.color=String(d.decision).toUpperCase()==="ACCEPT"?"var(--offer)":"var(--revenge)";meta.appendChild(v);if(d.step)meta.appendChild(el("span","tag","for: "+d.step))}
+  if(p.kind==="ALLIANCE"&&d.announce)meta.appendChild(el("span","tag","announcement: "+d.announce));
   if(d.at)meta.appendChild(el("span","tag","at "+d.at));
   if(d.raider_at)meta.appendChild(el("span","tag","raider at "+d.raider_at));
   if(d.raider_id!=null)meta.appendChild(el("span","tag","raider: player "+d.raider_id));

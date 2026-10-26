@@ -28,6 +28,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import llm_page
+from swarm.diplomacy import relations_from_events
 from swarm.client import ApiClient, ApiError
 from swarm.boardclient import TIMEOUT as BOARD_TIMEOUT
 
@@ -191,6 +192,18 @@ def describe(e: dict) -> str:
         return f"founded a colony (now {g('planets')} planets)"
     if k == "colony_failed":
         return f"colony attempt failed: {g('why')}"
+    if k == "contact":
+        return f"met {g('with')} ({g('how')})"
+    if k == "diplo_hello":
+        return f"proposes {g('step')} to {g('with')}: {str(g('text', ''))[:120]}"
+    if k == "diplo_answer":
+        return f"{g('decision')} ({g('side')}, {g('with')}): {str(g('reason', ''))[:100]}"
+    if k == "diplo_step":
+        return f"{g('with')}: {g('from')} -> {g('to')} (trust {g('trust')}, {g('why')})"
+    if k == "diplo_trust":
+        return f"trust with {g('with')} {g('delta')} ({g('why')}) now {g('trust')}"
+    if k == "diplo_announce":
+        return f"announces: {str(g('text', ''))[:140]}"
     if k == "registered":
         return f"joined the universe as {g('player')} ({g('persona')})"
     if k in ("api_error", "error"):
@@ -514,7 +527,7 @@ class Universe:
 
 # ---- the galaxy board (read only) ---------------------------------------------------------------------
 BOARD_KEEP = 200            # posts shown
-NOTICE_KINDS = ("WARNING", "REVENGE", "BOUNTY", "CLAIM", "VERDICT", "ALLIANCE", "OFFER", "WANT", "TAUNT")   # in this order of interest
+NOTICE_KINDS = ("WARNING", "REVENGE", "BOUNTY", "CLAIM", "VERDICT", "ALLIANCE", "HELLO", "REPLY", "OFFER", "WANT", "TAUNT")   # in this order of interest
 
 
 class BoardReader:
@@ -633,6 +646,14 @@ def notices_from(posts: list[dict], limit: int = 6) -> list[dict]:
             picked.append(p)
             seen.add(id(p))
     return [{"t": p.get("t"), "agent": str(p.get("agent", "?")), "kind": p["kind"], "text": describe_post(p)} for p in picked[:limit]]
+
+
+def diplomacy_view(events: list[dict], limit: int = 150) -> dict:
+    """The relationships table of the Diplomacy tab, from the log events (contact, diplo_step, diplo_trust). Never raises."""
+    try:
+        return {"rows": relations_from_events(events)[:limit]}
+    except Exception:
+        return {"rows": []}
 
 
 # ---- putting it together ------------------------------------------------------------------------------
@@ -760,7 +781,7 @@ class Observatory:
                             "scanned": len(self.universe.systems)},
                     "newspaper": news, "feed": feed, "board": self._board_state(agents, every),
                     "leaderboard": {"available": bool(self.universe.highscore), "rows": leader, "agents": counters},
-                    "llm": self.llm.summary()}
+                    "llm": self.llm.summary(), "diplomacy": diplomacy_view(events)}
 
 
 # ---- the web server -----------------------------------------------------------------------------------
@@ -869,11 +890,11 @@ PAGE = r"""<!doctype html>
 <title>Observatory</title>
 <style>
 :root{--bg:#0d1117;--panel:#161b22;--panel2:#1c2330;--line:#30363d;--text:#e6edf3;--dim:#8b949e;--accent:#58a6ff;--onaccent:#04101f;--slot:#242b36;--hole:#0d1117;--warn:#f0b429;
-  --offer:#3ddc97;--want:#4cc9f0;--warning:#ffb703;--revenge:#ff4d6d;--bounty:#f9c74f;--claim:#ff9f43;--verdict:#43d9ad;--taunt:#c77dff;--alliance:#7b9cff;
+  --offer:#3ddc97;--want:#4cc9f0;--warning:#ffb703;--revenge:#ff4d6d;--bounty:#f9c74f;--claim:#ff9f43;--verdict:#43d9ad;--taunt:#c77dff;--alliance:#7b9cff;--hello:#5eead4;--reply:#f472b6;
   --metal:#b8c2d6;--crystal:#6ee7f9;--deuterium:#7dd87d;--bad:#ff6b6b;--good:#3ddc97;
   --paper:#f1e8d0;--ink:#2b2416;--paper-line:#b9ad8c;--paper-dim:#6b5f44}
 @media (prefers-color-scheme: light){:root{--bg:#f3f5fb;--panel:#fff;--panel2:#f0f3fb;--line:#d9dfef;--text:#16203a;--dim:#5b6685;--accent:#1f6feb;--onaccent:#fff;--slot:#e3e8f3;--hole:#fff;--warn:#9a5b00;
-  --offer:#0a9b64;--want:#1479a8;--warning:#b36b00;--revenge:#cc1f44;--bounty:#8a6500;--claim:#b25400;--verdict:#0b7a5f;--taunt:#8a3fcf;--alliance:#3b5bd6;
+  --offer:#0a9b64;--want:#1479a8;--warning:#b36b00;--revenge:#cc1f44;--bounty:#8a6500;--claim:#b25400;--verdict:#0b7a5f;--taunt:#8a3fcf;--alliance:#3b5bd6;--hello:#0f8a7a;--reply:#c0307a;
   --metal:#667089;--crystal:#0e96ab;--deuterium:#3c9a3c;--bad:#c62828;--good:#0a8a55;
   --paper:#fbf5e4;--ink:#2b2416;--paper-line:#cfc4a4;--paper-dim:#6b5f44}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,Segoe UI,Arial,sans-serif}
@@ -958,11 +979,12 @@ tr:last-child td{border-bottom:0}tr.ours td:first-child{box-shadow:inset 3px 0 0
 <section id="news" class="tab"><div class="paper" id="paper"></div></section>
 <section id="feed" class="tab"><div class="filters"><select id="fa"></select><select id="fp"></select><select id="fk"></select><input id="ft" placeholder="search text"></div><div id="rows"></div></section>
 <section id="galaxyboard" class="tab"><div id="gnote" class="warn"></div><div class="chips" id="gchips"></div><div class="cards" id="gposts"></div></section>
+<section id="diplo" class="tab"><div class="dim">Relationships as the agents last logged them (contact, neutral, friendly, pact, alliance). Read only, from the logs.</div><div id="diplotable"></div></section>
 <section id="board" class="tab"><div class="bar">Sort by <select id="bsort"><option value="general">General</option><option value="economy">Economy</option><option value="research">Research</option><option value="military">Military</option></select> <span class="dim">Alliance stays empty until agents found alliances.</span></div><div id="boardnote" class="warn"></div><div id="boardtable"></div></section>
 </main>
 <script>
-const KC={OFFER:"var(--offer)",WANT:"var(--want)",WARNING:"var(--warning)",REVENGE:"var(--revenge)",BOUNTY:"var(--bounty)",CLAIM:"var(--claim)",VERDICT:"var(--verdict)",TAUNT:"var(--taunt)",ALLIANCE:"var(--alliance)"};
-const KCP={OFFER:"#0a7a4f",WANT:"#116a92",WARNING:"#9a5b00",REVENGE:"#b3193b",BOUNTY:"#8a6500",CLAIM:"#b25400",VERDICT:"#0b7a5f",TAUNT:"#7a2fb8",ALLIANCE:"#2f4cc0"};
+const KC={OFFER:"var(--offer)",WANT:"var(--want)",WARNING:"var(--warning)",REVENGE:"var(--revenge)",BOUNTY:"var(--bounty)",CLAIM:"var(--claim)",VERDICT:"var(--verdict)",TAUNT:"var(--taunt)",ALLIANCE:"var(--alliance)",HELLO:"var(--hello)",REPLY:"var(--reply)"};
+const KCP={OFFER:"#0a7a4f",WANT:"#116a92",WARNING:"#9a5b00",REVENGE:"#b3193b",BOUNTY:"#8a6500",CLAIM:"#b25400",VERDICT:"#0b7a5f",TAUNT:"#7a2fb8",ALLIANCE:"#2f4cc0",HELLO:"#0f8a7a",REPLY:"#c0307a"};
 const STORYC={bounty:"#8a6500",battle:"#b3193b",defence:"#b3193b",colony:"#0b7a5f",trade:"#116a92",fleet:"#2f4cc0",revenge:"#b3193b",lesson:"#7a2fb8",class:"#6b5f44",quiet:"#6b5f44"};
 const COLORS={miner:"#d9a441",scientist:"#4aa3ff",turtle:"#4fbf7a",raider:"#e5534b",balanced:"#b07cf0",other:"#6b7280"};
 if(window.matchMedia&&matchMedia("(prefers-color-scheme: light)").matches)Object.assign(COLORS,{miner:"#a8730f",scientist:"#1a6fcf",turtle:"#1e8a4c",raider:"#c62f27",balanced:"#7d3fc4"});
@@ -979,11 +1001,12 @@ function kindColor(k){k=String(k);
   if(/bounty/.test(k))return "var(--bounty)";
   if(/trade|supply|recycle/.test(k))return "var(--offer)";
   if(/colony|expand|registered|class/.test(k))return "var(--want)";
+  if(/diplo|contact/.test(k))return "var(--hello)";
   if(/board|lesson|diary|voice/.test(k))return "var(--taunt)";
   if(/defend|fleet/.test(k))return "var(--alliance)";
   return "var(--dim)"}
 let S=null,tab="map",gfilter=null;
-const tabs=[["map","Map"],["news","Newspaper"],["feed","Feed"],["galaxyboard","Board"],["board","Leaderboard"]];
+const tabs=[["map","Map"],["news","Newspaper"],["feed","Feed"],["galaxyboard","Board"],["diplo","Diplomacy"],["board","Leaderboard"]];
 tabs.forEach(([id,name])=>{const b=el("button",id==="map"?"on":"",name);b.onclick=()=>{tab=id;document.querySelectorAll(".tab").forEach(s=>s.classList.toggle("on",s.id===id));[...$("nav").children].forEach(c=>c.classList.toggle("on",c===b))};$("nav").appendChild(b)});
 Object.entries(COLORS).forEach(([k,c])=>{const s=el("span");const d=el("span","dot");d.style.background=c;s.append(d,k==="other"?"other / human":k);$("legend").appendChild(s)});
 {const s=el("span");s.append("● hole = colony   red ring = battle in the last 6 h");$("legend").appendChild(s)}
@@ -1057,6 +1080,9 @@ function postCard(p,isReply,now){
   if(p.kind==="VERDICT"){const v=el("span","tag",d.ok===true?"CONFIRMED":"REJECTED");v.style.color=d.ok===true?"var(--offer)":"var(--revenge)";v.style.fontWeight="700";meta.appendChild(v);
     if(d.why)tag(String(d.why));if(d.claimant)tag("claimant "+d.claimant)}
   if(p.kind==="REVENGE"&&d.reply_to)tag("joins the call #"+d.reply_to);
+  if(p.kind==="HELLO"){if(d.to_name)tag("to "+d.to_name);if(d.step)tag("proposes: "+d.step)}
+  if(p.kind==="REPLY"){const v=el("span","tag",String(d.decision||"").toUpperCase());v.style.fontWeight="700";v.style.color=String(d.decision).toUpperCase()==="ACCEPT"?"var(--offer)":"var(--revenge)";meta.appendChild(v);if(d.step)tag("for: "+d.step)}
+  if(p.kind==="ALLIANCE"&&d.announce)tag("announcement: "+d.announce);
   if(d.at)tag("at "+d.at);if(d.raider_at)tag("raider at "+d.raider_at);if(d.raider_id!=null)tag("raider: player "+d.raider_id);if(d.loot&&p.kind!=="CLAIM")tag("robbed of "+fmt(d.loot));
   if(p.expires)tag(p.expires<now?"expired":"expires in "+Math.max(0,Math.round((p.expires-now)/60))+" min");
   if(meta.childNodes.length)c.appendChild(meta);
@@ -1095,7 +1121,13 @@ function drawBoard(){
   if(b.available)b.rows.slice().sort((x,y)=>sortRank(x)-sortRank(y)).forEach(r=>add([r.username,r.alliance||"",rk(r,"general"),rk(r,"economy"),rk(r,"research"),rk(r,"military"),r.ships,r.agent?`${r.agent} (${r.persona||"?"})`:"",r.planets,r.attacks,r.net_loot,r.colonies],r.agent?(r.persona||"other"):null));
   else b.agents.forEach(a=>add([a.agent,a.persona||"?",a.attacks,a.net_loot,a.colonies],a.persona||"other"));
   wrap.appendChild(t);box.appendChild(wrap)}
-function draw(){drawMap();drawNews();drawFeed();drawGalaxyBoard();drawBoard();
+function drawDiplo(){
+  const box=$("diplotable");box.replaceChildren();const rows=(S.diplomacy&&S.diplomacy.rows)||[];
+  if(!rows.length){box.appendChild(el("div","empty","No relationships yet. They appear as agents meet (needs the swarm; pacts need the board)."));return}
+  const wrap=el("div","tablewrap"),t=el("table"),head=el("tr");["Agent","Other player","Step","Trust","Last change"].forEach(x=>head.appendChild(el("th","",x)));t.appendChild(head);
+  rows.forEach(r=>{const tr=el("tr","");tr.append(el("td","",r.agent),el("td","",r.with),el("td","",r.step),el("td","n",String(Math.round(r.trust))),el("td","",r.t?when(r.t):""));t.appendChild(tr)});
+  wrap.appendChild(t);box.appendChild(wrap)}
+function draw(){drawMap();drawNews();drawFeed();drawGalaxyBoard();drawDiplo();drawBoard();
   $("status").textContent=`${S.events_in_memory} events - last at ${S.latest_event?when(S.latest_event):"never"} - map ${S.map.available?"ok":"unavailable"}${S.llm?` - LLM ${S.llm.calls} calls${S.llm.failed?` (${S.llm.failed} failed)`:""}, avg ${S.llm.avg_latency} s`:""}`}
 async function load(){try{const r=await fetch("/api/state");const j=await r.json();if(j.error){$("status").textContent="error: "+j.error}else{S=j;draw()}}catch(e){$("status").textContent="cannot reach the observatory"}
   setTimeout(load,((S&&S.refresh)||30)*1000)}

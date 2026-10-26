@@ -17,6 +17,8 @@ from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 
+from swarm.diplomacy import relations_from_events
+
 NOTABLE = ("lesson", "trade", "merchant_dismissed", "trade_failed", "defend", "giving_up", "units_refused", "spy_refused", "refused")
 
 
@@ -433,6 +435,7 @@ def summarize(events: list[dict], personas: dict[str, str] | None = None, llm_ca
         out.append("  none")
     out.append("")
 
+    out += diplomacy_section(events)
     out += llm_section(events, llm_calls or [])
 
     out.append("ERRORS")
@@ -473,6 +476,44 @@ def read_llm_calls(log_dir: Path, since: float = 0.0) -> list[dict]:
     except OSError:
         pass
     return calls
+
+
+def diplomacy_section(events: list[dict]) -> list[str]:
+    """DIPLOMACY: contacts, steps reached, answers (accepted / refused / waited), pacts, alliances, betrayals, the 5 strongest relationships."""
+    out = ["DIPLOMACY (first contact and the ladder contact > neutral > friendly > pact > alliance; the rules decide, a language model only helps with words and answers)"]
+    names = ("contact", "diplo_hello", "diplo_answer", "diplo_step", "diplo_trust", "diplo_announce", "diplo_blocked")
+    ev = [e for e in events if e.get("event") in names]
+    if not ev:
+        return out + ["  none (needs two or more agents that meet; steps beyond contact need the galaxy board: run_swarm.py --board URL)", ""]
+    contacts = [e for e in ev if e["event"] == "contact"]
+    hows = Counter(str(e.get("how")) for e in contacts)
+    out.append(f"  contacts: {len(contacts)} (" + ", ".join(f"{n} {how}" for how, n in hows.most_common()) + ")" if contacts else "  contacts: 0")
+    hellos = [e for e in ev if e["event"] == "diplo_hello"]
+    mine = [e for e in ev if e["event"] == "diplo_answer" and e.get("side") == "answerer"]
+    said = Counter(str(e.get("decision")) for e in mine)
+    how_said = Counter(str(e.get("source")).split(" ")[0] for e in mine)
+    out.append(f"  proposals posted: {len(hellos)}; answers given: {said['ACCEPT']} accepted, {said['REFUSE']} refused, {said['WAIT']} waited"
+               + (" (" + ", ".join(f"{n} by {how}" for how, n in how_said.most_common()) + ")" if mine else ""))
+    steps = [e for e in ev if e["event"] == "diplo_step"]
+    reached = Counter(str(e.get("to")) for e in steps)
+    out.append("  steps reached: " + (", ".join(f"{n} {s}" for s, n in reached.most_common()) if steps else "none"))
+    for e in [x for x in steps if x.get("to") in ("pact", "alliance")][-5:]:
+        out.append(f"    {clock(e['t'])} {e['agent']} and {e.get('with')}: {e.get('to')} (trust {e.get('trust')})")
+    betrayals = [e for e in steps if e.get("betrayal")]
+    out.append(f"  betrayals: {len(betrayals)}")
+    for e in betrayals[-3:]:
+        out.append(f"    {clock(e['t'])} {e['agent']} was attacked by {e.get('with')} under a {e.get('from')}")
+    blocked = [e for e in ev if e["event"] == "diplo_blocked"]
+    if blocked:
+        out.append(f"  raids stopped because the target was a partner: {len(blocked)}")
+    out.append("  strongest relationships (by trust):")
+    top = relations_from_events(events)[:5]
+    for r in top:
+        out.append(f"    {r['agent']} -> {r['with']}: {r['step']}, trust {r['trust']:.0f}")
+    if not top:
+        out.append("    none")
+    out.append("")
+    return out
 
 
 def llm_section(events: list[dict], calls: list[dict]) -> list[str]:

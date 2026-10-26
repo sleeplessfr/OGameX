@@ -25,6 +25,7 @@ from .bounty_agent import BountyMixin
 from .moons_agent import MoonsMixin
 from .llm_agent import VoiceMixin
 from .alliance_agent import AllianceMixin
+from .diplomacy_agent import DiplomacyMixin
 
 
 # When an agent is stuck with nothing to do and no idea how long it will take, look again after this long.
@@ -53,6 +54,11 @@ class TokenStore:
         with self._lock:
             return {int(e["user_id"]): e.get("persona") for e in self._data.values() if e.get("user_id") is not None}
 
+    def agent_names(self) -> dict[int, str]:
+        """Agent name by game user id."""
+        with self._lock:
+            return {int(e["user_id"]): n for n, e in self._data.items() if e.get("user_id") is not None}
+
     def put(self, name: str, entry: dict) -> None:
         with self._lock:
             self._data[name] = entry
@@ -61,7 +67,7 @@ class TokenStore:
             tmp.replace(self.path)
 
 
-class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, AllianceMixin):
+class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, AllianceMixin, DiplomacyMixin):
     def __init__(
         self, name: str, persona: Persona, base_url: str, store: TokenStore, rng: random.Random,
         *, log_dir: str | None = None, email_domain: str = "example.com", client: ApiClient | None = None,
@@ -184,6 +190,7 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
         threats = threats + self._phalanx_threats(threats)   # attacks the phalanx saw coming count like the ones /fleet shows
         hints += self._plan_alliance(status, planets, threats)   # alliances (off without sociability or alliance endpoints): found/join, share intel, warn allies
         hints += self._plan_social(status, planets)   # galaxy board (off without --board): warnings raise the guard, traders swap goods
+        hints += self._plan_diplomacy(status, planets, threats)   # first contact and relationships (diplomacy.py): hello/answer on the board, pacts
         if self.now < self.alert_until:
             hints.append(WATCH_SECONDS)   # someone hostile is about: look often
         elif self._on_guard():
@@ -693,6 +700,7 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
             t = report["target"]
             c = coord_of(t["galaxy"], t["system"], t["position"])
             intel = summarize_report(report)
+            self._diplo_contact(intel.owner_id, "spy report")   # diplomacy: we know this player now
             self.memory.intel[c] = {"at": now, "loot": intel.loot, "defenders": intel.defenders, "owner_id": intel.owner_id,
                                     "ships": intel.ships, "defense": intel.defense, "research": intel.research}
             self.memory.pending.pop(c, None)
@@ -726,6 +734,7 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
             self.stats["battles"] += 1
             b["report_id"] = row["id"]
             self._social_battle(b)   # galaxy board: tell the others when we were robbed
+            self._diplo_battle(b)    # diplomacy: contact, and a raid on us (or by us) costs trust; under a pact it is a betrayal
             verdict = judge_trade(b) if b["role"] == "attacker" else None
             margin = outcome = None
             if b["role"] == "attacker" and b["coord"] and None not in b["coord"]:
@@ -759,6 +768,10 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
         if pick is None:
             return False
         coord, intel, reason = pick
+        if self._diplo_protected(coord, intel.owner_id):   # a pact or alliance partner is never raided, whatever else says go
+            self.memory.intel.pop(coord, None)
+            self.log("diplo_blocked", at=f"{coord[0]}:{coord[1]}:{coord[2]}", why="pact or alliance partner")
+            return False
         if not self.ship_stats:
             self.ship_stats = {s["machine_name"]: s for s in self.client.get("/ships")["ships"]}
         # How much to over-estimate the defenders is learned (bandit.py); its own random stream keeps the agent's other choices unchanged.
@@ -793,6 +806,7 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
             self.log("attack_refused", at=f"{coord[0]}:{coord[1]}:{coord[2]}", code=e.code, msg=e.message[:120])
             return False
         self.memory.attacked[coord] = now
+        self._diplo_we_attacked(intel.owner_id)   # diplomacy: a raid costs trust with that player
         doctrine.note_attack(self.memory.doctrine, now)
         self.memory.arm_for[coord] = margin
         self.memory.intel.pop(coord, None)
