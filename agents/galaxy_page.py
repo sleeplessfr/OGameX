@@ -91,14 +91,11 @@ button{background:#16203a;color:var(--ink);border:1px solid #2a3558;border-radiu
 const COLORS={miner:"#d9a441",scientist:"#4aa3ff",turtle:"#4fbf7a",raider:"#e5534b",balanced:"#b07cf0",other:"#6b7280"};
 const $=i=>document.getElementById(i),cv=$("c"),g=cv.getContext("2d");
 let D=null,offset=0,cam={x:0,y:0,k:1},hidden=new Set(),hover=null,focusSys=null,sysPos={},sysInfo={},stars=[];
-// The galaxy has 499 systems laid along one spiral arm (so systems with close numbers are close in space, like flight distances),
-// one every ARC units along the arm; the arm turns around the bright core.
-const ARC=150,GAP_TURN=1100,R0=260,MAXSYS=499,POS=[null];
-(function(){const b=GAP_TURN/(2*Math.PI);let th=0,r=R0;
-  for(let n=1;n<=MAXSYS+60;n++){const h=Math.sin(n*12.9898)*43758.5453,j=h-Math.floor(h),h2=Math.sin(n*78.233)*12345.678,j2=h2-Math.floor(h2);
-    const x=Math.cos(th)*r,y=Math.sin(th)*r,nx=-Math.sin(th),ny=Math.cos(th);
-    POS.push({x:x+nx*(j-.5)*70+Math.cos(th)*(j2-.5)*40,y:y+ny*(j-.5)*70+Math.sin(th)*(j2-.5)*40});
-    let left=ARC;while(left>0){const rp=r;const step=Math.min(left/Math.hypot(rp,b),.05);th+=step;r=R0+b*th;left-=step*Math.hypot(rp,b)}}})();
+// The galaxy is an ELLIPTICAL one: a round, dense core that thins out towards the edge. The 499 systems sit on a golden-angle
+// disc, r = A * n^0.65 (so the first systems are the packed core and the last ones the sparse outskirts); close numbers are close in space.
+const A=74,POWER=.65,GOLD=2.399963,MAXSYS=499,POS=[null];
+(function(){for(let n=1;n<=MAXSYS+60;n++){const h=Math.sin(n*12.9898)*43758.5453,j=h-Math.floor(h),h2=Math.sin(n*78.233)*12345.678,j2=h2-Math.floor(h2);
+  const r=A*Math.pow(n,POWER),th=n*GOLD;POS.push({x:Math.cos(th)*r+(j-.5)*34,y:Math.sin(th)*r+(j2-.5)*34})}})();
 function pos(s){return POS[Math.max(1,Math.min(POS.length-1,s))]}
 function orbitR(p){return 12+p*4.6}   // slot 1 is close to the star, slot 15 far away
 function planetOff(p){const a=p*2.4-1;const r=orbitR(p);return {x:Math.cos(a)*r,y:Math.sin(a)*r}}
@@ -111,7 +108,7 @@ function fit(){const ss=Object.keys(sysInfo).map(Number);if(!ss.length)return;le
   cam.x=(a+c)/2;cam.y=(b+d)/2;cam.k=Math.min(3,Math.min(innerWidth*.8/(c-a+300),innerHeight*.8/(d-b+300)))}
 function zoomTo(s){const p=pos(s);cam.x=p.x;cam.y=p.y;cam.k=Math.max(cam.k,3.8);focusSys=s}
 $("fit").onclick=()=>{fit();focusSys=null};
-$("whole").onclick=()=>{const p=pos(MAXSYS);cam.x=0;cam.y=0;cam.k=Math.min(innerWidth,innerHeight)*.46/Math.hypot(p.x,p.y);focusSys=null};
+$("whole").onclick=()=>{const p=pos(MAXSYS);cam.x=0;cam.y=0;cam.k=Math.min(innerWidth,innerHeight)*.46/(A*Math.pow(MAXSYS,POWER)*1.1);focusSys=null};
 let drag=null;
 cv.onmousedown=e=>{drag={x:e.clientX,y:e.clientY,cx:cam.x,cy:cam.y,moved:false};cv.classList.add("drag")};
 addEventListener("mouseup",e=>{if(drag&&!drag.moved)clickAt(e.clientX,e.clientY);drag=null;cv.classList.remove("drag")});
@@ -136,10 +133,10 @@ function draw(ts){requestAnimationFrame(draw);const dpr=devicePixelRatio;g.setTr
   g.fillStyle="#fff";for(const st of stars){g.globalAlpha=st.a;g.fillRect((st.x*innerWidth+(-cam.x*cam.k*.02))%innerWidth,st.y*innerHeight,st.r,st.r)}g.globalAlpha=1;
   if(!D)return;const now=Date.now()/1000+offset;const mix=Math.max(0,Math.min(1,(cam.k-1.4)/1.6));
   g.save();g.translate(innerWidth/2,innerHeight/2);g.scale(cam.k,cam.k);g.translate(-cam.x,-cam.y);
-  const core=g.createRadialGradient(0,0,0,0,0,900);core.addColorStop(0,"rgba(255,220,160,.35)");core.addColorStop(.4,"rgba(120,140,255,.10)");core.addColorStop(1,"rgba(0,0,0,0)");g.fillStyle=core;g.beginPath();g.arc(0,0,900,0,7);g.fill();
-  g.fillStyle="#6c7fb8";for(let n=1;n<=MAXSYS;n++){if(sysInfo[n])continue;const q=POS[n];g.globalAlpha=.5;g.beginPath();g.arc(q.x,q.y,Math.max(1.6,2.2/Math.sqrt(cam.k)),0,7);g.fill()}g.globalAlpha=1;
+  const RMAX=A*Math.pow(MAXSYS,POWER)*1.15;const core=g.createRadialGradient(0,0,0,0,0,RMAX);core.addColorStop(0,"rgba(255,214,150,.42)");core.addColorStop(.12,"rgba(255,190,120,.22)");core.addColorStop(.4,"rgba(150,130,200,.09)");core.addColorStop(1,"rgba(0,0,0,0)");g.fillStyle=core;g.beginPath();g.arc(0,0,RMAX,0,7);g.fill();
+  g.fillStyle="#6c7fb8";for(let n=1;n<=MAXSYS;n++){if(sysInfo[n])continue;const q=POS[n];g.globalAlpha=.85;g.beginPath();g.arc(q.x,q.y,Math.max(2,3/Math.sqrt(cam.k)),0,7);g.fill()}g.globalAlpha=1;
   const ss=Object.keys(sysInfo).map(Number).sort((a,b)=>a-b);
-  g.strokeStyle="#16213f";g.lineWidth=1/cam.k;if(cam.k>.3){g.beginPath();ss.forEach((s,i)=>{const p=pos(s);if(i&&ss[i-1]===s-1)g.lineTo(p.x,p.y);else g.moveTo(p.x,p.y)});g.stroke()}
+  g.strokeStyle="#16213f";g.lineWidth=1/cam.k;if(false){g.beginPath();ss.forEach((s,i)=>{const p=pos(s);if(i&&ss[i-1]===s-1)g.lineTo(p.x,p.y);else g.moveTo(p.x,p.y)});g.stroke()}
   ss.forEach(s=>{const p=pos(s),i=sysInfo[s];const owners=i.slots.filter(x=>x.owner);const col=COLORS[(owners.find(x=>x.persona)||{}).persona]||"#8aa4d8";
     const z=1/Math.sqrt(Math.max(.6,cam.k));const rad=(7+Math.min(8,owners.length*1.4))*Math.max(z,.9/Math.sqrt(cam.k)*1.0)*(cam.k<.5?2.2:1);const gr=g.createRadialGradient(p.x,p.y,0,p.x,p.y,rad*2.6);gr.addColorStop(0,col+"cc");gr.addColorStop(.35,col+"44");gr.addColorStop(1,col+"00");
     g.fillStyle=gr;g.beginPath();g.arc(p.x,p.y,rad*2.6,0,7);g.fill();g.fillStyle="#fff";g.beginPath();g.arc(p.x,p.y,2.4*z,0,7);g.fill();
