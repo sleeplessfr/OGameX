@@ -41,3 +41,10 @@ class Debris(unittest.TestCase):
         out = G.debris_from(ev, 400)
         self.assertEqual([(d["at"], d["amount"]) for d in out], [([1, 5, 3], 60000)])
         self.assertEqual(G.debris_from(ev, 400 + 90000), [])
+
+class Assets(unittest.TestCase):
+    def test_bundled_skins(self):
+        import pathlib
+        root = pathlib.Path(__file__).resolve().parent.parent / "assets"
+        self.assertEqual(len(list((root / "planets").glob("*.png"))), 70)
+        self.assertEqual(len(list((root / "moons").glob("*.gif"))), 5)

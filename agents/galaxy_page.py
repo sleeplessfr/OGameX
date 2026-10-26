@@ -156,6 +156,15 @@ const A=74,POWER=.65,MAXSYS=499,POS=[null];
   POS.push({x:Math.cos(th)*r,y:Math.sin(th)*r})}})();   // y points down on the screen: a growing angle turns clockwise
 function pos(s){return POS[Math.max(1,Math.min(POS.length-1,s))]}
 function orbitR(p){return 12+p*4.6}   // slot 1 is close to the star, slot 15 far away
+// The game's own planet pictures (bundled in assets/): same rule as PlanetService::getPlanetBiomeType / getPlanetImageType.
+const BIOME={1:["dry","desert"],2:["dry","desert"],3:["dry","desert"],4:["normal","dry"],5:["normal","dry"],6:["jungle","normal"],7:["jungle","normal"],8:["water","jungle"],9:["water","jungle"],10:["ice","water"],11:["ice","water"],12:["gas","ice"],13:["gas","ice"],14:["normal","gas"],15:["normal","gas"]};
+const IMGBASE=[3,4,5,6,7,8,9,10,1,2,3,4,5,6,7];
+function biomeOf(sys,pos){return BIOME[pos][sys%2===0?1:0]}
+function imageType(sys,pos){let m=(sys%10)-1;if(m===-1)m=9;let t=IMGBASE[pos-1]+m;if(t>10)t-=10;return t}
+const IMG={};
+function skin(url){let i=IMG[url];if(!i){i=IMG[url]=new Image();i.src=url}return i.complete&&i.naturalWidth?i:null}
+function planetSkin(sys,pos){return skin(`/assets/planets/${biomeOf(sys,pos)}_${imageType(sys,pos)}.png`)}
+function moonSkin(sys,pos){let t=imageType(sys,pos);if(t>5)t-=5;return skin(`/assets/moons/${t}.gif`)}
 function moonOff(p){const a=p*2.4-1+.9;return {x:Math.cos(a)*6,y:Math.sin(a)*6}}
 function debrisOff(p){const a=p*2.4-1-.9;return {x:Math.cos(a)*9,y:Math.sin(a)*9}}
 function planetOff(p){const a=p*2.4-1;const r=orbitR(p);return {x:Math.cos(a)*r,y:Math.sin(a)*r}}
@@ -224,9 +233,11 @@ function draw(ts){requestAnimationFrame(draw);const dpr=devicePixelRatio;g.setTr
     if(cam.k>.12){g.fillStyle="#9fb2e8";g.font=`${11/cam.k}px system-ui`;g.textAlign="center";g.fillText(""+s,p.x,p.y+rad+13/cam.k)}
     if(mix>0){g.strokeStyle=`rgba(140,170,240,${.22*mix})`;g.lineWidth=.7/cam.k;for(let q=1;q<=15;q++){g.beginPath();g.arc(p.x,p.y,orbitR(q),0,7);g.stroke()}
       i.slots.forEach(sl=>{const o=planetOff(sl.position);g.globalAlpha=mix;g.fillStyle=sl.owner?(COLORS[sl.persona]||COLORS.other):"#334";
-        g.beginPath();g.arc(p.x+o.x,p.y+o.y,(sl.owner?3.2:1.4)*Math.min(1,2.2/Math.pow(cam.k,.45)),0,7);g.fill();
+        const pr=(sl.owner?3.2:1.4)*Math.min(1,2.2/Math.pow(cam.k,.45)),im=sl.owner?planetSkin(i.system,sl.position):null;
+        if(im){const d=pr*2.6;g.drawImage(im,p.x+o.x-d/2,p.y+o.y-d/2,d,d);g.strokeStyle=COLORS[sl.persona]||COLORS.other;g.lineWidth=Math.max(.5,1.1/cam.k);g.beginPath();g.arc(p.x+o.x,p.y+o.y,d/2+.5/Math.max(1,cam.k*.3),0,7);g.stroke()}
+        else{g.beginPath();g.arc(p.x+o.x,p.y+o.y,pr,0,7);g.fill()}
         if(sl.battle){g.strokeStyle="#ff4d4d";g.lineWidth=1.2/cam.k;g.beginPath();g.arc(p.x+o.x,p.y+o.y,5.5+Math.sin(ts/120),0,7);g.stroke()}
-        if(sl.moon&&sl.owner){const mo=moonOff(sl.position);g.fillStyle="#b9c0d0";g.beginPath();g.arc(p.x+o.x+mo.x,p.y+o.y+mo.y,Math.max(1.2,1.8*Math.min(1,2.2/Math.pow(cam.k,.45))),0,7);g.fill();g.strokeStyle="rgba(185,192,208,.35)";g.lineWidth=.5/cam.k;g.beginPath();g.arc(p.x+o.x,p.y+o.y,Math.hypot(mo.x,mo.y),0,7);g.stroke()}
+        if(sl.moon&&sl.owner){const mo=moonOff(sl.position);const mr=Math.max(1.2,1.8*Math.min(1,2.2/Math.pow(cam.k,.45))),ms=moonSkin(i.system,sl.position);if(ms){g.drawImage(ms,p.x+o.x+mo.x-mr,p.y+o.y+mo.y-mr,mr*2,mr*2)}else{g.fillStyle="#b9c0d0";g.beginPath();g.arc(p.x+o.x+mo.x,p.y+o.y+mo.y,mr,0,7);g.fill()}g.strokeStyle="rgba(185,192,208,.35)";g.lineWidth=.5/cam.k;g.beginPath();g.arc(p.x+o.x,p.y+o.y,Math.hypot(mo.x,mo.y),0,7);g.stroke()}
         if(sl.debris){const db=debrisOff(sl.position),n=Math.min(14,4+Math.round(Math.log10(sl.debris+1)*2)),R=2+Math.log10(sl.debris+1);
           g.fillStyle="#c9a27a";for(let i=0;i<n;i++){const a=i*2.4+sl.position,rr=R*(.35+((i*37)%10)/10);g.globalAlpha=mix*(.45+.4*((i*13)%5)/5);g.beginPath();g.arc(p.x+o.x+db.x+Math.cos(a)*rr,p.y+o.y+db.y+Math.sin(a)*rr*.6,.7,0,7);g.fill()}g.globalAlpha=mix}
         if(sl.colony&&sl.owner){g.fillStyle="#05070f";g.beginPath();g.arc(p.x+o.x,p.y+o.y,1.2,0,7);g.fill()}

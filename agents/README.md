@@ -668,3 +668,5 @@ With the observatory running, open `http://localhost:18766/llm` (your observator
 ## Galaxy map
 
 `http://localhost:18766/galaxy` (also linked from the observatory header): a zoomable star map. Scroll to zoom, drag to move, click a system to zoom in (the planets appear around the star), double-click to fit all. Fleets in flight are blinking, moving arrows: red attack, yellow spy probe, cyan expedition, green colony ship, orange recycler. A dimmer arrow is the return trip. Untick a mission in the legend to hide it. Origins are the agent's main planet, flight times come from the logs.
+
+The galaxy map draws the game's own planet and moon pictures, bundled in `assets/` (copied from OGameX `public/img`, MIT licence, same author as the game); the picture is picked from the system and slot number by the same rule as the game.

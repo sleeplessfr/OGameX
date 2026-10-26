@@ -869,6 +869,14 @@ def make_handler(observatory: Observatory):
                 except Exception as e:
                     body = json.dumps({"available": False, "calls": [], "totals": {}, "agents": [], "purposes": [], "error": str(e)[:200]}).encode("utf-8")
                 self._send(200, body, "application/json")
+            elif path.startswith("/assets/"):
+                f = (Path(__file__).resolve().parent / "assets" / path[len("/assets/"):]).resolve()
+                root = (Path(__file__).resolve().parent / "assets").resolve()
+                if root in f.parents and f.is_file():
+                    ctype = {".png": "image/png", ".gif": "image/gif", ".jpg": "image/jpeg"}.get(f.suffix.lower(), "application/octet-stream")
+                    self._send(200, f.read_bytes(), ctype)
+                else:
+                    self._send(404, b"not found", "text/plain")
             elif path in ("/galaxy", "/galaxy.html"):
                 self._send(200, galaxy_page.PAGE.encode("utf-8"), "text/html; charset=utf-8")
             elif path == "/api/galaxy":
