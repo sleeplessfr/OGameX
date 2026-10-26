@@ -211,6 +211,39 @@ curl -s -X POST http://localhost/api/v1/planets/45/jump-gate \
 # {"success":true,"data":{"from_moon_id":45,"to_moon_id":52,"ships":{"light_fighter":20,"small_cargo":5},"cooldown_seconds":3600}}
 ```
 
+### Alliances and chat
+
+Thin layer over the game's own `AllianceService` and `ChatService`, so the rules are the web UI's: tags are
+3-8 characters and unique, names 3-30 characters and unique, the founder can do everything and other members
+only what their rank allows, and leaving sets the game's cooldown before joining or founding another alliance.
+The founder is the only member with permissions until ranks are made in the web UI.
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/alliances` | Query: `open_only=1`, `page`, `per_page` (1-100, default 25). Largest first: `id`, `tag`, `name`, `open`, `founder_user_id`, `member_count`, `external_text`, `application_text`, `homepage_url` |
+| GET | `/alliances/{id}` | Public data of one alliance plus `members` (`user_id`, `username`, `is_founder`). 404 `alliance_not_found` |
+| GET | `/alliance` | My alliance (`alliance` is `null` when I am in none): the public fields, `internal_text`, `members` (with rank and points), `ranks`, `my_rank_id`, `is_founder`, `my_permissions`, and `applications` (open ones, or `null` when my rank may not see them) |
+| POST | `/alliance` | Found one. Body: `tag`, `name`. Errors: `already_in_alliance`, `tag_taken`, `name_taken`, `alliance_cooldown`, `validation_failed`, `vacation_mode` |
+| POST | `/alliances/{id}/apply` | Body: `text` (optional, up to 2000 characters). Errors: `alliance_not_found`, `alliance_closed`, `already_in_alliance`, `application_pending`, `alliance_cooldown` |
+| POST | `/alliance/applications/{id}/accept` | Accept an application to my alliance (`edit_applications` permission). Errors: `application_not_found`, `application_not_pending`, `no_permission` (403), `already_in_alliance` |
+| POST | `/alliance/applications/{id}/reject` | Same rules, rejects it |
+| POST | `/alliance/leave` | Leave. Errors: `not_in_alliance`, `founder_protected` (the founder cannot leave) |
+| POST | `/alliance/kick` | Body: `user_id`. Needs `kick_user`. Errors: `no_permission`, `member_not_found`, `founder_protected` |
+| POST | `/alliance/broadcast` | Body: `message` (up to 2000 characters). Circular message to the other members (`send_circular_msg` permission); they get it as a game message (`/messages`, category `messages`). Errors: `not_in_alliance`, `no_permission` |
+| GET | `/chat` | Without query: `conversations` (`user_id`, `username`, `last_message`, `last_message_at`, `unread`) and `unread_total`. With `with=<user_id>`: that private conversation; with `alliance=1`: my alliance's chat. Also `limit` (1-50, default 50), `before_id`, `since_id` (only newer messages), `mark_read=1`. Messages are oldest first: `id`, `from_user_id`, `from`, `to_user_id`, `alliance_id`, `text`, `reply_to`, `created_at` |
+| POST | `/chat/send` | Body: `text` (up to 2000 characters) and `user_id` (private) or `alliance=true`; `reply_to` optional. Errors: `same_user`, `player_not_found`, `ignored_by_recipient`, `not_in_alliance` |
+| POST | `/messages/send` | Body: `user_id`, `text`. A private chat message to another player (same as `/chat/send` with `user_id`) |
+
+Every member can use the alliance chat, so it is the channel for talking to allies. `/alliance/broadcast` needs a
+rank with the circular message permission.
+
+```bash
+curl -s -X POST http://localhost/api/v1/alliance -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"tag":"WOLF","name":"Wolf Pack"}'
+curl -s -X POST http://localhost/api/v1/chat/send -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"alliance":true,"text":"hello"}'
+```
+
 ### Highscore
 
 | Method | Path | Description |
@@ -243,4 +276,4 @@ curl -s -X POST http://localhost/api/v1/planets/12/buildings \
 ## Not available yet
 
 Battle simulation, ACS/missiles/fleet unions, custom player names, and the other
-parts of the game (alliances, the scrap merchant, planet management).
+parts of the game (ranks and alliance texts, the scrap merchant, planet management).
