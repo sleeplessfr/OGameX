@@ -185,7 +185,12 @@ class AllianceMixin:
             if self.now - float(st["applied"].get(str(a["id"]), -1e18)) < A.REAPPLY_AFTER:
                 continue
             candidates.append(a)
-        candidates.sort(key=lambda a: -int(a.get("member_count", 0)))
+        # Everybody used to pick the biggest alliance, so dozens of applications hit the same leader and were refused as "full".
+        # Each agent now looks at its own shuffled order (by name and hour), the bigger ones a little first, and skips the
+        # ones with one place left (others are surely applying to them too).
+        jitter = random.Random(f"{self.name}:alli:{int(self.now // 3600)}")
+        candidates = [a for a in candidates if int(a.get("member_count", 0)) < A.MAX_MEMBERS - 1] or candidates
+        candidates.sort(key=lambda a: -(int(a.get("member_count", 0)) + jitter.uniform(0, 4)))
         detailed = []
         ads = self._alli_adverts() if candidates else {}
         for a in candidates[:4]:

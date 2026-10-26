@@ -408,7 +408,7 @@ def pick_attack(persona: Persona, rng: random.Random, memory: Memory, now: float
             continue
         intel = Intel(info["loot"], info["defenders"], info.get("owner_id"), info.get("ships"), info.get("defense"),
                       info.get("research"), info.get("at"), info.get("from_ally"))
-        risk = sum(unit_value(n) * int(ships_here.get(n, 0) * persona.strike_fraction) for n in FIGHTERS)
+        risk = sum(unit_value(n) * int(ships_here.get(n, 0) * persona.strike_fraction) for n in FIGHTERS + CARGOS)   # cargo ships die too (agent0011 lost 1.2M in cargo)
         go, reason = assess_attack(persona, rng, intel, fighters, memory.risk_scale, at_risk=risk, now=now)
         worth = intel.loot * target_factor(memory.opponents.get(c), now)   # proven easy targets first, ones that beat us last
         worth *= moons.away_factor(memory.moons, c, now, (memory.opponents.get(c) or {}).get("strength"))   # its fleet is out (phalanx): a little easier
