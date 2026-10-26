@@ -51,6 +51,8 @@ def main() -> int:
                          "Diplomacy answers still go through the model for everybody. Default 0 = every agent has a voice")
     ap.add_argument("--llm-per-agent-hour", type=int, default=0, metavar="N",
                     help="most model requests one agent may make per hour, so chatty agents cannot use up the shared budget (default 0 = no limit)")
+    ap.add_argument("--learn", choices=("on", "off"), default="on",
+                    help="learned raid targeting (swarm/targetlearn.py); off = every raider keeps the old rule-only ranking")
     ap.add_argument("--trust-speed", type=float, default=1.0,
                     help="test runs: trust from peaceful time and warnings grows this many times faster (default 1; try 20 to see pacts within hours)")
     ap.add_argument("--routine", choices=MODES, default="off",
@@ -61,6 +63,7 @@ def main() -> int:
     ap.add_argument("--procs", type=int, default=1, metavar="N",
                     help="split the agents over N processes (one Python process fills about one processor core). Default 1")
     args = ap.parse_args()
+    os.environ["OGAMEX_LEARN"] = args.learn   # read by swarm/targetlearn.py (also in --procs child processes)
     if args.trust_speed != 1.0:
         os.environ["OGAMEX_TRUST_SPEED"] = str(args.trust_speed)   # read by swarm/diplomacy.py (also in --procs child processes)
     if args.time_scale <= 0:
