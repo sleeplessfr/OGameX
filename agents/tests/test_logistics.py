@@ -195,7 +195,7 @@ class AgentLogisticsTests(unittest.TestCase):
         self.assertIn("not worth the trip", skipped[0]["why"])
 
     def test_no_cargo_ships_a_raider_waits_a_miner_orders_a_few(self):
-        game, agent = self.make(QUIET)
+        game, agent = self.make(replace(QUIET, name="raider"))
         game.res = {"metal": 200_000.0, "crystal": 100_000.0, "deuterium": 50_000.0}
         agent.tick()
         self.assertEqual(self.posted(game, "transport"), [])
@@ -210,6 +210,13 @@ class AgentLogisticsTests(unittest.TestCase):
         game.advance(70)
         agent.tick()
         self.assertEqual(len(self.posted(game, "transport")), 1)
+
+    def test_a_balanced_agent_orders_cargo_for_supplies_too(self):
+        game, agent = self.make(QUIET)
+        game.res = {"metal": 200_000.0, "crystal": 100_000.0, "deuterium": 50_000.0}
+        agent.tick()
+        built = [b for p, b in game.post_log if p == "/planets/10/units"]
+        self.assertEqual(built, [{"machine_name": "small_cargo", "amount": 5}])
 
     def test_single_planet_agents_are_untouched(self):
         game, agent = self.make()

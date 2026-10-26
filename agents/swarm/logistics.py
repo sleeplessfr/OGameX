@@ -26,9 +26,10 @@ MIN_SOURCE_VALUE = 30_000  # a source poorer than this (metal-equivalents) has n
 MIN_SEND_VALUE = 15_000    # not worth a trip below this
 MAX_FUEL_SHARE = 0.05      # skip the trip when the deuterium costs more than this share of the cargo's value
 SUPPLY_COOLDOWN = 900.0    # server seconds between two supply trips (also waits until the last one has arrived)
-BUILD_CARGO_MAX = 5        # a miner / turtle without cargo ships may order this many small cargos for supplies...
+BUILD_CARGO_MAX = 5        # a non-raider without cargo ships may order this many small cargos for supplies...
 BUILD_CARGO_SHARE = 0.1    # ...if they cost at most this share of the stock's value
 BUILDERS = ("miner", "turtle", "trader")
+SUPPLY_BUILDERS = BUILDERS + ("scientist", "balanced")   # may also order a few cargos just to feed a starved colony (raiders keep their own)
 
 MIN_FLEET_VALUE = 40_000   # a fleet worth less than this is not worth a flight (a few probes, one or two fighters)
 DANGER_GRACE = 90.0        # seconds after the last landing before the fleet may come home
@@ -121,9 +122,9 @@ def fuel_ok(amounts: dict, fuel: int) -> bool:
     return fuel * VALUE["deuterium"] <= MAX_FUEL_SHARE * stock_value(amounts)
 
 
-def choose_cargo_build(persona, units: list[dict], have: dict, ships_here: dict) -> tuple[str, int] | None:
+def choose_cargo_build(persona, units: list[dict], have: dict, ships_here: dict, builders: tuple = BUILDERS) -> tuple[str, int] | None:
     """A miner or turtle with no cargo ship at all may order a few small cargos so it can feed its colony. Capped."""
-    if persona.name not in BUILDERS or any(ships_here.get(n, 0) > 0 for n in CARGOS):
+    if persona.name not in builders or any(ships_here.get(n, 0) > 0 for n in CARGOS):
         return None
     item = next((u for u in units if u["machine_name"] == "small_cargo" and u.get("requirements_met")
                  and u.get("character_class_met", True) and u.get("max_buildable", 0) > 0), None)

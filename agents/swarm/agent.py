@@ -1006,8 +1006,10 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
                 "ships": {recycle.RECYCLER: n}}
 
         def skip(why: str, **extra) -> list[float]:
-            m.debris[coord]["sent_until"] = self.now + 1800     # do not ask again every round
-            self.log("recycle_skipped", at=where, debris=amount, why=why, **extra)
+            busy = "maximum number of fleets" in why.lower()    # all fleet slots are in use: a short wait, the field is still there
+            m.debris[coord]["sent_until"] = self.now + (150 if busy else 1800)     # do not ask again every round
+            if not busy or self._logi_note(("recycle_busy", coord)):    # the busy case is logged once per field, not at every retry
+                self.log("recycle_skipped", at=where, debris=amount, why=why, **extra)
             return []
         try:
             check = self.client.post(f"/planets/{home['id']}/fleet/check", body)

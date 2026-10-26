@@ -70,7 +70,7 @@ class LogisticsMixin:
         ships_here = {u["machine_name"]: int(u["amount"]) for u in units if u.get("category") != "defense" and int(u.get("amount") or 0) > 0}
         where = {"from": src["id"], "to": dst["id"]}
         if not any(ships_here.get(n, 0) > 0 for n in L.CARGOS):
-            build = None if src.get("unit_queue") else L.choose_cargo_build(self.persona, units, src["resources"], ships_here)
+            build = None if src.get("unit_queue") else L.choose_cargo_build(self.persona, units, src["resources"], ships_here, L.SUPPLY_BUILDERS)
             if build is None:
                 m.supply_next_at = self.now + 600
                 self.log("supply_skipped", why="no cargo ships on the richest planet", **where)
