@@ -13,7 +13,7 @@ from .brain import FIELD_ALARM, choose_building, choose_research, fields_left, p
 from . import colonise, doctrine, expedition, fullplanet, recycle
 from .combat import tech_from_research
 import random as _random
-from . import targetlearn
+from . import buildlearn, targetlearn
 from .bandit import outcome_of
 from .military import (Memory, choose_strike, judge_trade, summarize_battle, choose_units, coord_of, pick_attack, pick_target, summarize_report)
 from .client import ApiClient, ApiError
@@ -195,6 +195,7 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
         threats = self._watch()
         hints += self._plan_moons(status, planets)    # moons: sensor phalanx (build, scan); no moon = nothing
         threats = threats + self._phalanx_threats(threats)   # attacks the phalanx saw coming count like the ones /fleet shows
+        self._build_epoch(status, planets)   # learned building style: one result per 6 h epoch (buildlearn.py)
         hints += self._plan_alliance(status, planets, threats)   # alliances (off without sociability or alliance endpoints): found/join, share intel, warn allies
         hints += self._plan_social(status, planets)   # galaxy board (off without --board): warnings raise the guard, traders swap goods
         hints += self._plan_diplomacy(status, planets, threats)   # first contact and relationships (diplomacy.py): hello/answer on the board, pacts
@@ -234,6 +235,18 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
 
         return self._sleep_time(hints)
 
+    def _build_style(self) -> str:
+        """The building style in force (buildlearn.py); learners follow their learned style, controls and `--learn off` stay plain."""
+        return self.memory.build["arm"] if targetlearn.group_of(self.name) == "learned" else "plain"
+
+    def _build_epoch(self, status: dict, planets: list[dict]) -> None:
+        """Every round: feed the goal metric to buildlearn; at the end of a 6 h epoch log the result and the style chosen next."""
+        value = buildlearn.metric(self.persona.name, planets, (status.get("research") or {}).get("levels"))
+        res = buildlearn.step(self.memory.build, self.now, value, _random.Random(f"{self.name}:style:{self.memory.build['epochs']}"),
+                              control=targetlearn.group_of(self.name) != "learned")
+        if res:
+            self.log("build_style", group=targetlearn.group_of(self.name), persona=self.persona.name, metric=round(value, 1), **res)
+
     def _plan_buildings(self, planet: dict, have: dict, research_busy: bool, goals: dict | None = None) -> list[float]:
         queue = planet["building_queue"]
         if queue:
@@ -243,7 +256,7 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
         self._buildings_seen[planet["id"]] = data["buildings"]
         if data["queue_full"]:
             return []
-        choice = choose_building(self.persona, self.rng, planet, data["buildings"],
+        choice = choose_building(buildlearn.apply(self.persona, self._build_style()), self.rng, planet, data["buildings"],
                                  research_busy=research_busy, units_busy=bool(planet["unit_queue"]), have=have, goals=goals)
         if choice.machine_name is None:
             self._economy_saving = not choice.full   # a full planet is not saving for anything: ships and defence still work

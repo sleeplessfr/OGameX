@@ -222,6 +222,20 @@ def summarize(events: list[dict], personas: dict[str, str] | None = None, llm_ca
         out.append("  none yet")
     out.append("")
 
+    out.append("LEARNED BUILDING STYLE (one result per 6 h epoch: growth of the agent's goal; advantage = growth minus the average growth; learned vs control)")
+    sty: dict = defaultdict(lambda: defaultdict(lambda: [0, 0.0, 0.0]))
+    for e in events:
+        if e["event"] == "build_style":
+            row = sty[e.get("group") or "?"][e.get("style")]
+            row[0] += 1; row[1] += float(e.get("growth") or 0); row[2] += float(e.get("advantage") or 0)
+    if sty:
+        for grp_name in sorted(sty):
+            parts = [f"{name}: {n} epochs, growth {g / n:+.0%}, advantage {a / n:+.0%}" for name, (n, g, a) in sorted(sty[grp_name].items(), key=lambda kv: -kv[1][2] / kv[1][0])]
+            out.append(f"  {grp_name}: " + "; ".join(parts))
+    else:
+        out.append("  none yet (the first results come 6 hours after the start)")
+    out.append("")
+
     out.append("CHARACTER CLASSES (chosen once by each agent)")
     classes = {e["agent"]: e.get("chosen") for e in events if e["event"] == "class"}
     refused = [e for e in events if e["event"] == "class_refused"]

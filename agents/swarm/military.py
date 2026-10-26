@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 
 from . import alliance, diplomacy, doctrine, expedition, moons, social
 from .bounty import focus_for
-from . import targetlearn
+from . import buildlearn, targetlearn
 from .bandit import Bandit
 from .brain import RESOURCES
 from .combat import Estimate, Tech, estimate_battle, tech_from_research, unit_value
@@ -52,6 +52,7 @@ class Memory:
     bandit: Bandit = field(default_factory=Bandit)  # learns how much to over-estimate defenders (bandit.py)
     arm_for: dict[Coord, float] = field(default_factory=dict)  # which margin each attack in flight was planned with
     targets: dict = field(default_factory=targetlearn.new_book)  # learned worth of each target class (targetlearn.py)
+    build: dict = field(default_factory=buildlearn.new_state)  # learned building style and its results (buildlearn.py)
     target_for: dict[Coord, dict] = field(default_factory=dict)  # target class and announced loot of each attack in flight
     trade_cooldown_until: float = 0.0  # no new merchant call before this server time (dark matter is scarce)
     class_done: bool = False           # the character class has been chosen (or cannot be)
@@ -77,7 +78,7 @@ class Memory:
         out: dict = {"need_cargo": self.need_cargo, "risk_scale": self.risk_scale, "battles": self.battles,
                      "trade_cooldown_until": self.trade_cooldown_until, "expanding": self.expanding, "class_done": self.class_done,
                      "colony_sent_at": self.colony_sent_at, "colony_planets_before": self.colony_planets_before,
-                     "colony_until": self.colony_until, "bandit": self.bandit.to_dict(), "targets": self.targets,
+                     "colony_until": self.colony_until, "bandit": self.bandit.to_dict(), "targets": self.targets, "build": self.build,
                      "expedition": self.expedition,
                      "supply_next_at": self.supply_next_at, "away": self.away, "social": self.social, "moons": self.moons,
                      "alliance": self.alliance, "doctrine": self.doctrine, "diplomacy": self.diplomacy}
@@ -126,6 +127,7 @@ class Memory:
         m.away = [a for a in away if isinstance(a, dict)] if isinstance(away, list) else []
         m.bandit = Bandit.from_dict(data.get("bandit"))
         m.targets = targetlearn.clean_book(data.get("targets"))
+        m.build = buildlearn.clean_state(data.get("build"))
         m.expedition = expedition.clean_state(data.get("expedition"))
         m.social = social.clean_state(data.get("social"))
         raw = data.get("voice")
