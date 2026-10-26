@@ -88,9 +88,12 @@ button{background:#16203a;color:var(--ink);border:1px solid #2a3558;border-radiu
 <div class="panel" id="hint">wheel = zoom, drag = move</div>
 <div id="tip"></div>
 <script>
+function loadHidden(){try{const v=localStorage.getItem("galaxyHidden");if(v!==null)return new Set(JSON.parse(v))}catch(e){}return new Set(["spy"])}
+function loadBack(){try{const v=localStorage.getItem("galaxyBack");if(v!==null)return v==="1"}catch(e){}return true}
+function saveView(){try{localStorage.setItem("galaxyHidden",JSON.stringify([...hidden]));localStorage.setItem("galaxyBack",showBack?"1":"0")}catch(e){}}
 const COLORS={miner:"#d9a441",scientist:"#4aa3ff",turtle:"#4fbf7a",raider:"#e5534b",balanced:"#b07cf0",other:"#6b7280"};
 const $=i=>document.getElementById(i),cv=$("c"),g=cv.getContext("2d");
-let D=null,offset=0,cam={x:0,y:0,k:1},hidden=new Set(),hover=null,focusSys=null,sysPos={},sysInfo={},stars=[];
+let D=null,offset=0,cam={x:0,y:0,k:1},hidden=loadHidden(),showBack=loadBack(),hover=null,focusSys=null,sysPos={},sysInfo={},stars=[];
 // The galaxy is an ELLIPTICAL one: a round, dense core that thins out towards the edge. System 1 is the centre and the numbers wind
 // outwards CLOCKWISE in one tight spiral, so the last systems (near 499) are the outermost. Radius r = A*(n-1)^0.65 (dense core,
 // sparse rim); the angle advances so that neighbours along the path and neighbours between two turns are about equally far apart.
@@ -150,7 +153,7 @@ function draw(ts){requestAnimationFrame(draw);const dpr=devicePixelRatio;g.setTr
         if(sl.battle){g.strokeStyle="#ff4d4d";g.lineWidth=1.2/cam.k;g.beginPath();g.arc(p.x+o.x,p.y+o.y,5.5+Math.sin(ts/120),0,7);g.stroke()}
         if(sl.colony&&sl.owner){g.fillStyle="#05070f";g.beginPath();g.arc(p.x+o.x,p.y+o.y,1.2,0,7);g.fill()}
         if(cam.k>3.5){g.fillStyle="#7d8bb0";g.font=`${11/cam.k}px system-ui`;g.textAlign="center";g.fillText(""+sl.position,p.x+o.x*(1+9/orbitR(sl.position)),p.y+o.y*(1+9/orbitR(sl.position))+4/cam.k)}g.globalAlpha=1})}});
-  D.fleets.forEach(f=>{if(hidden.has(f.kind))return;const ph=phase(f,now);if(ph.leg==="gone"||ph.leg==="wait")return;
+  D.fleets.forEach(f=>{if(hidden.has(f.kind))return;const ph=phase(f,now);if(ph.leg==="gone"||ph.leg==="wait"||(!showBack&&(ph.leg==="back"||ph.leg==="hold"||ph.leg==="done"&&f.back)))return;
     const [A,B]=ends(f,mix);if(A.x===B.x&&A.y===B.y)return;const L=Math.hypot(B.x-A.x,B.y-A.y);const bulge=Math.min(40,L*.18)*(f.agent&&f.agent.charCodeAt(f.agent.length-1)%2?1:-1);
     const fade=ph.fade==null?1:Math.max(0,ph.fade);const back=ph.leg==="back"||ph.leg==="done"&&f.back;
     g.save();g.globalAlpha=(back?.55:.9)*fade;g.strokeStyle=f.color;g.lineWidth=(back?1.2:1.8)/Math.max(1,cam.k*.7);g.setLineDash([6/cam.k*1.4,5/cam.k*1.4]);g.lineDashOffset=-(ts/45)/cam.k*(back?-1:1);
@@ -163,18 +166,19 @@ function draw(ts){requestAnimationFrame(draw);const dpr=devicePixelRatio;g.setTr
   g.restore()}
 function hoverAt(mx,my){const tip=$("tip");if(!D||drag){tip.style.display="none";return}
   const now=Date.now()/1000+offset;const mix=Math.max(0,Math.min(1,(cam.k-1.4)/1.6));let best=null,bd=14;
-  D.fleets.forEach(f=>{if(hidden.has(f.kind))return;const ph=phase(f,now);if(ph.leg==="gone"||ph.leg==="wait"||ph.leg==="done")return;const [A,B]=ends(f,mix);const q=bez(A,B,ph.p,0),sp=w2s(q.x,q.y),d=Math.hypot(sp.x-mx,sp.y-my);if(d<bd){bd=d;best=[f,ph]}});
+  D.fleets.forEach(f=>{if(hidden.has(f.kind))return;const ph=phase(f,now);if(ph.leg==="gone"||ph.leg==="wait"||ph.leg==="done"||(!showBack&&(ph.leg==="back"||ph.leg==="hold")))return;const [A,B]=ends(f,mix);const q=bez(A,B,ph.p,0),sp=w2s(q.x,q.y),d=Math.hypot(sp.x-mx,sp.y-my);if(d<bd){bd=d;best=[f,ph]}});
   if(best){const [f,ph]=best;tip.style.display="block";tip.style.left=Math.min(innerWidth-310,mx+14)+"px";tip.style.top=(my+14)+"px";
     const left=Math.max(0,Math.round((ph.leg==="back"?ph.p:1-ph.p)*f.secs));tip.innerHTML=`<b style="color:${f.color}">${f.label}</b> ${ph.leg==="back"?"(returning)":ph.leg==="hold"?"(on site)":""}<br>${f.agent} (${f.persona||"?"})<br>${f.from.join(":")} → ${f.to.join(":")}<br>${f.ships?f.ships+" ships, ":""}~${left} s to go`}
   else tip.style.display="none"}
 function fmtLeft(f,now){const ph=phase(f,now);return ph}
 function lists(){const now=Date.now()/1000+offset;const box=$("list");box.innerHTML="<b>Fleets in flight</b>";let n=0;
-  D.fleets.forEach(f=>{if(hidden.has(f.kind))return;const ph=phase(f,now);if(ph.leg==="gone"||ph.leg==="done"||ph.leg==="wait"||n>=40)return;n++;
+  D.fleets.forEach(f=>{if(hidden.has(f.kind))return;const ph=phase(f,now);if(ph.leg==="gone"||ph.leg==="done"||ph.leg==="wait"||(!showBack&&(ph.leg==="back"||ph.leg==="hold"))||n>=40)return;n++;
     const d=document.createElement("div");d.innerHTML=`<span style="color:${f.color}">●</span> ${f.label} ${ph.leg==="back"?"↩":""} <span class="dim">${f.agent} ${f.from[1]}→${f.to[1]}:${f.to[2]}</span>`;
     d.onclick=()=>{zoomTo(f.to[1]);showSys(f.to[1])};box.appendChild(d)});
   if(!n)box.innerHTML+='<div class="dim">no fleet in flight right now</div>'}
 function legend(){const L=$("legend");L.innerHTML="";const kinds=D.missions;Object.keys(kinds).forEach(k=>{const lab=document.createElement("label");const c=document.createElement("input");c.type="checkbox";c.checked=!hidden.has(k);
-  c.onchange=()=>{c.checked?hidden.delete(k):hidden.add(k);lists()};const i=document.createElement("i");i.style.background=kinds[k][1];lab.append(c,i,kinds[k][0]);L.appendChild(lab)});
+  c.onchange=()=>{c.checked?hidden.delete(k):hidden.add(k);saveView();lists()};const i=document.createElement("i");i.style.background=kinds[k][1];lab.append(c,i,kinds[k][0]);L.appendChild(lab)});
+  const bl=document.createElement("label");const bc=document.createElement("input");bc.type="checkbox";bc.checked=showBack;bc.onchange=()=>{showBack=bc.checked;saveView();lists()};bl.append(bc,document.createTextNode(" return trips"));bl.style.marginTop="4px";L.appendChild(bl);
   const p=document.createElement("div");p.className="dim";p.style.marginTop="6px";p.innerHTML=Object.keys(COLORS).map(k=>`<span style="color:${COLORS[k]}">●</span> ${k}`).join("<br>");L.appendChild(p)}
 let first=true;
 async function load(){try{const r=await fetch("/api/galaxy");const j=await r.json();if(j.error){$("status").textContent="error: "+j.error}else{D=j;offset=j.now-Date.now()/1000;
