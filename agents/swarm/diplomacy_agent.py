@@ -244,7 +244,7 @@ class DiplomacyMixin:
 
     def _diplo_spied(self, uid: int, rel: dict) -> None:
         """A spy probe on us: a small trust loss, a big one (and a step back) if they had asked for peace and spy anyway."""
-        res = D.on_spied(rel, self.now)
+        res = D.on_spied(rel, self.now, D.touchiness(getattr(self.persona, "aggression", 0.5)))
         if res["lie"]:
             self._diplo_after(uid, rel, res["change"], "LIE: they spied on us while at " + res["from"], res["from"], res["to"])
         elif res["change"]:

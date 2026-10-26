@@ -505,10 +505,11 @@ def on_we_betray(rel: dict, now: float) -> dict:
     return {**res, "to": "contact"}
 
 
-def on_spied(rel: dict, now: float) -> dict:
+def on_spied(rel: dict, now: float, touchy: float = 1.0) -> dict:
     """They sent a spy probe at us. From a stranger it is normal OGame: a small trust loss, at most every SPY_COOL. From someone who
     holds a friendly / pact / alliance step with us (they asked for peace, then spied) it is a LIE: big trust and opinion loss, the
-    step falls one rung, and `spy_lies` counts it for the prompts."""
+    step falls one rung, and `spy_lies` counts it for the prompts. `touchy` (see touchiness) scales only the stranger's small loss:
+    a raider shrugs off probes, a turtle takes them badly; a lie always costs the same."""
     was = rel["step"]
     rel["spied_us"] += 1
     if step_index(was) >= step_index("friendly"):
@@ -523,9 +524,15 @@ def on_spied(rel: dict, now: float) -> dict:
     if now - rel["spied_at"] < SPY_COOL:
         return {"change": 0.0, "lie": False, "from": was, "to": was}
     rel["spied_at"] = now
-    change = bump(rel, -LOSS["spied"], now)
-    rel["opinion"] = max(-100.0, rel["opinion"] - 2.0)
+    change = bump(rel, -LOSS["spied"] * touchy, now)
+    rel["opinion"] = max(-100.0, rel["opinion"] - 2.0 * touchy)
     return {"change": change, "lie": False, "from": was, "to": was}
+
+
+def touchiness(aggression: float) -> float:
+    """How much a stranger's probe bothers an agent: 0.5 for the most aggressive (spying is normal for them) up to 1.5 for the most peaceful."""
+    a = min(1.0, max(0.0, _num(aggression, 0.5)))
+    return 1.5 - a
 
 
 def on_cheat(rel: dict, now: float) -> float:

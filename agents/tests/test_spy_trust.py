@@ -16,3 +16,15 @@ class SpyTrust(unittest.TestCase):
     def test_clean_rel_keeps_fields(self):
         r = D.clean_rel({"spy_lies": 2, "spied_at": 5}); self.assertEqual(r["spy_lies"], 2)
 if __name__ == "__main__": unittest.main()
+
+class Touchy(unittest.TestCase):
+    def test_raider_shrugs_turtle_minds(self):
+        a = D.new_rel(0); a["trust"] = 10; b = D.new_rel(0); b["trust"] = 10
+        ra = D.on_spied(a, 100000, D.touchiness(1.0)); rb = D.on_spied(b, 100000, D.touchiness(0.0))
+        self.assertGreater(ra["change"], rb["change"])
+        self.assertAlmostEqual(D.touchiness(0.5), 1.0)
+    def test_lie_costs_the_same(self):
+        x = D.new_rel(0); x["step"] = "pact"; x["trust"] = 70
+        y = D.new_rel(0); y["step"] = "pact"; y["trust"] = 70
+        D.on_spied(x, 100, 0.5); D.on_spied(y, 100, 1.5)
+        self.assertEqual(x["trust"], y["trust"])
