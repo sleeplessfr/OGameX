@@ -33,14 +33,93 @@ use RuntimeException;
 class ObjectService
 {
     /**
+     * Per-process cache of the (pure data) object lists, keyed by locale and group, because titles and
+     * descriptions are translated when the lists are built. The cached instances are never handed out when
+     * they carry mutable production state, see share().
+     *
+     * @var array<string, array<string, array<GameObject>>>
+     */
+    private static array $objectCache = [];
+
+    /**
+     * Get the cached list of objects of a group (building, station, research, military, civil, defense).
+     * Objects are returned through share() so callers can never modify the cached template.
+     *
+     * @param string $group
+     * @return array<int, mixed>
+     */
+    private static function cached(string $group): array
+    {
+        $locale = app()->getLocale();
+        if (!isset(self::$objectCache[$locale][$group])) {
+            self::$objectCache[$locale][$group] = match ($group) {
+                'building' => BuildingObjects::get(),
+                'station' => StationObjects::get(),
+                'research' => ResearchObjects::get(),
+                'military' => MilitaryShipObjects::get(),
+                'civil' => CivilShipObjects::get(),
+                'defense' => DefenseObjects::get(),
+            };
+        }
+
+        return array_map(self::share(...), self::$objectCache[$locale][$group]);
+    }
+
+    /**
+     * Same as cached() but returns the cached templates as is. Only for read-only scans: whatever is
+     * returned to a caller must go through share() first.
+     *
+     * @param string $group
+     * @return array<int, mixed>
+     */
+    private static function raw(string $group): array
+    {
+        $locale = app()->getLocale();
+        if (!isset(self::$objectCache[$locale][$group])) {
+            self::cached($group);
+        }
+
+        return self::$objectCache[$locale][$group];
+    }
+
+    /**
+     * Objects with a production definition are stateful (PlanetService/PlayerService are assigned on the
+     * production object before calculating), so such objects get their own copy like a fresh get() call did.
+     * Other objects are read-only and are shared.
+     *
+     * @param GameObject $object
+     * @return GameObject
+     */
+    private static function share(GameObject $object): GameObject
+    {
+        if (isset($object->production)) {
+            $object = clone $object;
+            $object->production = clone $object->production;
+        }
+
+        return $object;
+    }
+
+    /**
+     * All cached object templates, read-only (see raw()).
+     *
+     * @return array<GameObject>
+     */
+    private static function rawObjects(): array
+    {
+        return [...self::raw('building'), ...self::raw('station'), ...self::raw('research'),
+                ...self::raw('military'), ...self::raw('civil'), ...self::raw('defense')];
+    }
+
+    /**
      * Get all objects.
      *
      * @return array<GameObject>
      */
     public static function getObjects(): array
     {
-        return [...BuildingObjects::get(), ...StationObjects::get(), ...ResearchObjects::get(),
-                ...MilitaryShipObjects::get(), ...CivilShipObjects::get(), ...DefenseObjects::get()];
+        return [...self::cached('building'), ...self::cached('station'), ...self::cached('research'),
+                ...self::cached('military'), ...self::cached('civil'), ...self::cached('defense')];
     }
 
     /**
@@ -50,7 +129,7 @@ class ObjectService
      */
     public static function getBuildingObjects(): array
     {
-        return BuildingObjects::get();
+        return self::cached('building');
     }
 
     /**
@@ -60,7 +139,7 @@ class ObjectService
      */
     public static function getStationObjects(): array
     {
-        return StationObjects::get();
+        return self::cached('station');
     }
 
     /**
@@ -70,7 +149,7 @@ class ObjectService
      */
     public static function getResearchObjects(): array
     {
-        return ResearchObjects::get();
+        return self::cached('research');
     }
 
     /**
@@ -80,7 +159,7 @@ class ObjectService
      */
     public static function getUnitObjects(): array
     {
-        return [...MilitaryShipObjects::get(), ...CivilShipObjects::get(), ...DefenseObjects::get()];
+        return [...self::cached('military'), ...self::cached('civil'), ...self::cached('defense')];
     }
 
     /**
@@ -90,7 +169,7 @@ class ObjectService
      */
     public static function getShipObjects(): array
     {
-        return [...MilitaryShipObjects::get(), ...CivilShipObjects::get()];
+        return [...self::cached('military'), ...self::cached('civil')];
     }
 
     /**
@@ -100,7 +179,7 @@ class ObjectService
      */
     public static function getDefenseObjects(): array
     {
-        return DefenseObjects::get();
+        return self::cached('defense');
     }
 
     /**
@@ -110,7 +189,7 @@ class ObjectService
      */
     public static function getMilitaryShipObjects(): array
     {
-        return MilitaryShipObjects::get();
+        return self::cached('military');
     }
 
     /**
@@ -120,7 +199,7 @@ class ObjectService
      */
     public static function getCivilShipObjects(): array
     {
-        return CivilShipObjects::get();
+        return self::cached('civil');
     }
 
     /**
@@ -132,9 +211,9 @@ class ObjectService
     public static function getBuildingObjectByMachineName(string $machine_name): BuildingObject
     {
         // Loop through all buildings and return the one with the matching UID
-        foreach (BuildingObjects::get() as $building) {
+        foreach (self::raw('building') as $building) {
             if ($building->machine_name === $machine_name) {
-                return $building;
+                return self::share($building);
             }
         }
 
@@ -149,11 +228,11 @@ class ObjectService
      */
     public static function getShipObjectByMachineName(string $machine_name): ShipObject
     {
-        $shipObjects = [...MilitaryShipObjects::get(), ...CivilShipObjects::get()];
+        $shipObjects = [...self::raw('military'), ...self::raw('civil')];
         // Loop through all buildings and return the one with the matching UID
         foreach ($shipObjects as $ship) {
             if ($ship->machine_name === $machine_name) {
-                return $ship;
+                return self::share($ship);
             }
         }
 
@@ -168,13 +247,13 @@ class ObjectService
      */
     public static function getObjectById(int $object_id): GameObject
     {
-        $allObjects = [...BuildingObjects::get(), ...StationObjects::get(), ...ResearchObjects::get(),
-                       ...MilitaryShipObjects::get(), ...CivilShipObjects::get(), ...DefenseObjects::get()];
+        $allObjects = [...self::raw('building'), ...self::raw('station'), ...self::raw('research'),
+                       ...self::raw('military'), ...self::raw('civil'), ...self::raw('defense')];
 
         // Loop through all buildings and return the one with the matching UID
         foreach ($allObjects as $object) {
             if ($object->id == $object_id) {
-                return $object;
+                return self::share($object);
             }
         }
 
@@ -189,13 +268,13 @@ class ObjectService
      */
     public static function getObjectByMachineName(string $machine_name): GameObject
     {
-        $allObjects = [...BuildingObjects::get(), ...StationObjects::get(), ...ResearchObjects::get(),
-                       ...MilitaryShipObjects::get(), ...CivilShipObjects::get(), ...DefenseObjects::get()];
+        $allObjects = [...self::raw('building'), ...self::raw('station'), ...self::raw('research'),
+                       ...self::raw('military'), ...self::raw('civil'), ...self::raw('defense')];
 
         // Loop through all buildings and return the one with the matching UID
         foreach ($allObjects as $object) {
             if ($object->machine_name == $machine_name) {
-                return $object;
+                return self::share($object);
             }
         }
 
@@ -211,10 +290,10 @@ class ObjectService
     public static function getResearchObjectByMachineName(string $machine_name): ResearchObject
     {
         // Loop through all buildings and return the one with the matching UID
-        $allObjects = ResearchObjects::get();
+        $allObjects = self::raw('research');
         foreach ($allObjects as $object) {
             if ($object->machine_name === $machine_name) {
-                return $object;
+                return self::share($object);
             }
         }
 
@@ -230,10 +309,10 @@ class ObjectService
     public static function getResearchObjectById(int $object_id): ResearchObject
     {
         // Loop through all buildings and return the one with the matching UID
-        $allObjects = ResearchObjects::get();
+        $allObjects = self::raw('research');
         foreach ($allObjects as $object) {
             if ($object->id === $object_id) {
-                return $object;
+                return self::share($object);
             }
         }
 
@@ -248,10 +327,10 @@ class ObjectService
      */
     public static function getUnitObjectById(int $object_id): UnitObject
     {
-        $allObjects = [...MilitaryShipObjects::get(), ...CivilShipObjects::get(), ...DefenseObjects::get()];
+        $allObjects = [...self::raw('military'), ...self::raw('civil'), ...self::raw('defense')];
         foreach ($allObjects as $object) {
             if ($object->id === $object_id) {
-                return $object;
+                return self::share($object);
             }
         }
 
@@ -266,12 +345,12 @@ class ObjectService
      */
     public static function getUnitObjectByMachineName(string $machine_name): UnitObject
     {
-        $allObjects = [...MilitaryShipObjects::get(), ...CivilShipObjects::get(), ...DefenseObjects::get()];
+        $allObjects = [...self::raw('military'), ...self::raw('civil'), ...self::raw('defense')];
 
         // Loop through all buildings and return the one with the matching UID
         foreach ($allObjects as $object) {
             if ($object->machine_name === $machine_name) {
-                return $object;
+                return self::share($object);
             }
         }
 
@@ -287,9 +366,9 @@ class ObjectService
     {
         $return = array();
 
-        foreach (self::getObjects() as $value) {
+        foreach (self::rawObjects() as $value) {
             if (!empty(($value->production))) {
-                $return[] = $value;
+                $return[] = self::share($value);
             }
         }
 
@@ -304,9 +383,9 @@ class ObjectService
      */
     public static function getGameObjectsWithProductionByMachineName(string $machine_name): GameObject
     {
-        foreach (self::getObjects() as $object) {
+        foreach (self::rawObjects() as $object) {
             if ($object->machine_name === $machine_name && !empty(($object->production))) {
-                return $object;
+                return self::share($object);
             }
         }
 
@@ -322,7 +401,7 @@ class ObjectService
     {
         $return = array();
 
-        foreach (BuildingObjects::get() as $value) {
+        foreach (self::cached('building') as $value) {
             if (!empty(($value->storage))) {
                 $return[] = $value;
             }
