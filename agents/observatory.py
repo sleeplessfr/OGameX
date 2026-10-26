@@ -28,6 +28,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import llm_page
+import galaxy_page
 from swarm.diplomacy import relations_from_events
 from swarm.client import ApiClient, ApiError
 from swarm.boardclient import TIMEOUT as BOARD_TIMEOUT
@@ -728,6 +729,23 @@ class Observatory:
             _, self._personas = token_from_state(self.state_path)
         return self.tally.agent(agent)["persona"] or self._personas.get(agent)
 
+    def galaxy(self) -> dict:
+        """Data for /galaxy: the scanned systems with their planets and the fleets in flight (see galaxy_page.fleets_from)."""
+        st = self.state()
+        main_of = {}
+        for row in self.universe.highscore:
+            mp = row.get("main_planet") or {}
+            if row.get("username"):
+                main_of[row["username"]] = [num(mp.get("galaxy")), num(mp.get("system")), num(mp.get("position"))]
+        user_of = {n: a.get("username") for n, a in st["agents"].items()}
+        now = time.time()
+        with self.lock:
+            events = list(self.events)
+        fleets = galaxy_page.fleets_from(events, lambda ag: main_of.get(user_of.get(ag)), now,
+                                         lambda ag: (st["agents"].get(ag) or {}).get("persona"))
+        return {"now": now, "systems": st["map"]["systems"], "fleets": fleets,
+                "missions": {k: [v[0], v[1]] for k, v in galaxy_page.MISSIONS.items()}}
+
     def state(self) -> dict:
         self.ingest()
         with self.lock:
@@ -817,6 +835,14 @@ def make_handler(observatory: Observatory):
                     body = json.dumps(llm_page.llm_view(observatory.tail.folder, lim)).encode("utf-8")
                 except Exception as e:
                     body = json.dumps({"available": False, "calls": [], "totals": {}, "agents": [], "purposes": [], "error": str(e)[:200]}).encode("utf-8")
+                self._send(200, body, "application/json")
+            elif path in ("/galaxy", "/galaxy.html"):
+                self._send(200, galaxy_page.PAGE.encode("utf-8"), "text/html; charset=utf-8")
+            elif path == "/api/galaxy":
+                try:
+                    body = json.dumps(observatory.galaxy()).encode("utf-8")
+                except Exception as e:
+                    body = json.dumps({"error": str(e)[:200]}).encode("utf-8")
                 self._send(200, body, "application/json")
             elif path == "/api/state":
                 try:
@@ -990,7 +1016,7 @@ tr:last-child td{border-bottom:0}tr.ours td:first-child{box-shadow:inset 3px 0 0
 .empty{color:var(--dim);padding:30px 0}
 @media(max-width:520px){main{padding:12px}.card.reply{margin-left:14px}.top{flex-wrap:wrap}.badges{margin-left:44px;flex-basis:100%;justify-content:flex-start}}
 </style></head><body>
-<header><h1>Observatory</h1><nav id="nav"></nav><a href="/llm" style="color:var(--accent)">LLM log</a><span id="status" class="dim"></span></header>
+<header><h1>Observatory</h1><nav id="nav"></nav><a href="/galaxy" style="color:var(--accent)">Galaxy map</a><a href="/llm" style="color:var(--accent)">LLM log</a><span id="status" class="dim"></span></header>
 <main>
 <section id="map" class="tab on"><div class="legend" id="legend"></div><div id="mapnote" class="warn"></div><div class="systems" id="systems"></div><div id="info" class="dim">Hover a planet.</div></section>
 <section id="news" class="tab"><div class="paper" id="paper"></div></section>

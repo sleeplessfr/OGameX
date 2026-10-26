@@ -664,3 +664,7 @@ They run against a small simulated game (`tests/fakegame.py`), not your server.
 ## LLM log page
 
 With the observatory running, open `http://localhost:18766/llm` (your observatory port). It lists every language-model call newest first: agent, purpose, answer, time taken, tokens, and a prompt you can expand. Green USED = the answer was posted or written in a diary; orange NOT USED = answered but rejected (too long, changed numbers...); red FAILED = no answer. Filters by agent, purpose, result and text. Needs `--llm` (or `--llm fake`) on run_swarm.py.
+
+## Galaxy map
+
+`http://localhost:18766/galaxy` (also linked from the observatory header): a zoomable star map. Scroll to zoom, drag to move, click a system to zoom in (the planets appear around the star), double-click to fit all. Fleets in flight are blinking, moving arrows: red attack, yellow spy probe, cyan expedition, green colony ship, orange recycler. A dimmer arrow is the return trip. Untick a mission in the legend to hide it. Origins are the agent's main planet, flight times come from the logs.
