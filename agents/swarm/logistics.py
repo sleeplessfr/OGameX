@@ -17,7 +17,7 @@ import random
 from dataclasses import dataclass
 
 from .brain import RESOURCES, VALUE
-from .combat import estimate_battle, unit_value
+from .combat import estimate_battle, harmless_fleet, unit_value
 from .military import CARGOS, distance
 
 RESERVE_SHARE = 0.3        # the source keeps at least this share of each resource
@@ -152,6 +152,8 @@ def incoming_attacks(missions: list[dict]) -> list[Attack]:
     found = []
     for m in missions:
         if m.get("is_mine") or m.get("is_return") or m.get("mission") not in ATTACKS:
+            continue
+        if harmless_fleet(m.get("ships")):   # recyclers, probes, cargo ships...: nothing to flee from
             continue
         to, src = m.get("to") or {}, m.get("from") or {}
         try:

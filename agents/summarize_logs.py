@@ -122,6 +122,8 @@ def summarize(events: list[dict], personas: dict[str, str] | None = None, llm_ca
             a = sent[-1]
             out.append(f"      sent {clock(a['t'])}: ships {a.get('ships')}")
             out.append(f"      reason: {a.get('why')}")
+            if "intel_source" in a:
+                out.append(f"      intel: {a.get('intel_source')}, age {a.get('intel_age')}s, composition known {a.get('composition_known')}, simulated win chance {a.get('sim_win_chance')}")
             if a.get("saw_defense") is not None or a.get("saw_ships") is not None:
                 out.append(f"      the spy report showed: ships {a.get('saw_ships')}, defense {a.get('saw_defense')}, research {a.get('saw_research')}")
         if b.get("theirs") is not None:

@@ -14,7 +14,7 @@ raider is about to hit, then other players in range.
 from __future__ import annotations
 
 from .brain import RESOURCES, VALUE
-from .combat import unit_value
+from .combat import harmless_fleet, unit_value
 
 SCAN_COST = 5000            # deuterium per scan, on the moon (the game's price)
 SYSTEMS = 499               # systems per galaxy (a galaxy wraps around)
@@ -212,7 +212,7 @@ def read_scan(fleets: list[dict], own_coords: set, target: tuple, now: float) ->
             back = float(f.get("arrival_time") or 0)
         except (TypeError, ValueError):
             continue
-        if f.get("hostile") and f.get("is_return_trip") and origin in own_coords and lands > now:
+        if f.get("hostile") and f.get("is_return_trip") and origin in own_coords and lands > now and not harmless_fleet(f.get("ships")):
             warnings.append({"id": int(f.get("mission_id") or 0), "kind": "attack", "lands": lands, "origin": target, "to": origin,
                              "ships": int(f.get("ship_count") or 0), "owner_id": f.get("owner_id")})
         if f.get("is_return_trip") and dest == target and back > now:
