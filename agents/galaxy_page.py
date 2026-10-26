@@ -81,7 +81,7 @@ header>*{pointer-events:auto}header a{color:var(--accent);text-decoration:none}h
 button{background:#16203a;color:var(--ink);border:1px solid #2a3558;border-radius:6px;padding:3px 9px;cursor:pointer}
 </style></head><body>
 <canvas id="c"></canvas>
-<header><h1>Galaxy map</h1><a href="/">Observatory</a><a href="/llm">LLM log</a><button id="fit">Fit all</button><span id="status" class="dim"></span></header>
+<header><h1>Galaxy map</h1><a href="/">Observatory</a><a href="/llm">LLM log</a><button id="fit">Fit all</button><button id="whole">Whole galaxy</button><span id="status" class="dim"></span></header>
 <div class="panel" id="legend"></div>
 <div class="panel" id="list"><b>Fleets in flight</b><div class="dim">loading...</div></div>
 <div class="panel" id="info"><span class="dim">Click a system to zoom in, double-click empty space to fit all.</span></div>
@@ -91,9 +91,15 @@ button{background:#16203a;color:var(--ink);border:1px solid #2a3558;border-radiu
 const COLORS={miner:"#d9a441",scientist:"#4aa3ff",turtle:"#4fbf7a",raider:"#e5534b",balanced:"#b07cf0",other:"#6b7280"};
 const $=i=>document.getElementById(i),cv=$("c"),g=cv.getContext("2d");
 let D=null,offset=0,cam={x:0,y:0,k:1},hidden=new Set(),hover=null,focusSys=null,sysPos={},sysInfo={},stars=[];
-const COLS=8,GAP=170;
-function pos(s){const col=(s-1)%COLS,row=Math.floor((s-1)/COLS);const h=Math.sin(s*12.9898)*43758.5453;const j=h-Math.floor(h),h2=Math.sin(s*78.233)*12345.678,j2=h2-Math.floor(h2);
-  return {x:col*GAP+(j-.5)*50,y:row*GAP+(j2-.5)*50}}
+// The galaxy has 499 systems laid along one spiral arm (so systems with close numbers are close in space, like flight distances),
+// one every ARC units along the arm; the arm turns around the bright core.
+const ARC=150,GAP_TURN=1100,R0=260,MAXSYS=499,POS=[null];
+(function(){const b=GAP_TURN/(2*Math.PI);let th=0,r=R0;
+  for(let n=1;n<=MAXSYS+60;n++){const h=Math.sin(n*12.9898)*43758.5453,j=h-Math.floor(h),h2=Math.sin(n*78.233)*12345.678,j2=h2-Math.floor(h2);
+    const x=Math.cos(th)*r,y=Math.sin(th)*r,nx=-Math.sin(th),ny=Math.cos(th);
+    POS.push({x:x+nx*(j-.5)*70+Math.cos(th)*(j2-.5)*40,y:y+ny*(j-.5)*70+Math.sin(th)*(j2-.5)*40});
+    let left=ARC;while(left>0){const rp=r;const step=Math.min(left/Math.hypot(rp,b),.05);th+=step;r=R0+b*th;left-=step*Math.hypot(rp,b)}}})();
+function pos(s){return POS[Math.max(1,Math.min(POS.length-1,s))]}
 function orbitR(p){return 12+p*4.6}   // slot 1 is close to the star, slot 15 far away
 function planetOff(p){const a=p*2.4-1;const r=orbitR(p);return {x:Math.cos(a)*r,y:Math.sin(a)*r}}
 function resize(){cv.width=innerWidth*devicePixelRatio;cv.height=innerHeight*devicePixelRatio}
@@ -102,14 +108,15 @@ function w2s(x,y){return {x:(x-cam.x)*cam.k+innerWidth/2,y:(y-cam.y)*cam.k+inner
 function s2w(x,y){return {x:(x-innerWidth/2)/cam.k+cam.x,y:(y-innerHeight/2)/cam.k+cam.y}}
 function fit(){const ss=Object.keys(sysInfo).map(Number);if(!ss.length)return;let a=1e9,b=1e9,c=-1e9,d=-1e9;
   ss.forEach(s=>{const p=pos(s);a=Math.min(a,p.x);b=Math.min(b,p.y);c=Math.max(c,p.x);d=Math.max(d,p.y)});
-  cam.x=(a+c)/2;cam.y=(b+d)/2;cam.k=Math.min(3,Math.min(innerWidth*.8/(c-a+200),innerHeight*.8/(d-b+200)))}
+  cam.x=(a+c)/2;cam.y=(b+d)/2;cam.k=Math.min(3,Math.min(innerWidth*.8/(c-a+300),innerHeight*.8/(d-b+300)))}
 function zoomTo(s){const p=pos(s);cam.x=p.x;cam.y=p.y;cam.k=Math.max(cam.k,3.8);focusSys=s}
 $("fit").onclick=()=>{fit();focusSys=null};
+$("whole").onclick=()=>{const p=pos(MAXSYS);cam.x=0;cam.y=0;cam.k=Math.min(innerWidth,innerHeight)*.46/Math.hypot(p.x,p.y);focusSys=null};
 let drag=null;
 cv.onmousedown=e=>{drag={x:e.clientX,y:e.clientY,cx:cam.x,cy:cam.y,moved:false};cv.classList.add("drag")};
 addEventListener("mouseup",e=>{if(drag&&!drag.moved)clickAt(e.clientX,e.clientY);drag=null;cv.classList.remove("drag")});
 addEventListener("mousemove",e=>{if(drag){const dx=e.clientX-drag.x,dy=e.clientY-drag.y;if(Math.abs(dx)+Math.abs(dy)>3)drag.moved=true;cam.x=drag.cx-dx/cam.k;cam.y=drag.cy-dy/cam.k}hoverAt(e.clientX,e.clientY)});
-cv.addEventListener("wheel",e=>{e.preventDefault();const b=s2w(e.clientX,e.clientY);cam.k=Math.min(14,Math.max(.15,cam.k*Math.exp(-e.deltaY*.0015)));const a=s2w(e.clientX,e.clientY);cam.x+=b.x-a.x;cam.y+=b.y-a.y},{passive:false});
+cv.addEventListener("wheel",e=>{e.preventDefault();const b=s2w(e.clientX,e.clientY);cam.k=Math.min(14,Math.max(.06,cam.k*Math.exp(-e.deltaY*.0015)));const a=s2w(e.clientX,e.clientY);cam.x+=b.x-a.x;cam.y+=b.y-a.y},{passive:false});
 cv.ondblclick=()=>{fit();focusSys=null};
 function nearestSys(mx,my,r){let best=null,bd=r;for(const s in sysInfo){const q=w2s(pos(+s).x,pos(+s).y),d=Math.hypot(q.x-mx,q.y-my);if(d<bd){bd=d;best=+s}}return best}
 function clickAt(mx,my){const s=nearestSys(mx,my,28*Math.max(1,cam.k/2));if(s!=null){zoomTo(s);showSys(s)}}
@@ -129,12 +136,14 @@ function draw(ts){requestAnimationFrame(draw);const dpr=devicePixelRatio;g.setTr
   g.fillStyle="#fff";for(const st of stars){g.globalAlpha=st.a;g.fillRect((st.x*innerWidth+(-cam.x*cam.k*.02))%innerWidth,st.y*innerHeight,st.r,st.r)}g.globalAlpha=1;
   if(!D)return;const now=Date.now()/1000+offset;const mix=Math.max(0,Math.min(1,(cam.k-1.4)/1.6));
   g.save();g.translate(innerWidth/2,innerHeight/2);g.scale(cam.k,cam.k);g.translate(-cam.x,-cam.y);
+  const core=g.createRadialGradient(0,0,0,0,0,900);core.addColorStop(0,"rgba(255,220,160,.35)");core.addColorStop(.4,"rgba(120,140,255,.10)");core.addColorStop(1,"rgba(0,0,0,0)");g.fillStyle=core;g.beginPath();g.arc(0,0,900,0,7);g.fill();
+  g.fillStyle="#6c7fb8";for(let n=1;n<=MAXSYS;n++){if(sysInfo[n])continue;const q=POS[n];g.globalAlpha=.5;g.beginPath();g.arc(q.x,q.y,Math.max(1.6,2.2/Math.sqrt(cam.k)),0,7);g.fill()}g.globalAlpha=1;
   const ss=Object.keys(sysInfo).map(Number).sort((a,b)=>a-b);
-  g.strokeStyle="#16213f";g.lineWidth=1/cam.k;g.beginPath();ss.forEach((s,i)=>{const p=pos(s);if(i&&ss[i-1]===s-1)g.lineTo(p.x,p.y);else g.moveTo(p.x,p.y)});g.stroke();
+  g.strokeStyle="#16213f";g.lineWidth=1/cam.k;if(cam.k>.3){g.beginPath();ss.forEach((s,i)=>{const p=pos(s);if(i&&ss[i-1]===s-1)g.lineTo(p.x,p.y);else g.moveTo(p.x,p.y)});g.stroke()}
   ss.forEach(s=>{const p=pos(s),i=sysInfo[s];const owners=i.slots.filter(x=>x.owner);const col=COLORS[(owners.find(x=>x.persona)||{}).persona]||"#8aa4d8";
-    const z=1/Math.sqrt(Math.max(.6,cam.k));const rad=(7+Math.min(8,owners.length*1.4))*z;const gr=g.createRadialGradient(p.x,p.y,0,p.x,p.y,rad*2.6);gr.addColorStop(0,col+"cc");gr.addColorStop(.35,col+"44");gr.addColorStop(1,col+"00");
+    const z=1/Math.sqrt(Math.max(.6,cam.k));const rad=(7+Math.min(8,owners.length*1.4))*Math.max(z,.9/Math.sqrt(cam.k)*1.0)*(cam.k<.5?2.2:1);const gr=g.createRadialGradient(p.x,p.y,0,p.x,p.y,rad*2.6);gr.addColorStop(0,col+"cc");gr.addColorStop(.35,col+"44");gr.addColorStop(1,col+"00");
     g.fillStyle=gr;g.beginPath();g.arc(p.x,p.y,rad*2.6,0,7);g.fill();g.fillStyle="#fff";g.beginPath();g.arc(p.x,p.y,2.4*z,0,7);g.fill();
-    if(cam.k>.5){g.fillStyle="#9fb2e8";g.font=`${11/cam.k}px system-ui`;g.textAlign="center";g.fillText(""+s,p.x,p.y+rad+13/cam.k)}
+    if(cam.k>.12){g.fillStyle="#9fb2e8";g.font=`${11/cam.k}px system-ui`;g.textAlign="center";g.fillText(""+s,p.x,p.y+rad+13/cam.k)}
     if(mix>0){g.strokeStyle=`rgba(140,170,240,${.22*mix})`;g.lineWidth=.7/cam.k;for(let q=1;q<=15;q++){g.beginPath();g.arc(p.x,p.y,orbitR(q),0,7);g.stroke()}
       i.slots.forEach(sl=>{const o=planetOff(sl.position);g.globalAlpha=mix;g.fillStyle=sl.owner?(COLORS[sl.persona]||COLORS.other):"#334";
         g.beginPath();g.arc(p.x+o.x,p.y+o.y,(sl.owner?3.2:1.4)*Math.min(1,2.2/Math.pow(cam.k,.45)),0,7);g.fill();
