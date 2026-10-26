@@ -8,7 +8,7 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass, field
 
-from . import expedition, moons, social
+from . import alliance, expedition, moons, social
 from .bounty import focus_for
 from .bandit import Bandit
 from .brain import RESOURCES
@@ -59,6 +59,7 @@ class Memory:
     away: list = field(default_factory=list)  # fleets sent to another own planet to dodge a raid, still to be brought home
     moons: dict = field(default_factory=moons.new_state)  # moon: phalanx levels, scan budget, attacks seen coming, rival fleets away (moons.py)
     social: dict = field(default_factory=social.new_state)  # galaxy board: cursor, post budget, trade offers and deals, reputation (social.py)
+    alliance: dict = field(default_factory=alliance.new_state)  # alliance: id, allies, chat cursor, what was shared, who attacked members (alliance.py)
 
     # Saved to disk so a restart does not make the agent forget (JSON cannot have tuple keys, so coordinates become "g:s:p").
     _COORD_MAPS = ("spied", "attacked", "pending", "intel", "avoid_until", "aggressors", "opponents", "arm_for", "debris")
@@ -69,7 +70,8 @@ class Memory:
                      "colony_sent_at": self.colony_sent_at, "colony_planets_before": self.colony_planets_before,
                      "colony_until": self.colony_until, "bandit": self.bandit.to_dict(),
                      "expedition": self.expedition,
-                     "supply_next_at": self.supply_next_at, "away": self.away, "social": self.social, "moons": self.moons}
+                     "supply_next_at": self.supply_next_at, "away": self.away, "social": self.social, "moons": self.moons,
+                     "alliance": self.alliance}
         for name in self._COORD_MAPS:
             out[name] = {":".join(map(str, c)): v for c, v in getattr(self, name).items()}
         return out
@@ -115,6 +117,7 @@ class Memory:
         m.expedition = expedition.clean_state(data.get("expedition"))
         m.social = social.clean_state(data.get("social"))
         m.moons = moons.clean_state(data.get("moons"))
+        m.alliance = alliance.clean_state(data.get("alliance"))
         battles = data.get("battles")
         m.battles = battles if isinstance(battles, list) else []
         return m

@@ -23,6 +23,7 @@ from .logistics_agent import LogisticsMixin
 from .social_agent import SocialMixin
 from .bounty_agent import BountyMixin
 from .moons_agent import MoonsMixin
+from .alliance_agent import AllianceMixin
 
 
 # When an agent is stuck with nothing to do and no idea how long it will take, look again after this long.
@@ -46,6 +47,11 @@ class TokenStore:
         with self._lock:
             return {int(e["user_id"]) for e in self._data.values() if e.get("user_id") is not None}
 
+    def agent_personas(self) -> dict[int, str]:
+        """Persona name of every agent we know of, by game user id."""
+        with self._lock:
+            return {int(e["user_id"]): e.get("persona") for e in self._data.values() if e.get("user_id") is not None}
+
     def put(self, name: str, entry: dict) -> None:
         with self._lock:
             self._data[name] = entry
@@ -54,7 +60,7 @@ class TokenStore:
             tmp.replace(self.path)
 
 
-class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin):
+class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, AllianceMixin):
     def __init__(
         self, name: str, persona: Persona, base_url: str, store: TokenStore, rng: random.Random,
         *, log_dir: str | None = None, email_domain: str = "example.com", client: ApiClient | None = None,
@@ -171,6 +177,7 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin):
         threats = self._watch()
         hints += self._plan_moons(status, planets)    # moons: sensor phalanx (build, scan); no moon = nothing
         threats = threats + self._phalanx_threats(threats)   # attacks the phalanx saw coming count like the ones /fleet shows
+        hints += self._plan_alliance(status, planets, threats)   # alliances (off without sociability or alliance endpoints): found/join, share intel, warn allies
         hints += self._plan_social(status, planets)   # galaxy board (off without --board): warnings raise the guard, traders swap goods
         if self.now < self.alert_until:
             hints.append(WATCH_SECONDS)   # someone hostile is about: look often
@@ -556,9 +563,7 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin):
         return [60.0]
 
     def _allowed_target_ids(self) -> set[int] | None:
-        if self.attack_humans:
-            return None
-        return self.store.agent_user_ids()
+        return self._without_allies(None if self.attack_humans else self.store.agent_user_ids())   # never an ally
 
     def _get_players(self, now: float) -> tuple[list[dict], int]:
         """The ranking (cached for 5 minutes) and our own score."""

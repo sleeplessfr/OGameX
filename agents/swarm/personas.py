@@ -43,6 +43,7 @@ class Persona:
     expansion: float = 0.0       # 0..1 appetite for colonies (0 = never settles; also sets how many planets it is content with)
     expedition_interest: float = 0.0  # 0..1 chance to go on an expedition when one is possible (a Discoverer always goes)
     trade_interest: float = 0.0  # 0..1 how keen it is to swap resources with other agents through the galaxy board (0 = never)
+    sociability: float = 0.0     # 0..1 how keen it is on alliances (0 = never; above 0.6 it may found one; see swarm/alliance.py)
 
 
 ECONOMY = {"metal_mine": 3.0, "crystal_mine": 2.5, "deuterium_synthesizer": 1.5, "solar_plant": 2.0,
@@ -56,7 +57,7 @@ PRESETS: dict[str, Persona] = {
         {"energy_technology": 1.0, "computer_technology": 0.5, "combustion_drive": 0.2},
         balance=0.8, patience=0.85, research_share=0.4, tick_seconds=60, max_save_seconds=1800, caution=0.6,
         aggression=0.05, scout_interest=0.1, army_share=0.05, unit_weights={"small_cargo": 1.0, "espionage_probe": 1.0},
-        probes_wanted=1, min_loot=2000, risk_ratio=0.3, max_target_ratio=0.8, expansion=0.5, expedition_interest=0.15, character_class="collector"),
+        probes_wanted=1, min_loot=2000, risk_ratio=0.3, max_target_ratio=0.8, expansion=0.5, expedition_interest=0.15, character_class="collector", sociability=0.8),
     "scientist": Persona(
         "scientist", "Rushes the research lab and climbs the tech tree.",
         {**ECONOMY, "research_lab": 4.0, "crystal_mine": 3.0, "metal_mine": 2.0, "shipyard": 0.4},
@@ -65,7 +66,7 @@ PRESETS: dict[str, Persona] = {
          "impulse_drive": 1.0, "astrophysics": 1.5, "plasma_technology": 1.0},
         balance=1.2, patience=0.6, research_share=1.0, tick_seconds=45, max_save_seconds=7200, caution=0.5,
         aggression=0.0, scout_interest=0.4, army_share=0.1, unit_weights={"espionage_probe": 3.0, "small_cargo": 1.0},
-        probes_wanted=3, probes_per_spy=2, spy_cooldown_s=7200, expansion=0.7, expedition_interest=1.0, character_class="discoverer"),
+        probes_wanted=3, probes_per_spy=2, spy_cooldown_s=7200, expansion=0.7, expedition_interest=1.0, character_class="discoverer", sociability=0.8),
     "turtle": Persona(
         "turtle", "Defensive and safe: big stores, steady growth, never overspends.",
         {**ECONOMY, "metal_store": 2.0, "crystal_store": 2.0, "deuterium_store": 1.5, "robot_factory": 2.0,
@@ -76,7 +77,7 @@ PRESETS: dict[str, Persona] = {
         aggression=0.0, scout_interest=0.05, army_share=0.3,
         unit_weights={"rocket_launcher": 3.0, "light_laser": 2.0, "heavy_laser": 1.0, "small_shield_dome": 1.0,
                       "espionage_probe": 0.5},
-        probes_wanted=1, expansion=0.3, expedition_interest=0.1, character_class="collector"),
+        probes_wanted=1, expansion=0.3, expedition_interest=0.1, character_class="collector", sociability=0.9),
     "raider": Persona(
         "raider", "Wants ships early: shipyard and drives, economy only as a means.",
         {**ECONOMY, "shipyard": 3.5, "robot_factory": 2.0, "deuterium_synthesizer": 2.5, "research_lab": 1.5},
@@ -87,7 +88,7 @@ PRESETS: dict[str, Persona] = {
         unit_weights={"light_fighter": 3.0, "cruiser": 2.0, "heavy_fighter": 1.5, "small_cargo": 1.5, "large_cargo": 1.0,
                       "espionage_probe": 1.0},
         probes_wanted=3, probes_per_spy=2, risk_ratio=1.0, gamble=0.35, min_loot=400, strike_fraction=0.9,
-        max_target_ratio=1.3, spy_cooldown_s=1800, attack_cooldown_s=3600, expansion=0.2, expedition_interest=0.05, character_class="general"),
+        max_target_ratio=1.3, spy_cooldown_s=1800, attack_cooldown_s=3600, expansion=0.2, expedition_interest=0.05, character_class="general", sociability=0.15),
     "balanced": Persona(
         "balanced", "A bit of everything, like an average player.",
         dict(ECONOMY),
@@ -96,14 +97,14 @@ PRESETS: dict[str, Persona] = {
         balance=1.0, patience=0.65, research_share=0.7, tick_seconds=45, caution=0.5,
         aggression=0.3, scout_interest=0.4, army_share=0.2,
         unit_weights={"light_fighter": 1.0, "small_cargo": 1.0, "espionage_probe": 1.0, "rocket_launcher": 1.0},
-        probes_wanted=2, risk_ratio=0.6, min_loot=800, expansion=0.5, expedition_interest=0.25, character_class="general"),
+        probes_wanted=2, risk_ratio=0.6, min_loot=800, expansion=0.5, expedition_interest=0.25, character_class="general", sociability=0.5),
     "trader": Persona(
         "trader", "A merchant: builds a steady economy, then swaps its surplus for what it lacks with other agents (needs the galaxy board).",
         {**ECONOMY, "metal_mine": 3.5, "crystal_mine": 3.0, "deuterium_synthesizer": 2.0, "shipyard": 0.9, "research_lab": 0.8},
         {"energy_technology": 1.5, "combustion_drive": 1.5, "computer_technology": 1.0, "espionage_technology": 0.3},
         balance=1.0, patience=0.75, research_share=0.5, tick_seconds=50, max_save_seconds=3600, caution=0.5,
         scout_interest=0.05, probes_wanted=1,   # one probe: it reads its battle reports, so it can tell the board when it is robbed
-        expansion=0.3, expedition_interest=0.1, character_class="collector", trade_interest=1.0),
+        expansion=0.3, expedition_interest=0.1, character_class="collector", trade_interest=1.0, sociability=0.7),
 }
 
 # The personalities handed out in turn when --personas is not given. The trader is left out on purpose: it only does anything
@@ -137,4 +138,7 @@ def make_persona(index: int, rng: random.Random, names: list[str] | None = None)
         expedition_interest=min(1.0, max(0.0, base.expedition_interest + rng.uniform(-0.05, 0.05))) if 0 < base.expedition_interest < 1 else base.expedition_interest,
         # drawn after everything else, and only for personalities that trade: no other agent's draws change
         trade_interest=min(1.0, max(0.2, base.trade_interest + rng.uniform(-0.2, 0.0))) if base.trade_interest > 0 else 0.0,
+        # drawn last, and from a stream of its own (made from the state of rng, which is not used up): nothing drawn before changes, and the
+        # agent's own decision stream after make_persona stays what it was. A persona without sociability (e.g. one made by a test) stays at 0.
+        sociability=min(1.0, max(0.0, base.sociability + random.Random(str(rng.getstate())).uniform(-0.1, 0.1))) if base.sociability > 0 else 0.0,
     )

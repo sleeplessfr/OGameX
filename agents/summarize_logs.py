@@ -300,6 +300,7 @@ def summarize(events: list[dict], personas: dict[str, str] | None = None) -> str
     out.append("")
 
     out += moons_section(events)
+    out += alliances_section(events)
 
     out.append("BOARD AND TRADE (galaxy board posts; deals with other agents, goods go in small instalments, a cheat is shunned)")
     posts = [e for e in events if e["event"] == "board_post"]
@@ -461,6 +462,36 @@ def moons_section(events: list[dict]) -> list[str]:
         out.append(f"    {clock(e['t'])} {e['agent']} attack from {e.get('attacker')} on {e.get('planet')}: {e.get('ships')} ships, "
                    f"{e.get('lands_in')} s ahead")
     for why, n in Counter(str(e.get("why", ""))[:70] for e in skips).most_common(3):
+        out.append(f"    skipped {n}x: {why}")
+    out.append("")
+    return out
+
+
+def alliances_section(events: list[dict]) -> list[str]:
+    """ALLIANCES: who founded one, who applied, was let in or left, and what allies told each other."""
+    out = ["ALLIANCES (agents team up: they share spy reports in the alliance chat and warn each other of attacks)"]
+    names = ("alliance_founded", "alliance_applied", "alliance_accepted", "alliance_rejected", "alliance_joined", "alliance_left",
+             "alliance_kicked", "intel_shared", "intel_used", "ally_warned", "alliance_skipped")
+    ev = [e for e in events if e["event"] in names]
+    if not ev:
+        return out + ["  none", ""]
+    by = defaultdict(list)
+    for e in ev:
+        by[e["event"]].append(e)
+    out.append(f"  {len(by['alliance_founded'])} founded, {len(by['alliance_applied'])} applications "
+               f"({len(by['alliance_accepted'])} accepted, {len(by['alliance_rejected'])} rejected), {len(by['alliance_joined'])} joined, "
+               f"{len(by['alliance_left'])} left, {len(by['alliance_kicked'])} kicked out")
+    for e in by["alliance_founded"][-8:]:
+        members = sum(1 for a in by["alliance_accepted"] if a.get("alliance") == e.get("alliance"))
+        out.append(f"    {clock(e['t'])} {e['agent']} founded {e.get('alliance')} \"{e.get('name')}\" (+{members} accepted since)")
+    shared, used = by["intel_shared"], by["intel_used"]
+    out.append(f"  {len(shared)} spy reports shared ({sum(int(e.get('loot') or 0) for e in shared):,} loot in them), {len(used)} used by an ally as a target "
+               f"({sum(int(e.get('loot') or 0) for e in used):,} loot), {len(by['ally_warned'])} warnings of incoming attacks")
+    for why, n in Counter(str(e.get("reason", "")) for e in by["alliance_left"]).most_common(3):
+        out.append(f"    left {n}x: {why}")
+    for why, n in Counter(str(e.get("why", "")) for e in by["alliance_rejected"]).most_common(3):
+        out.append(f"    rejected {n}x: {why}")
+    for why, n in Counter(str(e.get("why", ""))[:70] for e in by["alliance_skipped"]).most_common(3):
         out.append(f"    skipped {n}x: {why}")
     out.append("")
     return out
