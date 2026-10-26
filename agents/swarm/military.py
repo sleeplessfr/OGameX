@@ -59,6 +59,7 @@ class Memory:
     away: list = field(default_factory=list)  # fleets sent to another own planet to dodge a raid, still to be brought home
     moons: dict = field(default_factory=moons.new_state)  # moon: phalanx levels, scan budget, attacks seen coming, rival fleets away (moons.py)
     social: dict = field(default_factory=social.new_state)  # galaxy board: cursor, post budget, trade offers and deals, reputation (social.py)
+    voice: dict = field(default_factory=dict)  # character sheet and diary (last 20 lines); stays empty without --llm (voice.py)
 
     # Saved to disk so a restart does not make the agent forget (JSON cannot have tuple keys, so coordinates become "g:s:p").
     _COORD_MAPS = ("spied", "attacked", "pending", "intel", "avoid_until", "aggressors", "opponents", "arm_for", "debris")
@@ -70,6 +71,8 @@ class Memory:
                      "colony_until": self.colony_until, "bandit": self.bandit.to_dict(),
                      "expedition": self.expedition,
                      "supply_next_at": self.supply_next_at, "away": self.away, "social": self.social, "moons": self.moons}
+        if self.voice:
+            out["voice"] = {"sheet": dict(self.voice.get("sheet") or {}), "diary": list(self.voice.get("diary") or [])}
         for name in self._COORD_MAPS:
             out[name] = {":".join(map(str, c)): v for c, v in getattr(self, name).items()}
         return out
@@ -114,6 +117,11 @@ class Memory:
         m.bandit = Bandit.from_dict(data.get("bandit"))
         m.expedition = expedition.clean_state(data.get("expedition"))
         m.social = social.clean_state(data.get("social"))
+        raw = data.get("voice")
+        if isinstance(raw, dict):
+            m.voice = {"sheet": raw["sheet"] if isinstance(raw.get("sheet"), dict) else {},
+                       "diary": [d for d in raw.get("diary") or [] if isinstance(d, dict) and isinstance(d.get("text"), str)][-20:]
+                       if isinstance(raw.get("diary"), list) else []}
         m.moons = moons.clean_state(data.get("moons"))
         battles = data.get("battles")
         m.battles = battles if isinstance(battles, list) else []

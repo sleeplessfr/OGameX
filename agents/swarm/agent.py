@@ -23,6 +23,7 @@ from .logistics_agent import LogisticsMixin
 from .social_agent import SocialMixin
 from .bounty_agent import BountyMixin
 from .moons_agent import MoonsMixin
+from .llm_agent import VoiceMixin
 
 
 # When an agent is stuck with nothing to do and no idea how long it will take, look again after this long.
@@ -54,7 +55,7 @@ class TokenStore:
             tmp.replace(self.path)
 
 
-class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin):
+class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin):
     def __init__(
         self, name: str, persona: Persona, base_url: str, store: TokenStore, rng: random.Random,
         *, log_dir: str | None = None, email_domain: str = "example.com", client: ApiClient | None = None,
@@ -116,6 +117,7 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin):
                 f.write(json.dumps(line) + "\n")
         detail = " ".join(f"{k}={v}" for k, v in fields.items())
         print(f"[{self.name}] {event} {detail}", flush=True)
+        self._voice_notice(event, fields)   # llm_agent.py: a notable event may become a diary line (does nothing without --llm)
 
     # ---- account -------------------------------------------------------------------------------------
     def ensure_session(self) -> None:

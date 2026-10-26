@@ -12,6 +12,7 @@ import time
 from swarm.agent import Agent, TokenStore
 from swarm.boardclient import is_local_url, make_board
 from swarm.client import ApiClient, ApiError
+from swarm.llm import make_llm
 from swarm.personas import PRESETS, ROTATION, make_persona
 
 
@@ -37,7 +38,15 @@ def main() -> int:
     ap.add_argument("--board", default=None, metavar="URL",
                     help="the galaxy board (start board.py first), e.g. http://localhost:8765. Default: none = agents do not use a board. "
                          "If the board is not running the agents just play without it")
+    ap.add_argument("--llm", default=None, metavar="URL",
+                    help="an OpenAI-compatible server, e.g. http://localhost:1234/v1 (LM Studio), or 'fake' for canned answers without a server. "
+                         "Default: off. The agents get a character, rewrite some board texts and keep a diary; play is unchanged")
+    ap.add_argument("--llm-model", default="", help="model name to send (LM Studio: the one that is loaded)")
+    ap.add_argument("--llm-timeout", type=float, default=60.0, help="seconds to wait for one answer (default 60)")
+    ap.add_argument("--llm-max-per-hour", type=int, default=120, help="most requests per hour all agents together (default 120)")
     args = ap.parse_args()
+    if args.llm and args.llm != "fake" and not args.llm.startswith(("http://", "https://")):
+        ap.error("--llm must be 'fake' or an address like http://localhost:1234/v1")
     if args.board and not is_local_url(args.board):
         ap.error("--board must be an http://localhost:PORT or http://127.0.0.1:PORT address: the board is for this computer only")
 
@@ -69,6 +78,11 @@ def main() -> int:
             a.board = make_board(args.board, a.name)
         up = agents[0].board.read(limit=1)["ok"] if agents else True
         print(f"Galaxy board: {args.board} ({'reachable' if up else 'NOT reachable yet: agents play without it until it is'})")
+    if args.llm:
+        shared = make_llm(args.llm, args.llm_model, args.llm_timeout, args.llm_max_per_hour, args.log_dir)
+        for a in agents:
+            a.llm = shared      # one client for the whole process: one request at a time, one budget
+        print(f"Language model: {args.llm} (model {args.llm_model or 'default'}, at most {args.llm_max_per_hour} requests an hour, log {args.log_dir}/llm.jsonl)")
     threads = []
     print(f"Starting {len(agents)} agents on {args.base_url}. Ctrl+C or create a file named {args.stop_file} to stop.")
     for agent in agents:

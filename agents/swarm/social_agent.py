@@ -49,6 +49,7 @@ class SocialMixin:
         st = self.memory.social
         if not S.can_post(st, self.now):
             return None
+        text = self._voice_text(kind, text, data)    # llm_agent.py: the same post in the agent's own words, if one is ready
         post = self.board.post(kind, text, data, ttl)
         if post is None:
             return None
