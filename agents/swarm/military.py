@@ -218,6 +218,11 @@ def pick_target(
         if wanted:
             (_, _), neg_d, p, c = max(wanted, key=lambda w: (w[0][1], w[0][0], w[1]))
             return {**p, "coord": c, "distance": -neg_d}
+    # Targets we only know from an ally's report (no defence list) come first: our own probes can turn them into a real go or no-go.
+    need_own = [o for o in options if (memory.intel.get(o[2]) or {}).get("from_ally") is not None
+                and not (memory.intel.get(o[2]) or {}).get("composition_known", False)]
+    if need_own:
+        options = need_own
     options.sort(key=lambda t: t[0])
     # Among the few nearest, pick one at random so agents do not all hammer the same neighbour.
     d, p, c = rng.choice(options[:3])
@@ -260,6 +265,9 @@ def assess_attack(persona: Persona, rng: random.Random, intel: Intel, my_fighter
             return False, f"spy report is {age:.0f}s old"
         if intel.ally is not None and age > ALLY_INTEL_MAX_AGE:
             return False, f"intel from an ally is {age:.0f}s old: needs a fresh spy report"
+    if intel.defenders is None and intel.ally is not None:
+        # an ally's shared report has no defence list; the 2026-10-27 gamble on one hit 934 rocket launchers (guessed: 40)
+        return False, "ally's report shows no defences: needs my own probes first"
     if intel.defenders is None:
         if at_risk is not None and at_risk > GAMBLE_MAX_RISK * intel.loot:
             return False, f"defenses unknown and my fleet (worth {at_risk:,.0f}) is worth too much to gamble for {intel.loot:,}"
