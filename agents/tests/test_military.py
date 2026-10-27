@@ -8,6 +8,8 @@ from swarm.agent import Agent, TokenStore
 from swarm.military import (Intel, Memory, assess_attack, build_strike, can_carry_enough, choose_units, judge_trade, summarize_battle, count_fighters, distance,
                             pick_attack, pick_target, summarize_report)
 from swarm.personas import PRESETS
+from swarm.military import probe_stock as _ps
+M_stock = lambda: _ps(RAIDER)
 from tests.fakegame import FakeGame
 
 
@@ -209,8 +211,8 @@ class FleetAndShopTests(unittest.TestCase):
         units = [self.unit("espionage_probe", (0, 300, 0)), self.unit("light_fighter", (600, 200, 0))]
         have = {"metal": 10_000, "crystal": 10_000, "deuterium": 0}
         pick = choose_units(RAIDER, random.Random(0), units, have, {"espionage_probe": 1})
-        self.assertEqual(pick, ("espionage_probe", RAIDER.probes_wanted - 1))
-        pick = choose_units(RAIDER, random.Random(0), units, have, {"espionage_probe": RAIDER.probes_wanted})
+        self.assertEqual(pick, ("espionage_probe", M_stock() - 1))
+        pick = choose_units(RAIDER, random.Random(0), units, have, {"espionage_probe": M_stock()})
         self.assertEqual(pick[0], "light_fighter")
 
     def test_spends_at_most_army_share_of_what_is_spare(self):
@@ -236,6 +238,7 @@ class FleetAndShopTests(unittest.TestCase):
 class SwarmBehaviourTests(unittest.TestCase):
     def play(self, persona_name, seed, *, victim_is_agent=True, hours=60):
         game = FakeGame()
+        game.res = {k: v + 20000 for k, v in game.res.items()}   # the raider also buys 3+ spy probes now
         tmp = tempfile.mkdtemp()
         store = TokenStore(str(Path(tmp) / "t.json"))
         if victim_is_agent:

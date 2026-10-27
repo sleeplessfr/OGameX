@@ -44,6 +44,7 @@ class Memory:
     spied: dict[Coord, float] = field(default_factory=dict)      # when we last sent probes there
     attacked: dict[Coord, float] = field(default_factory=dict)   # when we last attacked there
     pending: dict[Coord, float] = field(default_factory=dict)    # probes sent, report not read yet
+    probes_for: dict[Coord, int] = field(default_factory=dict)   # how many probes the next trip there needs (grows when a report hid the defences)
     intel: dict[Coord, dict] = field(default_factory=dict)       # read reports: {'at', 'loot', 'defenders', 'owner_id'}
     avoid_until: dict[Coord, float] = field(default_factory=dict)  # targets the game refused (protection, vacation, ...)
     need_cargo: bool = False   # a worthwhile target had to be skipped because the fleet cannot carry enough loot
@@ -77,7 +78,7 @@ class Memory:
     diplomacy: dict = field(default_factory=diplomacy.new_state)  # first contact and the ladder of relationships per player (diplomacy.py)
 
     # Saved to disk so a restart does not make the agent forget (JSON cannot have tuple keys, so coordinates become "g:s:p").
-    _COORD_MAPS = ("spied", "attacked", "pending", "intel", "avoid_until", "aggressors", "opponents", "arm_for", "target_for", "debris")
+    _COORD_MAPS = ("spied", "attacked", "pending", "probes_for", "intel", "avoid_until", "aggressors", "opponents", "arm_for", "target_for", "debris")
 
     def to_dict(self) -> dict:
         out: dict = {"need_cargo": self.need_cargo, "risk_scale": self.risk_scale, "battles": self.battles,
@@ -186,6 +187,32 @@ def coord_of(galaxy: int, system: int, position: int) -> Coord:
 def distance(a: Coord, b: Coord) -> int:
     """Rough travel distance between two coordinates, in systems (a galaxy jump counts as a lot)."""
     return abs(a[0] - b[0]) * SYSTEMS_PER_GALAXY + abs(a[1] - b[1]) + (0 if a[:2] != b[:2] else abs(a[2] - b[2]) // 5)
+
+
+# ---- spying: how many probes ------------------------------------------------------------------------------------
+SPY_MIN_PROBES = 3    # the game shows a target's defences only when 3+ probes are left after the tech penalty (EspionageMission.php)
+SPY_MAX_PROBES = 15
+SPY_STEP = 2
+SPY_STOCK = 4         # probes a spying agent keeps at home (more than the persona's old 1-3: 1-2 probes never saw any defence)
+
+
+def probes_to_send(persona: Persona, memory: Memory, c: Coord, have: int) -> int:
+    """Probes for the next trip to `c`: at least the game's threshold, more where an earlier report hid the defences.
+    Returns 0 when there are fewer than the threshold at home (a trip with 1-2 probes only shows resources)."""
+    want = max(persona.probes_per_spy, SPY_MIN_PROBES, int(memory.probes_for.get(c, 0)))
+    n = min(have, want, SPY_MAX_PROBES)
+    return n if n >= SPY_MIN_PROBES else 0
+
+
+def learn_probes(memory: Memory, c: Coord, defence_shown: bool) -> None:
+    """After a report: a hidden defence list means the target out-teches us, so send two more probes next time (to the cap)."""
+    if defence_shown:
+        return
+    memory.probes_for[c] = min(SPY_MAX_PROBES, max(SPY_MIN_PROBES, int(memory.probes_for.get(c, 0))) + SPY_STEP)
+
+
+def probe_stock(persona: Persona) -> int:
+    return max(persona.probes_wanted, SPY_STOCK) if persona.probes_wanted > 0 else 0
 
 
 # ---- targets --------------------------------------------------------------------------------------------------
@@ -482,8 +509,8 @@ def choose_units(
 
     # Keep a small stock of probes if the persona spies (they are cheap).
     probes = ships_here.get("espionage_probe", 0)
-    if probes < persona.probes_wanted and "espionage_probe" in usable:
-        return "espionage_probe", min(persona.probes_wanted - probes, usable["espionage_probe"]["max_buildable"])
+    if probes < probe_stock(persona) and "espionage_probe" in usable:
+        return "espionage_probe", min(probe_stock(persona) - probes, usable["espionage_probe"]["max_buildable"])
 
     if share <= 0:
         return None

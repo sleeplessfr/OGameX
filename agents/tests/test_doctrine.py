@@ -188,7 +188,7 @@ class AgentTests(unittest.TestCase):
         game.slots_max = 3
         game.levels.update({"shipyard": 4, "metal_mine": 5, "crystal_mine": 4})       # no solar plant: the energy is short
         game.storage = lambda: {"metal": 10 ** 8, "crystal": 10 ** 8, "deuterium": 10 ** 8}
-        game.ships["espionage_probe"] = 3
+        game.ships["espionage_probe"] = 4
         game.advance(100)
         game.res.update({"metal": 3_000_000, "crystal": 3_000_000, "deuterium": 100_000})
         store = TokenStore(str(Path(tempfile.mkdtemp()) / "t.json"))

@@ -90,6 +90,7 @@ class BanditTests(unittest.TestCase):
 class AgentUsesItTests(unittest.TestCase):
     def test_attacks_are_tagged_and_the_result_is_learned(self):
         game = FakeGame()
+        game.res = {k: v + 20000 for k, v in game.res.items()}   # the raider also buys 3+ spy probes now
         events = []
         store = TokenStore(str(Path(tempfile.mkdtemp()) / "t.json"))
         store.put("victim", {"user_id": 2})

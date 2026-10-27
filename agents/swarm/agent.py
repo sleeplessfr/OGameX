@@ -15,7 +15,7 @@ from .combat import tech_from_research
 import random as _random
 from . import buildlearn, calibrate, evolve, genome, targetlearn
 from .bandit import outcome_of
-from .military import (Memory, choose_strike, judge_trade, summarize_battle, choose_units, coord_of, pick_attack, pick_target, summarize_report,
+from .military import (Memory, probes_to_send, learn_probes, SPY_MIN_PROBES, choose_strike, judge_trade, summarize_battle, choose_units, coord_of, pick_attack, pick_target, summarize_report,
                        typical_garrison, GARRISON_KEEP)
 from .client import ApiClient, ApiError
 from .opponents import record_result, record_spy, summary as opp_summary
@@ -503,7 +503,7 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
             if p.aggression > 0 and self.memory.intel:
                 acted = self._try_attack(home, now, ships_here)
             wants_to_spy = (p.aggression > 0 or p.scout_interest > 0) and len(self.memory.pending) < 2
-            if not acted and wants_to_spy and ships_here.get("espionage_probe", 0) >= 1 \
+            if not acted and wants_to_spy and ships_here.get("espionage_probe", 0) >= SPY_MIN_PROBES \
                     and self.rng.random() < max(p.scout_interest, 0.5 * p.aggression):
                 self._try_spy(home, now, ships_here)
         if self.memory.pending:
@@ -813,7 +813,9 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
         if target is None:
             return
         galaxy, system, position = target["coord"]
-        probes = min(ships_here.get("espionage_probe", 0), self.persona.probes_per_spy)
+        probes = probes_to_send(self.persona, self.memory, target["coord"], ships_here.get("espionage_probe", 0))
+        if probes <= 0:
+            return   # too few probes at home to see any defence: wait until more are built
         try:
             self.client.post(f"/planets/{home['id']}/fleet", {
                 "mission": "espionage", "galaxy": galaxy, "system": system, "position": position,
@@ -852,6 +854,7 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
             self.memory.intel[c] = {"at": now, "loot": intel.loot, "defenders": intel.defenders, "owner_id": intel.owner_id,
                                     "ships": intel.ships, "defense": intel.defense, "research": intel.research}
             self.memory.pending.pop(c, None)
+            learn_probes(self.memory, c, intel.defense is not None)
             if "debris" in report:
                 recycle.remember(self.memory.debris, c, recycle.total_of(report["debris"]), now, add=False)
             record_spy(self.memory.opponents, c, now, intel.loot, intel.ships, intel.defense)
