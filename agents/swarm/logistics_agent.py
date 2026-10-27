@@ -73,7 +73,8 @@ class LogisticsMixin:
             build = None if src.get("unit_queue") else L.choose_cargo_build(self.persona, units, src["resources"], ships_here, L.SUPPLY_BUILDERS)
             if build is None:
                 m.supply_next_at = self.now + 600
-                self.log("supply_skipped", why="no cargo ships on the richest planet", **where)
+                blocker = "the shipyard is busy" if src.get("unit_queue") else L.cargo_build_blocker(self.persona, units, src["resources"], L.SUPPLY_BUILDERS)
+                self.log("supply_skipped", why=f"no cargo ships on the richest planet ({blocker})", **where)
                 return []
             name, amount = build
             try:

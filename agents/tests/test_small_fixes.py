@@ -56,3 +56,16 @@ class GambleCapTest(unittest.TestCase):
         self.assertIn("too much to gamble", why)
         go, why = assess_attack(persona, random.Random(1), intel, 5, at_risk=GAMBLE_MAX_RISK * 50_000 * 0.5)
         self.assertTrue(go)
+
+
+class CargoBlockerTest(unittest.TestCase):
+    def test_reasons_are_named(self):
+        from swarm import logistics as L
+        from swarm.personas import PRESETS
+        raider, miner = PRESETS["raider"], PRESETS["miner"]
+        self.assertIn("raider", L.cargo_build_blocker(raider, [], {}, L.SUPPLY_BUILDERS))
+        self.assertEqual(L.cargo_build_blocker(miner, [], {}), "small cargo not offered")
+        item = {"machine_name": "small_cargo", "requirements_met": False}
+        self.assertIn("shipyard", L.cargo_build_blocker(miner, [item], {}))
+        item = {"machine_name": "small_cargo", "requirements_met": True, "max_buildable": 0}
+        self.assertIn("afford", L.cargo_build_blocker(miner, [item], {}))

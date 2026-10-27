@@ -122,6 +122,22 @@ def fuel_ok(amounts: dict, fuel: int) -> bool:
     return fuel * VALUE["deuterium"] <= MAX_FUEL_SHARE * stock_value(amounts)
 
 
+def cargo_build_blocker(persona, units: list[dict], have: dict, builders: tuple = BUILDERS) -> str:
+    """Why no cargo ship can be ordered right now (for the log; choose_cargo_build says only yes or no)."""
+    if persona.name not in builders:
+        return f"a {persona.name} does not order cargo ships for supply"
+    item = next((u for u in units if u["machine_name"] == "small_cargo"), None)
+    if item is None:
+        return "small cargo not offered"
+    if not item.get("requirements_met"):
+        return "small cargo needs a better shipyard or drive"
+    if not item.get("character_class_met", True):
+        return "small cargo not allowed for this character class"
+    if item.get("max_buildable", 0) <= 0:
+        return "cannot afford a small cargo here"
+    return "order would be under one ship"
+
+
 def choose_cargo_build(persona, units: list[dict], have: dict, ships_here: dict, builders: tuple = BUILDERS) -> tuple[str, int] | None:
     """A miner or turtle with no cargo ship at all may order a few small cargos so it can feed its colony. Capped."""
     if persona.name not in builders or any(ships_here.get(n, 0) > 0 for n in CARGOS):
