@@ -56,6 +56,17 @@ Every 30 minutes each agent logs an `econ_snapshot` (levels, output, energy and 
 formulas in plain Python, prices generated from the game's PHP by `gen_econdata.py`) and writes `econsim_report.txt`.
 Send that file back: it decides whether the simulator can be trusted for the next steps.
 
+## What-if games (economy simulator)
+
+```
+python simulate_player.py                                   (every personality, 72 game hours)
+python simulate_player.py --styles --personas miner         (the building styles the agents can learn)
+python simulate_player.py --personas miner,scientist --hours 168 --csv growth.csv
+```
+
+Plays whole players (home planet, colonies, research, the colony-ship chain) with the agents' real building and research
+decisions on the game's formulas, about 1 second per player per 3 game days. Economy only: no fleets, fights or trade.
+
 ## How an agent decides
 
 Each round it reads `/status`, then, for every planet whose queue is empty, the list of buildings:
