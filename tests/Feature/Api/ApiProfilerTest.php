@@ -15,6 +15,8 @@ class ApiProfilerTest extends IsolatedAccountTestCase
     protected function setUp(): void
     {
         parent::setUp();
+        // A file of its own: the running game (and its agents) may be writing to the real profile log at the same time.
+        config(['ogamex_api.profile_log' => sys_get_temp_dir() . '/api-profile-test-' . getmypid() . '.jsonl']);
         $this->deleteLog();
     }
 

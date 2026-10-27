@@ -26,4 +26,7 @@ return [
     // Performance profiler for /api/v1 (see docs/PROFILING.md). When true, one JSON line per request is
     // appended to storage/logs/api-profile.jsonl. Leave false in normal operation.
     'profile' => (bool) env('API_PROFILE', false),
+
+    // Optional path of the profile log (default storage/logs/api-profile.jsonl). The tests set it to a temporary file.
+    'profile_log' => env('API_PROFILE_LOG'),
 ];

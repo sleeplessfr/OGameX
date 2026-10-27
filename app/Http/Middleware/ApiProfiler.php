@@ -38,6 +38,12 @@ class ApiProfiler
      */
     public static function logPath(): string
     {
+        // 'profile_log' lets the tests write to a file of their own instead of the live log the running game fills.
+        $custom = config('ogamex_api.profile_log');
+        if (is_string($custom) && $custom !== '') {
+            return $custom;
+        }
+
         return storage_path('logs/api-profile.jsonl');
     }
 
