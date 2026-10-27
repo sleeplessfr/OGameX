@@ -59,23 +59,33 @@ class LogisticsMixin:
         slots = status.get("fleet_slots") or {}
         if slots.get("used", 0) >= slots.get("max", 1):
             return []
-        route = L.pick_supply_route(planets)
-        if route is None:
-            return []
-        src, dst = route
-        amounts = L.supply_amounts(src, dst)
-        if L.stock_value(amounts) < L.MIN_SEND_VALUE:
-            return []
-        units = self._logi_units(src["id"])
-        ships_here = {u["machine_name"]: int(u["amount"]) for u in units if u.get("category") != "defense" and int(u.get("amount") or 0) > 0}
-        where = {"from": src["id"], "to": dst["id"]}
-        if not any(ships_here.get(n, 0) > 0 for n in L.CARGOS):
-            build = None if src.get("unit_queue") else L.choose_cargo_build(self.persona, units, src["resources"], ships_here, L.SUPPLY_BUILDERS)
-            if build is None:
-                m.supply_next_at = self.now + 600
-                blocker = "the shipyard is busy" if src.get("unit_queue") else L.cargo_build_blocker(self.persona, units, src["resources"], L.SUPPLY_BUILDERS)
-                self.log("supply_skipped", why=f"no cargo ships on the richest planet ({blocker})", **where)
+        tried: set = set()
+        blockers: list[str] = []
+        while True:
+            route = L.pick_supply_route(planets, tried)
+            if route is None:
+                if blockers:      # every planet that could send is stuck without cargo ships
+                    m.supply_next_at = self.now + 600
                 return []
+            src, dst = route
+            amounts = L.supply_amounts(src, dst)
+            if L.stock_value(amounts) < L.MIN_SEND_VALUE:
+                return []
+            units = self._logi_units(src["id"])
+            ships_here = {u["machine_name"]: int(u["amount"]) for u in units if u.get("category") != "defense" and int(u.get("amount") or 0) > 0}
+            where = {"from": src["id"], "to": dst["id"]}
+            if any(ships_here.get(n, 0) > 0 for n in L.CARGOS):
+                break
+            build = None if src.get("unit_queue") else L.choose_cargo_build(self.persona, units, src["resources"], ships_here, L.SUPPLY_BUILDERS)
+            if build is None:     # this planet cannot send (a colony often has no shipyard): try the next richest one
+                blocker = "the shipyard is busy" if src.get("unit_queue") else L.cargo_build_blocker(self.persona, units, src["resources"], L.SUPPLY_BUILDERS)
+                blockers.append(blocker)
+                tried.add(src["id"])
+                if len(tried) >= 3 or len(tried) >= len(planets) - 1:
+                    m.supply_next_at = self.now + 600
+                    self.log("supply_skipped", why=f"no cargo ships on the richest planets ({blockers[0]})", **where)
+                    return []
+                continue
             name, amount = build
             try:
                 self.client.post(f"/planets/{src['id']}/units", {"machine_name": name, "amount": amount})

@@ -69,3 +69,28 @@ class CargoBlockerTest(unittest.TestCase):
         self.assertIn("shipyard", L.cargo_build_blocker(miner, [item], {}))
         item = {"machine_name": "small_cargo", "requirements_met": True, "max_buildable": 0}
         self.assertIn("afford", L.cargo_build_blocker(miner, [item], {}))
+
+
+class SupplySourceFallbackTest(unittest.TestCase):
+    def planets(self):
+        big = {"metal": 900_000, "crystal": 0, "deuterium": 0}
+        mid = {"metal": 400_000, "crystal": 0, "deuterium": 0}
+        none = {"metal": 10, "crystal": 0, "deuterium": 0}
+        store = {"metal": 10 ** 9, "crystal": 10 ** 9, "deuterium": 10 ** 9}
+        return [{"id": 1, "type": "planet", "resources": big, "storage": store},
+                {"id": 2, "type": "planet", "resources": mid, "storage": store},
+                {"id": 3, "type": "planet", "resources": none, "storage": store}]
+
+    def test_the_richest_planet_is_the_source_by_default(self):
+        from swarm import logistics as L
+        src, dst = L.pick_supply_route(self.planets())
+        self.assertEqual((src["id"], dst["id"]), (1, 3))
+
+    def test_a_planet_that_cannot_send_is_skipped_for_the_next_richest(self):
+        from swarm import logistics as L
+        src, dst = L.pick_supply_route(self.planets(), {1})
+        self.assertEqual((src["id"], dst["id"]), (2, 3))
+
+    def test_nothing_left_when_every_source_is_skipped(self):
+        from swarm import logistics as L
+        self.assertIsNone(L.pick_supply_route(self.planets(), {1, 2, 3}))

@@ -45,12 +45,16 @@ def stock_value(res: dict) -> float:
     return sum(float(res.get(r, 0) or 0) * VALUE[r] for r in RESOURCES)
 
 
-def pick_supply_route(planets: list[dict]) -> tuple[dict, dict] | None:
-    """(source, colony): the richest planet and the poorest one with room to store what we send. None = nothing to do."""
+def pick_supply_route(planets: list[dict], skip_sources: set | tuple = ()) -> tuple[dict, dict] | None:
+    """(source, colony): the richest planet and the poorest one with room to store what we send. None = nothing to do.
+    `skip_sources` (planet ids) are planets that cannot send (no cargo ship and none can be built there): the next richest is tried."""
     own = [p for p in planets if p.get("type", "planet") == "planet" and p.get("resources")]
     if len(own) < 2:
         return None
-    src = max(own, key=lambda p: stock_value(p["resources"]))
+    candidates = [p for p in own if p["id"] not in skip_sources]
+    if not candidates:
+        return None
+    src = max(candidates, key=lambda p: stock_value(p["resources"]))
     src_value = stock_value(src["resources"])
     if src_value < MIN_SOURCE_VALUE:
         return None
