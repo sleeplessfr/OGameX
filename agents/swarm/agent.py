@@ -15,7 +15,8 @@ from .combat import tech_from_research
 import random as _random
 from . import buildlearn, calibrate, targetlearn
 from .bandit import outcome_of
-from .military import (Memory, choose_strike, judge_trade, summarize_battle, choose_units, coord_of, pick_attack, pick_target, summarize_report)
+from .military import (Memory, choose_strike, judge_trade, summarize_battle, choose_units, coord_of, pick_attack, pick_target, summarize_report,
+                       typical_garrison, GARRISON_KEEP)
 from .client import ApiClient, ApiError
 from .opponents import record_result, record_spy, summary as opp_summary
 from .personas import Persona
@@ -795,6 +796,8 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
             c = coord_of(t["galaxy"], t["system"], t["position"])
             intel = summarize_report(report)
             self._diplo_contact(intel.owner_id, "spy report")   # diplomacy: we know this player now
+            if intel.defense is not None:   # a real garrison (defence units; cargo ships do not fight): remember its size for the guess about unscouted targets
+                self.memory.garrisons = (self.memory.garrisons + [sum(int(v or 0) for v in intel.defense.values())])[-GARRISON_KEEP:]
             self.memory.intel[c] = {"at": now, "loot": intel.loot, "defenders": intel.defenders, "owner_id": intel.owner_id,
                                     "ships": intel.ships, "defense": intel.defense, "research": intel.research}
             self.memory.pending.pop(c, None)
@@ -889,7 +892,8 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
         sim_info: dict = {}
         strike, go, sim_reason, kind = choose_strike(self.persona, self.rng, ships_here, self.ship_stats, intel,
                                                      self.my_tech, self.memory.risk_scale, margin, info=sim_info,
-                                                     calib=self.memory.calib if group == "learned" else None)
+                                                     calib=self.memory.calib if group == "learned" else None,
+                                                     garrison=typical_garrison(self.memory.garrisons))
         where = f"{coord[0]}:{coord[1]}:{coord[2]}"
         if strike is None:
             return False

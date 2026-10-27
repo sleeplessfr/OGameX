@@ -28,6 +28,8 @@ MAX_EXPOSURE = 4.0        # never put fighters worth more than this many times t
 STRIKE_FRACTIONS = (0.15, 0.25, 0.4, 0.6, 0.8, 1.0)   # try the smallest share of the fighters first
 LOOT_SHARE = 0.5          # an attack can take at most half of the resources on a planet
 ALLY_INTEL_MAX_AGE = 1200.0   # seconds: a report an ally shared (no composition, not read by our own probes) is not trusted for a go after this
+GARRISON_KEEP = 40    # garrisons seen in own spy reports that are remembered
+GARRISON_CAP = 400
 UNKNOWN_GARRISON = 40   # a target with no known defence (e.g. an ally's shared report) is simulated as this many rocket launchers (the 2026-10-26 reports: typical garrisons were 40-90)
 UNKNOWN_SIM_MIN = 30      # a garrison of at least this many units with no composition is simulated as rocket launchers
 SCORE_SLACK = 200         # new players have ~0 points: allow some room around the own score
@@ -53,6 +55,7 @@ class Memory:
     arm_for: dict[Coord, float] = field(default_factory=dict)  # which margin each attack in flight was planned with
     targets: dict = field(default_factory=targetlearn.new_book)  # learned worth of each target class (targetlearn.py)
     build: dict = field(default_factory=buildlearn.new_state)  # learned building style and its results (buildlearn.py)
+    garrisons: list = field(default_factory=list)  # sizes of garrisons seen in own spy reports (newest last), basis of the unknown-defence guess
     calib: dict = field(default_factory=calibrate.new_state)  # predicted win chance vs what happened (calibrate.py)
     target_for: dict[Coord, dict] = field(default_factory=dict)  # target class and announced loot of each attack in flight
     trade_cooldown_until: float = 0.0  # no new merchant call before this server time (dark matter is scarce)
@@ -79,7 +82,7 @@ class Memory:
         out: dict = {"need_cargo": self.need_cargo, "risk_scale": self.risk_scale, "battles": self.battles,
                      "trade_cooldown_until": self.trade_cooldown_until, "expanding": self.expanding, "class_done": self.class_done,
                      "colony_sent_at": self.colony_sent_at, "colony_planets_before": self.colony_planets_before,
-                     "colony_until": self.colony_until, "bandit": self.bandit.to_dict(), "targets": self.targets, "build": self.build, "calib": self.calib,
+                     "colony_until": self.colony_until, "bandit": self.bandit.to_dict(), "targets": self.targets, "build": self.build, "calib": self.calib, "garrisons": self.garrisons,
                      "expedition": self.expedition,
                      "supply_next_at": self.supply_next_at, "away": self.away, "social": self.social, "moons": self.moons,
                      "alliance": self.alliance, "doctrine": self.doctrine, "diplomacy": self.diplomacy}
@@ -130,6 +133,8 @@ class Memory:
         m.targets = targetlearn.clean_book(data.get("targets"))
         m.build = buildlearn.clean_state(data.get("build"))
         m.calib = calibrate.clean_state(data.get("calib"))
+        g = data.get("garrisons")
+        m.garrisons = [int(v) for v in g if isinstance(v, (int, float))][-GARRISON_KEEP:] if isinstance(g, list) else []
         m.expedition = expedition.clean_state(data.get("expedition"))
         m.social = social.clean_state(data.get("social"))
         raw = data.get("voice")
@@ -218,6 +223,15 @@ def pick_target(
 
 
 # ---- reading a spy report -------------------------------------------------------------------------------------
+def typical_garrison(seen: list | None) -> int:
+    """What an unscouted target probably has: the median of the garrisons (ships + defence units) the agent really saw in its own
+    spy reports, never below UNKNOWN_GARRISON (the 2026-10-27 report: real garrisons were 95-260 rocket launchers, a fixed 40 lost fleets)."""
+    vals = sorted(int(v) for v in (seen or []) if isinstance(v, (int, float)) and v >= 0)
+    if len(vals) < 3:
+        return UNKNOWN_GARRISON
+    return max(UNKNOWN_GARRISON, min(GARRISON_CAP, vals[len(vals) // 2]))
+
+
 def summarize_report(report: dict) -> Intel:
     """Boil an espionage_report (see docs/API.md) down to what matters for an attack decision."""
     res = report.get("resources") or {}
@@ -333,15 +347,16 @@ def required_win_chance(persona: Persona, risk_scale: float = 1.0) -> float:
 
 def judge_fight(persona: Persona, rng: random.Random, strike: dict[str, int], intel: Intel, my_tech: Tech | None,
                 haul: int, risk_scale: float = 1.0, margin: float = DEFENDER_MARGIN,
-                calib: dict | None = None) -> tuple[bool, str, Estimate | None]:
+                calib: dict | None = None, garrison: int = UNKNOWN_GARRISON) -> tuple[bool, str, Estimate | None]:
     """Simulate the fight with the fleet we would really send. Returns (go, reason, estimate). When the report did not
     show the defenders' composition, a big garrison is simulated as rocket launchers (cheap and strong against light
     fighters: the worst usual case); a small one has nothing to simulate: (True, '', None) and the old rules decide."""
     assumed = ""
     if not intel.composition_known:
         if intel.defenders is None:
-            defenders = {"rocket_launcher": UNKNOWN_GARRISON}
-            assumed = f" (defence unknown, assumed {UNKNOWN_GARRISON} rocket launchers)"
+            garrison = max(UNKNOWN_GARRISON, int(garrison))
+            defenders = {"rocket_launcher": garrison}
+            assumed = f" (defence unknown, assumed {garrison} rocket launchers)"
         elif intel.defenders < UNKNOWN_SIM_MIN:
             return True, "", None
         else:
@@ -364,7 +379,8 @@ def judge_fight(persona: Persona, rng: random.Random, strike: dict[str, int], in
 
 def choose_strike(persona: Persona, rng: random.Random, ships_here: dict[str, int], ship_stats: dict[str, dict],
                   intel: Intel, my_tech: Tech | None, risk_scale: float = 1.0, margin: float = DEFENDER_MARGIN,
-                  info: dict | None = None, calib: dict | None = None) -> tuple[dict[str, int] | None, bool, str, str]:
+                  info: dict | None = None, calib: dict | None = None,
+                  garrison: int = UNKNOWN_GARRISON) -> tuple[dict[str, int] | None, bool, str, str]:
     """The smallest fleet that is sure enough to win and not worth too much compared to the loot.
     Returns (strike, go, reason, kind) where kind is 'nofleet', 'cargo' (cannot carry the loot) or 'fight'.
     Sending everything every time loses whole fleets for small loot when the estimate is wrong.
@@ -386,7 +402,7 @@ def choose_strike(persona: Persona, rng: random.Random, ships_here: dict[str, in
         if exposed > MAX_EXPOSURE * haul:
             last = (strike, False, f"fleet worth {exposed:,} for a loot of {haul:,}: too much to risk", "fight")
             break   # bigger fleets only get more exposed
-        go, why, est = judge_fight(persona, rng, strike, intel, my_tech, haul, risk_scale, margin, calib)
+        go, why, est = judge_fight(persona, rng, strike, intel, my_tech, haul, risk_scale, margin, calib, garrison)
         if info is not None:
             info["win_chance"] = None if est is None else round(est.win_chance, 3)
         if go:
