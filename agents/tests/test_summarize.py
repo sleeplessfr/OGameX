@@ -237,3 +237,24 @@ class ExpeditionStayedHomeTests(unittest.TestCase):
                    "why": "astrophysics too low" if i < 2 else "no free expedition slot"} for i in range(3)]
         text = sl.summarize(events)
         self.assertIn("stayed home: astrophysics too low x2, no free expedition slot x1", text)
+
+
+class EvolutionSection(unittest.TestCase):
+    def test_section_compares_evolving_with_control_and_shows_the_drift(self):
+        from swarm import genome as G
+        t = 1_700_000_000
+        evo = {**G.neutral(), "metal_mine": 1.5}
+        events = [
+            ev(t, "a1", "evolve", group="evolving", persona="miner", window=3, growth=0.30, action="kept", genome=evo),
+            ev(t + 1, "a2", "evolve", group="evolving", persona="miner", window=3, growth=0.10, action="replaced", genome=evo),
+            ev(t + 2, "a3", "evolve", group="control", persona="miner", window=3, growth=0.15, action="recorded", genome=G.neutral()),
+        ]
+        text = sl.summarize(events)
+        self.assertIn("EVOLUTION", text)
+        self.assertIn("evolving: 2 results, average growth +20%", text)
+        self.assertIn("control: 1 results, average growth +15%", text)
+        self.assertIn("1 genomes replaced", text)
+        self.assertIn("metal_mine x1.50", text)
+
+    def test_section_says_how_to_start_it_when_empty(self):
+        self.assertIn("--evolve on", sl.summarize([ev(1_700_000_000, "a1", "wait", why="x")]))

@@ -1,0 +1,28 @@
+{
+  "persona": "balanced",
+  "genome": {
+    "metal_mine": 1.2667,
+    "crystal_mine": 1.6265,
+    "deuterium_synthesizer": 0.8623,
+    "solar_plant": 0.8043,
+    "robot_factory": 0.8907,
+    "research_lab": 0.8163,
+    "shipyard": 1.3133,
+    "fusion_plant": 1.0876,
+    "r_energy_technology": 1.6863,
+    "r_computer_technology": 1.1916,
+    "r_astrophysics": 1.0,
+    "balance": 0.6863,
+    "patience": -0.0096,
+    "store_alarm": 0.0024
+  },
+  "hours": 48.0,
+  "generations": 10,
+  "population": 10,
+  "train_score": 5642529.2364204265,
+  "test_score": 5426230.810035057,
+  "baseline_test_score": 4962501.15264331,
+  "gain_percent": 9.3,
+  "metric": "hourly production value",
+  "trained_at": 1793102145
+}

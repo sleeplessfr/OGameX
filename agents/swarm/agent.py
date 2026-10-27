@@ -13,7 +13,7 @@ from .brain import FIELD_ALARM, choose_building, choose_research, fields_left, p
 from . import colonise, doctrine, expedition, fullplanet, recycle
 from .combat import tech_from_research
 import random as _random
-from . import buildlearn, calibrate, targetlearn
+from . import buildlearn, calibrate, evolve, genome, targetlearn
 from .bandit import outcome_of
 from .military import (Memory, choose_strike, judge_trade, summarize_battle, choose_units, coord_of, pick_attack, pick_target, summarize_report,
                        typical_garrison, GARRISON_KEEP)
@@ -91,6 +91,9 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
         self.user_id: int | None = None
         self.memory_path = Path(memory_dir) / f"{name}.json" if memory_dir else None
         self.memory = self._load_memory()
+        self.base_persona = persona          # the personality as written; the genome (genome.py) turns bounded dials on a copy
+        self._evo_dir = Path(memory_dir) / "evo" if memory_dir else None
+        self._init_genome()
         self.ship_stats: dict[str, dict] = {}
         self._players: tuple[float, list[dict], int] | None = None  # (fetched at, highscore rows, own score)
         self._spend_mode = False           # the home planet is full (or its terraformer chain is out of reach): surplus goes to ships, defence, colonies
@@ -111,6 +114,31 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
         self.now = 0.0           # server time of the current round
         self.stats = {"threats": 0, "defences": 0, "trades": 0, "ticks": 0, "builds": 0, "researches": 0, "refused": 0, "errors": 0,
                       "spies": 0, "reports": 0, "attacks": 0, "units": 0, "battles": 0, "lessons": 0}
+
+    # ---- genome (evolve.py, genome.py) ----------------------------------------------------------------
+    def _init_genome(self) -> None:
+        """Give a non-control agent its starting genome (trained one from --genomes, plus personal noise) and apply it."""
+        if not evolve.active() or evolve.is_control(self.name):
+            return
+        if not self.memory.evo.get("genome"):
+            self.memory.evo["genome"] = evolve.initial_genome(self.name, self.base_persona.name)
+        self.persona = genome.apply(self.base_persona, self.memory.evo["genome"])
+
+    def _evolve_step(self, status: dict, planets: list[dict]) -> None:
+        """Every round: feed the goal metric to evolve.py; at the end of a window file the record and maybe adopt a better genome."""
+        if not evolve.enabled():
+            return
+        value = buildlearn.metric(self.base_persona.name, planets, (status.get("research") or {}).get("levels"))
+        control = evolve.is_control(self.name)
+        res = evolve.step(self.memory.evo, self.name, self.base_persona.name, self._evo_dir, self.now, value, control)
+        if not res:
+            return
+        if res.get("action") == "replaced":
+            self.persona = genome.apply(self.base_persona, self.memory.evo["genome"])
+        g = self.memory.evo.get("genome") or genome.neutral()
+        self.log("evolve", group=evolve.group_of(self.name), persona=self.base_persona.name, window=res["window"], growth=res["growth"],
+                 action=res["action"], rank=res.get("rank"), pop=res.get("pop"), parent=res.get("parent"), gen=self.memory.evo.get("gen", 0),
+                 distance=round(genome.distance(g, genome.neutral()), 4), genome=g, changed=genome.describe(g))
 
     # ---- memory on disk ------------------------------------------------------------------------------
     def _load_memory(self) -> Memory:
@@ -197,6 +225,7 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
         hints += self._plan_moons(status, planets)    # moons: sensor phalanx (build, scan); no moon = nothing
         threats = threats + self._phalanx_threats(threats)   # attacks the phalanx saw coming count like the ones /fleet shows
         self._build_epoch(status, planets)   # learned building style: one result per 6 h epoch (buildlearn.py)
+        self._evolve_step(status, planets)   # live evolution of the genome (evolve.py; off unless --evolve on)
         self._econ_snapshot(status, planets)   # every 30 min: levels, output and stock of every planet, for validate_econsim.py
         hints += self._plan_alliance(status, planets, threats)   # alliances (off without sociability or alliance endpoints): found/join, share intel, warn allies
         hints += self._plan_social(status, planets)   # galaxy board (off without --board): warnings raise the guard, traders swap goods

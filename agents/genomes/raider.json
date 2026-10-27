@@ -1,0 +1,28 @@
+{
+  "persona": "raider",
+  "genome": {
+    "metal_mine": 1.8772,
+    "crystal_mine": 2.3714,
+    "deuterium_synthesizer": 0.9399,
+    "solar_plant": 0.8571,
+    "robot_factory": 0.9662,
+    "research_lab": 0.9388,
+    "shipyard": 0.6033,
+    "fusion_plant": 0.7977,
+    "r_energy_technology": 1.0629,
+    "r_computer_technology": 0.5273,
+    "r_astrophysics": 0.6787,
+    "balance": 0.8977,
+    "patience": -0.1201,
+    "store_alarm": 0.0088
+  },
+  "hours": 48.0,
+  "generations": 10,
+  "population": 10,
+  "train_score": 3555440.2638041438,
+  "test_score": 3409418.4631173066,
+  "baseline_test_score": 3086739.46535054,
+  "gain_percent": 10.5,
+  "metric": "hourly production value",
+  "trained_at": 1793102256
+}

@@ -1,0 +1,28 @@
+{
+  "persona": "scientist",
+  "genome": {
+    "metal_mine": 0.8484,
+    "crystal_mine": 1.0885,
+    "deuterium_synthesizer": 0.9728,
+    "solar_plant": 1.0226,
+    "robot_factory": 0.7415,
+    "research_lab": 0.6955,
+    "shipyard": 0.8039,
+    "fusion_plant": 0.9043,
+    "r_energy_technology": 1.0839,
+    "r_computer_technology": 1.083,
+    "r_astrophysics": 1.0355,
+    "balance": 0.5622,
+    "patience": 0.0043,
+    "store_alarm": 0.0094
+  },
+  "hours": 48.0,
+  "generations": 10,
+  "population": 10,
+  "train_score": 73.22222222222223,
+  "test_score": 69.27777777777777,
+  "baseline_test_score": 59.55555555555556,
+  "gain_percent": 16.3,
+  "metric": "research levels",
+  "trained_at": 1793102341
+}

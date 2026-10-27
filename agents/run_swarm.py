@@ -51,6 +51,11 @@ def main() -> int:
                          "Diplomacy answers still go through the model for everybody. Default 0 = every agent has a voice")
     ap.add_argument("--llm-per-agent-hour", type=int, default=0, metavar="N",
                     help="most model requests one agent may make per hour, so chatty agents cannot use up the shared budget (default 0 = no limit)")
+    ap.add_argument("--evolve", choices=("on", "off"), default="off",
+                    help="live evolution (swarm/evolve.py): every --evolve-hours the weakest quarter of each personality copies the genome of the best quarter; one agent in four never changes (control)")
+    ap.add_argument("--evolve-hours", type=float, default=12.0, help="length of one evolution window in server hours (default 12)")
+    ap.add_argument("--genomes", default="", metavar="DIR",
+                    help="folder of genomes made by train_genome.py: every non-control agent starts from the genome of its personality (plus a little personal noise)")
     ap.add_argument("--learn", choices=("on", "off"), default="on",
                     help="learned raid targeting (swarm/targetlearn.py); off = every raider keeps the old rule-only ranking")
     ap.add_argument("--trust-speed", type=float, default=1.0,
@@ -63,6 +68,9 @@ def main() -> int:
     ap.add_argument("--procs", type=int, default=1, metavar="N",
                     help="split the agents over N processes (one Python process fills about one processor core). Default 1")
     args = ap.parse_args()
+    os.environ["OGAMEX_EVOLVE"] = args.evolve        # read by swarm/evolve.py (also in --procs child processes)
+    os.environ["OGAMEX_EVOLVE_HOURS"] = str(args.evolve_hours)
+    os.environ["OGAMEX_GENOMES"] = args.genomes
     os.environ["OGAMEX_LEARN"] = args.learn   # read by swarm/targetlearn.py (also in --procs child processes)
     if args.trust_speed != 1.0:
         os.environ["OGAMEX_TRUST_SPEED"] = str(args.trust_speed)   # read by swarm/diplomacy.py (also in --procs child processes)

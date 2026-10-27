@@ -1,0 +1,28 @@
+{
+  "persona": "turtle",
+  "genome": {
+    "metal_mine": 2.2895,
+    "crystal_mine": 2.2961,
+    "deuterium_synthesizer": 1.0101,
+    "solar_plant": 0.8052,
+    "robot_factory": 1.6272,
+    "research_lab": 0.9827,
+    "shipyard": 0.8476,
+    "fusion_plant": 2.199,
+    "r_energy_technology": 1.2335,
+    "r_computer_technology": 1.1026,
+    "r_astrophysics": 1.0465,
+    "balance": 0.7061,
+    "patience": 0.0466,
+    "store_alarm": 0.0
+  },
+  "hours": 48.0,
+  "generations": 10,
+  "population": 10,
+  "train_score": 5470718.367137704,
+  "test_score": 5222170.033802627,
+  "baseline_test_score": 3186582.6584404134,
+  "gain_percent": 63.9,
+  "metric": "hourly production value",
+  "trained_at": 1793102432
+}

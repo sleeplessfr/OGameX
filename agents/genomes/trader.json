@@ -1,0 +1,28 @@
+{
+  "persona": "trader",
+  "genome": {
+    "metal_mine": 1.18,
+    "crystal_mine": 2.2778,
+    "deuterium_synthesizer": 0.956,
+    "solar_plant": 1.4453,
+    "robot_factory": 0.9463,
+    "research_lab": 0.8445,
+    "shipyard": 0.7475,
+    "fusion_plant": 1.3719,
+    "r_energy_technology": 0.7485,
+    "r_computer_technology": 1.1376,
+    "r_astrophysics": 0.9289,
+    "balance": 0.8498,
+    "patience": 0.0835,
+    "store_alarm": 0.0058
+  },
+  "hours": 48.0,
+  "generations": 10,
+  "population": 10,
+  "train_score": 6062993.012477836,
+  "test_score": 5919087.275740618,
+  "baseline_test_score": 5311679.532495832,
+  "gain_percent": 11.4,
+  "metric": "hourly production value",
+  "trained_at": 1793102386
+}

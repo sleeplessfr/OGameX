@@ -1,0 +1,28 @@
+{
+  "persona": "miner",
+  "genome": {
+    "metal_mine": 0.9715,
+    "crystal_mine": 1.4865,
+    "deuterium_synthesizer": 1.0026,
+    "solar_plant": 0.7102,
+    "robot_factory": 0.7865,
+    "research_lab": 1.5274,
+    "shipyard": 1.3388,
+    "fusion_plant": 1.3692,
+    "r_energy_technology": 1.1771,
+    "r_computer_technology": 0.8804,
+    "r_astrophysics": 0.9468,
+    "balance": 0.9966,
+    "patience": 0.0322,
+    "store_alarm": -0.0196
+  },
+  "hours": 48.0,
+  "generations": 10,
+  "population": 10,
+  "train_score": 8687868.865232043,
+  "test_score": 8594279.045718716,
+  "baseline_test_score": 7909525.881847332,
+  "gain_percent": 8.7,
+  "metric": "hourly production value",
+  "trained_at": 1793102211
+}

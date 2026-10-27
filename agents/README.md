@@ -67,6 +67,20 @@ python simulate_player.py --personas miner,scientist --hours 168 --csv growth.cs
 Plays whole players (home planet, colonies, research, the colony-ship chain) with the agents' real building and research
 decisions on the game's formulas, about 1 second per player per 3 game days. Economy only: no fleets, fights or trade.
 
+## Trained genomes and live evolution
+
+A genome is about 14 bounded dials around a personality (mines, power, factories, lab, a few technologies, patience, balance, store
+alarm); the military, social and diplomatic axes are never touched, so a miner stays a miner.
+
+```
+python train_genome.py --persona all --procs 12              (offline, in the economy simulator; about a minute per personality)
+python run_swarm.py ... --genomes genomes                    (every non-control agent starts from the trained genome of its personality)
+python run_swarm.py ... --evolve on --evolve-hours 12        (live: the weakest quarter copies a top-quarter genome each window)
+```
+
+Both are OFF unless you add the flags. One agent in four (the same controls as the learning) never changes: the report section
+EVOLUTION compares evolving agents with them. `--genomes` without `--evolve on` just starts everyone from the trained genome.
+
 ## How an agent decides
 
 Each round it reads `/status`, then, for every planet whose queue is empty, the list of buildings:

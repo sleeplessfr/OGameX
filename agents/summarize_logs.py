@@ -251,6 +251,31 @@ def summarize(events: list[dict], personas: dict[str, str] | None = None, llm_ca
         out.append("  none yet (the first results come 6 hours after the start)")
     out.append("")
 
+    out.append("EVOLUTION (--evolve on: per window the bottom quarter of a personality copies a top-quarter genome; evolving vs control = agents whose genome never changes)")
+    evo = [e for e in events if e["event"] == "evolve"]
+    if evo:
+        from swarm import genome as _genome
+        for persona_name in sorted({e.get("persona") for e in evo}):
+            rows = [e for e in evo if e.get("persona") == persona_name]
+            by_group: dict = defaultdict(list)
+            for e in rows:
+                by_group[e.get("group")].append(float(e.get("growth") or 0))
+            parts = [f"{g}: {len(v)} results, average growth {sum(v) / len(v):+.0%}" for g, v in sorted(by_group.items())]
+            replaced = [e for e in rows if e.get("action") == "replaced"]
+            last = {}
+            for e in sorted(rows, key=lambda x: x["t"]):
+                if e.get("group") == "evolving" and isinstance(e.get("genome"), dict):
+                    last[e["agent"]] = e["genome"]
+            drift = ""
+            if last:
+                names = list(_genome.neutral())
+                centroid = {n: sum(float(g.get(n, 0 if _genome.GENES[n][0] == "add" else 1)) for g in last.values()) / len(last) for n in names}
+                drift = f"; average genome of {len(last)} evolving agents: {_genome.describe(centroid, top=4)}"
+            out.append(f"  {persona_name}: " + "; ".join(parts) + f"; {len(replaced)} genomes replaced" + drift)
+    else:
+        out.append("  none (start the swarm with --evolve on; the first results come one window after the start)")
+    out.append("")
+
     out.append("CHARACTER CLASSES (chosen once by each agent)")
     classes = {e["agent"]: e.get("chosen") for e in events if e["event"] == "class"}
     refused = [e for e in events if e["event"] == "class_refused"]

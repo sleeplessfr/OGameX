@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 
 from . import alliance, diplomacy, doctrine, expedition, moons, social
 from .bounty import focus_for
-from . import buildlearn, calibrate, targetlearn
+from . import buildlearn, calibrate, evolve, targetlearn
 from .bandit import Bandit
 from .brain import RESOURCES
 from .combat import Estimate, Tech, estimate_battle, tech_from_research, unit_value
@@ -55,6 +55,7 @@ class Memory:
     arm_for: dict[Coord, float] = field(default_factory=dict)  # which margin each attack in flight was planned with
     targets: dict = field(default_factory=targetlearn.new_book)  # learned worth of each target class (targetlearn.py)
     build: dict = field(default_factory=buildlearn.new_state)  # learned building style and its results (buildlearn.py)
+    evo: dict = field(default_factory=evolve.new_state)  # live evolution: this agent's genome, its current window, how often it was judged (evolve.py)
     garrisons: list = field(default_factory=list)  # sizes of garrisons seen in own spy reports (newest last), basis of the unknown-defence guess
     calib: dict = field(default_factory=calibrate.new_state)  # predicted win chance vs what happened (calibrate.py)
     target_for: dict[Coord, dict] = field(default_factory=dict)  # target class and announced loot of each attack in flight
@@ -82,7 +83,7 @@ class Memory:
         out: dict = {"need_cargo": self.need_cargo, "risk_scale": self.risk_scale, "battles": self.battles,
                      "trade_cooldown_until": self.trade_cooldown_until, "expanding": self.expanding, "class_done": self.class_done,
                      "colony_sent_at": self.colony_sent_at, "colony_planets_before": self.colony_planets_before,
-                     "colony_until": self.colony_until, "bandit": self.bandit.to_dict(), "targets": self.targets, "build": self.build, "calib": self.calib, "garrisons": self.garrisons,
+                     "colony_until": self.colony_until, "bandit": self.bandit.to_dict(), "targets": self.targets, "build": self.build, "calib": self.calib, "garrisons": self.garrisons, "evo": self.evo,
                      "expedition": self.expedition,
                      "supply_next_at": self.supply_next_at, "away": self.away, "social": self.social, "moons": self.moons,
                      "alliance": self.alliance, "doctrine": self.doctrine, "diplomacy": self.diplomacy}
@@ -133,6 +134,7 @@ class Memory:
         m.targets = targetlearn.clean_book(data.get("targets"))
         m.build = buildlearn.clean_state(data.get("build"))
         m.calib = calibrate.clean_state(data.get("calib"))
+        m.evo = evolve.clean_state(data.get("evo"))
         g = data.get("garrisons")
         m.garrisons = [int(v) for v in g if isinstance(v, (int, float))][-GARRISON_KEEP:] if isinstance(g, list) else []
         m.expedition = expedition.clean_state(data.get("expedition"))
