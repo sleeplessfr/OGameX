@@ -29,6 +29,8 @@ COLONY_POSITIONS = (7, 8, 9, 6, 10)       # where the agents usually settle (the
 COLONY_FLIGHT_SECONDS = 1200.0
 START_STOCK = 100_000.0                    # agents start with this much of each resource on a x100 server
 MIN_LOOK, MAX_LOOK = 20.0, 600.0
+SUPPLY_RESERVE = 1.0       # hours of its own production a planet keeps when it supplies another one
+SUPPLY_LOSS = 0.02         # fuel and the like
 
 
 @dataclass
@@ -96,8 +98,9 @@ class Player:
         for name in BUILDINGS:
             lvl = p.levels.get(name, 0)
             cost = econsim.price(name, lvl + 1)
-            ok_energy = name != "terraformer" or (make - need) >= econsim.energy_price(name, lvl + 1)
-            items.append({"machine_name": name, "level": lvl, "next_level": lvl + 1, "cost": cost,
+            ok_energy = name not in ("terraformer", "space_dock") or make >= econsim.energy_price(name, lvl + 1)   # these two are paid from the energy PRODUCED (ApiController::usesProductionEnergy)
+            shown = {**cost, "energy": econsim.energy_price(name, lvl + 1)}    # the API shows the energy price too
+            items.append({"machine_name": name, "level": lvl, "next_level": lvl + 1, "cost": shown,
                           "requirements_met": self._met(OBJECTS[name]["requires"], p),
                           "can_afford": all(p.res[r] >= cost[r] for r in cost) and ok_energy})
         return items
@@ -201,7 +204,29 @@ class Player:
             p.queue = (self.t + secs, choice.machine_name, level)
             p.next_look = self.t + secs + 2.0
         else:
+            if choice.goal_cost and self._supply(p, choice.goal_cost):   # logistics.py: the agents ship surplus between their own planets
+                p.next_look = self.t
+                return
             p.next_look = self.t + self._jitter(choice.wait_seconds or 300.0)
+
+    def _supply(self, p: SimPlanet, cost: dict) -> bool:
+        """Move what `p` lacks for `cost` from other planets that can spare it (they keep a reserve). True when anything moved."""
+        moved = False
+        for r in econsim.RESOURCES:
+            missing = cost.get(r, 0) - p.res[r]
+            if missing <= 0:
+                continue
+            for q in self.planets:
+                if q is p or missing <= 0:
+                    continue
+                spare = q.res[r] - SUPPLY_RESERVE * max(1.0, self._prod(q)[r])    # keep an hour of its own output
+                give = min(spare, missing)
+                if give > 0:
+                    q.res[r] -= give
+                    p.res[r] += give * (1 - SUPPLY_LOSS)
+                    missing -= give
+                    moved = True
+        return moved
 
     def _look_research(self, goals_r: dict | None) -> None:
         home = self.planets[0]

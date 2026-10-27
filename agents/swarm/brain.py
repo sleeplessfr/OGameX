@@ -287,7 +287,14 @@ def _forced_with_room(item: dict, have: dict, production: dict, why: str, planet
     """_forced, except when the item costs more of a resource than the planet can ever store: then the store comes first.
 
     Without this an agent can wait for ever: the stock sits at the storage cap, below the price, and the 'low energy' rule
-    (which comes before the 'storage almost full' rule) keeps insisting on a solar plant it can never pay."""
+    (which comes before the 'storage almost full' rule) keeps insisting on a solar plant it can never pay.
+
+    The same for energy: the terraformer is paid from the energy PRODUCED (level n needs 1000 * 2^(n-1)). When the resources
+    are there and the game still says it cannot be afforded, the missing thing is power: build the solar plant first."""
+    if (not item.get("can_afford", True) and can_pay(item["cost"], have) and int(item["cost"].get("energy", 0) or 0) > 0
+            and "solar_plant" in by_name):
+        return _forced(by_name["solar_plant"], have, production,
+                       f"{item['machine_name']} needs {int(item['cost']['energy']):,} energy produced")
     for r in RESOURCES:
         cap = planet.get("storage", {}).get(r, 0)
         if cap > 0 and item["cost"].get(r, 0) > cap and STORE_FOR[r] in by_name:
