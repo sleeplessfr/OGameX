@@ -45,6 +45,17 @@ Plays thousands of planets in minutes without a server (the game's own formulas 
 and searches for better weights for the mines, solar plant and robot factory. It only prints suggestions; nothing is
 changed. Stores, balance, patience and store alarm (a personality's character) are left alone unless you add `--with-stores` or `--with-traits`.
 
+## Economy simulator check (step 5, milestone 1)
+
+```
+python validate_econsim.py --hours 12
+```
+
+Every 30 minutes each agent logs an `econ_snapshot` (levels, output, energy and storage of its planets, research levels).
+`validate_econsim.py` compares those numbers and the real construction/research times with `swarm/econsim.py` (the game's
+formulas in plain Python, prices generated from the game's PHP by `gen_econdata.py`) and writes `econsim_report.txt`.
+Send that file back: it decides whether the simulator can be trusted for the next steps.
+
 ## How an agent decides
 
 Each round it reads `/status`, then, for every planet whose queue is empty, the list of buildings:

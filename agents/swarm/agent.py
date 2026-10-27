@@ -197,6 +197,7 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
         hints += self._plan_moons(status, planets)    # moons: sensor phalanx (build, scan); no moon = nothing
         threats = threats + self._phalanx_threats(threats)   # attacks the phalanx saw coming count like the ones /fleet shows
         self._build_epoch(status, planets)   # learned building style: one result per 6 h epoch (buildlearn.py)
+        self._econ_snapshot(status, planets)   # every 30 min: levels, output and stock of every planet, for validate_econsim.py
         hints += self._plan_alliance(status, planets, threats)   # alliances (off without sociability or alliance endpoints): found/join, share intel, warn allies
         hints += self._plan_social(status, planets)   # galaxy board (off without --board): warnings raise the guard, traders swap goods
         hints += self._plan_diplomacy(status, planets, threats)   # first contact and relationships (diplomacy.py): hello/answer on the board, pacts
@@ -247,6 +248,27 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
                               control=targetlearn.group_of(self.name) != "learned")
         if res:
             self.log("build_style", group=targetlearn.group_of(self.name), persona=self.persona.name, metric=round(value, 1), **res)
+
+    ECON_SNAPSHOT_EVERY = 1800.0
+
+    def _econ_snapshot(self, status: dict, planets: list[dict]) -> None:
+        """Ground truth for the economy simulator (econsim.py, validate_econsim.py): what each planet really had and made."""
+        if self.now - getattr(self, "_econ_last", -1e12) < self.ECON_SNAPSHOT_EVERY:
+            return
+        self._econ_last = self.now
+        rows = []
+        try:
+            for p in planets:
+                if p.get("type") not in (None, "planet"):
+                    continue
+                data = self.client.get(f"/planets/{p['id']}/buildings")["buildings"]
+                c = p.get("coordinates") or {}
+                rows.append({"id": p["id"], "pos": c.get("position"), "fields": (p.get("fields") or {}).get("max"),
+                             "levels": {b["machine_name"]: b["level"] for b in data if b.get("level")},
+                             "prod": p.get("production_per_hour"), "storage": p.get("storage"), "res": p.get("resources"), "energy": p.get("energy")})
+        except ApiError:
+            return
+        self.log("econ_snapshot", klass=self.persona.character_class, research=(status.get("research") or {}).get("levels"), planets=rows)
 
     def _plan_buildings(self, planet: dict, have: dict, research_busy: bool, goals: dict | None = None) -> list[float]:
         queue = planet["building_queue"]
