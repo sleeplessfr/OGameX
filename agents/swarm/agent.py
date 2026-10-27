@@ -20,7 +20,7 @@ from .military import (Memory, probes_to_send, learn_probes, SPY_MIN_PROBES, cho
 from .client import ApiClient, ApiError
 from .opponents import record_result, record_spy, summary as opp_summary
 from .personas import Persona
-from .defense import AGGRESSOR_MEMORY, GUARD_SECONDS, PEACE_WATCH_SECONDS, RECENT_RAID, ALERT_SECONDS, COOLDOWN_SECONDS as DEFEND_COOLDOWN, WATCH_SECONDS, choose_defense, defence_share, find_threats
+from .defense import AGGRESSOR_MEMORY, GUARD_SECONDS, PEACE_WATCH_SECONDS, RECENT_RAID, ALERT_SECONDS, COOLDOWN_SECONDS as DEFEND_COOLDOWN, WATCH_SECONDS, choose_defense, defence_share, find_threats, defence_cap, defence_worth
 from .trade import COOLDOWN_SECONDS, choose_sale, plan_deal
 from .logistics_agent import LogisticsMixin
 from .social_agent import SocialMixin
@@ -385,7 +385,10 @@ class Agent(LogisticsMixin, SocialMixin, BountyMixin, MoonsMixin, VoiceMixin, Al
             return
         units = self.client.get(f"/planets/{home['id']}/units")["units"]
         coming = [x.arrives_in for x in threats if x.is_attack]
-        pick = choose_defense(self.persona, units, have, share, min(coming) if coming else None)
+        room = defence_cap(self.persona, bool(coming)) - defence_worth(units)
+        if room <= 0:
+            return   # enough defence for this persona: the rest of the stock goes to growth and ships
+        pick = choose_defense(self.persona, units, have, share, min(coming) if coming else None, room)
         if pick is None:
             return
         name, amount = pick

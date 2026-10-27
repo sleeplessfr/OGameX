@@ -66,8 +66,31 @@ def _power(name: str) -> float:
     return stats[3] / HULL_DIVISOR + stats[4] + stats[5]
 
 
+DEFENCE_CAP_BASE = 600_000.0   # resources worth of defence a planet of a persona with caution 0.5 stops at (about 300 rocket launchers)
+ATTACK_CAP_FACTOR = 1.5        # a real attack on its way lifts the cap by this much
+
+
+def defence_cap(persona: Persona, attack_coming: bool = False) -> float:
+    """How much defence (metal+crystal+deuterium cost) one planet keeps. Without a cap every agent ended up with 1,500-1,800
+    rocket launchers (2026-10-27 reports), no raider could win and nobody attacked. Scales with caution squared: a turtle (0.9)
+    keeps about 1.9M, a miner 0.9M, a balanced agent 0.6M, a raider (0.3) 0.2M."""
+    cap = DEFENCE_CAP_BASE * (max(0.0, persona.caution) / 0.5) ** 2
+    return cap * (ATTACK_CAP_FACTOR if attack_coming else 1.0)
+
+
+def defence_worth(units: list[dict]) -> float:
+    """Cost of the defence units a planet already has (from its /units list)."""
+    total = 0.0
+    for u in units:
+        if u.get("category") != "defense" or "missile" in str(u.get("machine_name")):
+            continue
+        c = u.get("cost_per_unit") or {}
+        total += int(u.get("amount") or 0) * sum(int(c.get(r, 0) or 0) for r in RESOURCES)
+    return total
+
+
 def choose_defense(persona: Persona, units: list[dict], have: dict, share: float,
-                   seconds_available: float | None = None) -> tuple[str, int] | None:
+                   seconds_available: float | None = None, room: float | None = None) -> tuple[str, int] | None:
     """The defence unit to order and how many, spending at most `share` of each resource in stock.
 
     Whatever is ordered is paid at once, so even an unfinished order keeps that stock out of the raider's hands.
@@ -86,6 +109,9 @@ def choose_defense(persona: Persona, units: list[dict], have: dict, share: float
         cost = u["cost_per_unit"]
         limits = [int(have.get(r, 0) * share // cost[r]) for r in RESOURCES if cost.get(r, 0) > 0]
         amount = min([u["max_buildable"], MAX_ORDER, *limits]) if limits else 0
+        if room is not None:   # the planet's defence cap: never order more than fits under it
+            unit_cost = sum(int(cost.get(r, 0) or 0) for r in RESOURCES)
+            amount = min(amount, int(room // unit_cost)) if unit_cost > 0 else 0
         if amount < 1:
             continue
         weight = persona.unit_weights.get(name, 1.0)
